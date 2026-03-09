@@ -229,6 +229,9 @@ func (s *Server) setupRoutes() {
 		api.POST("/downloads/cancel/:id", s.handleCancelDownload)
 		api.POST("/downloads/retry/:id", s.handleRetryDownload)
 		api.POST("/downloads/retry-all", s.handleRetryAllDownloads)
+		api.POST("/downloads/pause", s.handlePauseDownloads)
+		api.POST("/downloads/resume", s.handleResumeDownloads)
+		api.GET("/downloads/state", s.handleDownloadsState)
 		api.GET("/events", s.handleSSE)
 		api.POST("/settings", s.handleSaveSettings)
 	}
@@ -408,13 +411,17 @@ func (s *Server) handleDownloads(c *gin.Context) {
 	complete, _ := s.db.ListDownloads(ctx, &completeStatus)
 	failedStatus := database.DownloadStatusFailed
 	failed, _ := s.db.ListDownloads(ctx, &failedStatus)
+	queueState := s.downloads.QueueState()
 
 	c.HTML(http.StatusOK, "downloads.html", gin.H{
-		"Active":   active,
-		"Pending":  pending,
-		"Complete": complete,
-		"Failed":   failed,
-		"Page":     "downloads",
+		"Active":           active,
+		"Pending":          pending,
+		"Complete":         complete,
+		"Failed":           failed,
+		"QueuePaused":      queueState.Paused,
+		"QueuePauseReason": queueState.Reason,
+		"QueuePausedAt":    queueState.PausedAt,
+		"Page":             "downloads",
 	})
 }
 
@@ -625,6 +632,24 @@ func (s *Server) handleRetryAllDownloads(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"retried": count})
+}
+
+// handlePauseDownloads pauses queue workers from claiming new jobs.
+func (s *Server) handlePauseDownloads(c *gin.Context) {
+	changed := s.downloads.Pause("paused manually from web UI")
+	c.JSON(http.StatusOK, gin.H{"paused": true, "changed": changed})
+}
+
+// handleResumeDownloads resumes queue workers.
+func (s *Server) handleResumeDownloads(c *gin.Context) {
+	changed := s.downloads.Resume()
+	c.JSON(http.StatusOK, gin.H{"paused": false, "changed": changed})
+}
+
+// handleDownloadsState returns queue pause/resume state for polling or UI actions.
+func (s *Server) handleDownloadsState(c *gin.Context) {
+	state := s.downloads.QueueState()
+	c.JSON(http.StatusOK, state)
 }
 
 // handleSSE streams pipeline events via Server-Sent Events.

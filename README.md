@@ -17,6 +17,7 @@ mkdir -p config audiobooks downloads
 docker run -d \
   --name audible-plex \
   -p 8080:8080 \
+  --user 1000:1000 \
   -v $(pwd)/config:/config \
   -v $(pwd)/audiobooks:/audiobooks \
   -v $(pwd)/downloads:/downloads \
@@ -60,6 +61,54 @@ Configuration can be provided via `config.yaml` or environment variables:
 | `PLEX_URL` | | Plex server URL for library scan triggers |
 | `PLEX_TOKEN` | | Plex authentication token |
 | `SYNC_SCHEDULE` | `0 */6 * * *` | Cron schedule for library sync |
+| `PUID` | | Unraid-style runtime UID override (used when container starts as root) |
+| `PGID` | | Unraid-style runtime GID override (used when container starts as root) |
+| `TAKE_OWNERSHIP` | `false` | If `true`, recursively `chown`s mounted dirs on startup before dropping privileges |
+
+## Permission Handling
+
+When the pipeline hits a filesystem permission error (for example writing to `/downloads` or moving files into `/audiobooks`), it now automatically pauses the queue to avoid repeatedly failing every remaining item.
+
+- Current item is marked failed with the original error.
+- Queue workers stop claiming new pending jobs.
+- Resume from the Downloads page after fixing permissions.
+
+### Running as a Different User
+
+Use either standard Docker user mapping or Unraid-style `PUID`/`PGID`.
+
+Standard Docker/Compose style:
+
+```bash
+docker run -d \
+  --name audible-plex \
+  --user 1000:1000 \
+  -p 8080:8080 \
+  -v $(pwd)/config:/config \
+  -v $(pwd)/audiobooks:/audiobooks \
+  -v $(pwd)/downloads:/downloads \
+  ghcr.io/mstrhakr/audible-plex-downloader:latest
+```
+
+Unraid-style environment variables:
+
+```bash
+docker run -d \
+  --name audible-plex \
+  -e PUID=99 \
+  -e PGID=100 \
+  -p 8080:8080 \
+  -v /mnt/user/appdata/audible-plex/config:/config \
+  -v /mnt/user/audiobooks:/audiobooks \
+  -v /mnt/user/appdata/audible-plex/downloads:/downloads \
+  ghcr.io/mstrhakr/audible-plex-downloader:latest
+```
+
+Notes:
+
+- If you pass `--user`, that identity is used directly.
+- If you use `PUID`/`PGID`, the entrypoint drops privileges to that UID/GID.
+- `TAKE_OWNERSHIP=true` can help when bind-mounted directories were created by another user.
 
 ## Docker Compose
 

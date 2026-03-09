@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-architecture Docker images (linux/amd64, linux/arm64)
 - GitHub Actions workflow for automated releases
 - Build scripts for local Docker builds (build-docker.sh, build-docker.ps1)
+- Queue pause/resume controls in the web API/UI
+- Docker runtime user mapping support for both `--user` and Unraid-style `PUID`/`PGID`
 
 ### Changed
 
@@ -23,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Books already present in library no longer incorrectly show as "queued"
 - File move progress now displays accurately instead of jumping to 70%
+- Queue now auto-pauses when filesystem permission errors are detected, avoiding repeated failures
 
 ## [0.1.0] - YYYY-MM-DD
 

@@ -51,9 +51,21 @@ type DownloadManager struct {
 	running bool
 	stopCh  chan struct{}
 
+	pauseMu     sync.RWMutex
+	paused      bool
+	pauseReason string
+	pausedAt    time.Time
+
 	subMu       sync.Mutex
 	subscribers map[int]chan DownloadEvent
 	nextSubID   int
+}
+
+// QueueState reports whether downloads are paused and why.
+type QueueState struct {
+	Paused bool      `json:"paused"`
+	Reason string    `json:"reason,omitempty"`
+	PausedAt time.Time `json:"paused_at,omitempty"`
 }
 
 // pipelineItem represents work moving through the pipeline stages.
@@ -77,13 +89,92 @@ type DownloadEvent struct {
 	ASIN         string  `json:"asin"`
 	BookID       int64   `json:"book_id"`
 	Title        string  `json:"title,omitempty"`
-	Type         string  `json:"type"`  // "started", "progress", "complete", "failed"
+	Type         string  `json:"type"`  // "started", "progress", "complete", "failed", "paused", "resumed"
 	Stage        string  `json:"stage"` // "downloading", "decrypting", "processing", "complete"
 	Progress     float64 `json:"progress"`
 	BytesWritten int64   `json:"bytes_written"`
 	TotalBytes   int64   `json:"total_bytes"`
 	Speed        float64 `json:"speed,omitempty"` // bytes per second
 	Error        string  `json:"error,omitempty"`
+}
+
+// Pause stops workers from claiming new queue items.
+func (dm *DownloadManager) Pause(reason string) bool {
+	dm.pauseMu.Lock()
+	if dm.paused {
+		dm.pauseMu.Unlock()
+		return false
+	}
+	if reason == "" {
+		reason = "queue paused"
+	}
+	dm.paused = true
+	dm.pauseReason = reason
+	dm.pausedAt = time.Now()
+	dm.pauseMu.Unlock()
+
+	dlLog.Warn().Str("reason", reason).Msg("download queue paused")
+	dm.emit(DownloadEvent{Type: "paused", Stage: "queue", Error: reason})
+	return true
+}
+
+// Resume allows workers to claim pending queue items again.
+func (dm *DownloadManager) Resume() bool {
+	dm.pauseMu.Lock()
+	if !dm.paused {
+		dm.pauseMu.Unlock()
+		return false
+	}
+	dm.paused = false
+	dm.pauseReason = ""
+	dm.pausedAt = time.Time{}
+	dm.pauseMu.Unlock()
+
+	dlLog.Info().Msg("download queue resumed")
+	dm.emit(DownloadEvent{Type: "resumed", Stage: "queue"})
+	return true
+}
+
+// QueueState returns the current queue pause state.
+func (dm *DownloadManager) QueueState() QueueState {
+	dm.pauseMu.RLock()
+	defer dm.pauseMu.RUnlock()
+
+	state := QueueState{
+		Paused: dm.paused,
+		Reason: dm.pauseReason,
+	}
+	if dm.paused {
+		state.PausedAt = dm.pausedAt
+	}
+	return state
+}
+
+func (dm *DownloadManager) isPaused() bool {
+	dm.pauseMu.RLock()
+	defer dm.pauseMu.RUnlock()
+	return dm.paused
+}
+
+func (dm *DownloadManager) pauseForPermissionError(err error, stage string) {
+	if !isPermissionError(err) {
+		return
+	}
+	msg := "permission error while " + stage + "; fix volume/file permissions and resume the queue"
+	if dm.Pause(msg) {
+		dlLog.Warn().Err(err).Str("stage", stage).Msg("queue auto-paused after permission error")
+	}
+}
+
+func (dm *DownloadManager) requeueClaimedDownload(ctx context.Context, item *database.DownloadQueue) {
+	if item == nil {
+		return
+	}
+	item.Status = database.DownloadStatusPending
+	item.StartedAt = nil
+	if err := dm.db.UpdateDownload(ctx, item); err != nil {
+		dlLog.Warn().Err(err).Int64("queue_id", item.ID).Msg("failed to requeue claimed download while paused")
+	}
 }
 
 // NewDownloadManager creates a new download manager with the full processing pipeline.
@@ -343,6 +434,11 @@ func (dm *DownloadManager) downloadWorker(ctx context.Context, workerID int) {
 	log.Debug().Msg("download worker started")
 
 	for {
+		if dm.isPaused() {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
 		select {
 		case <-ctx.Done():
 			log.Info().Msg("download worker stopping: context cancelled")
@@ -361,6 +457,12 @@ func (dm *DownloadManager) downloadWorker(ctx context.Context, workerID int) {
 			if item == nil {
 				log.Trace().Msg("no pending downloads, sleeping")
 				time.Sleep(10 * time.Second)
+				continue
+			}
+
+			if dm.isPaused() {
+				dm.requeueClaimedDownload(ctx, item)
+				time.Sleep(2 * time.Second)
 				continue
 			}
 
@@ -417,6 +519,7 @@ func (dm *DownloadManager) failItem(ctx context.Context, item *database.Download
 	_ = dm.db.UpdateDownload(ctx, item)
 	_ = dm.db.UpdateBookStatus(ctx, item.BookID, database.BookStatusFailed)
 	dm.emit(DownloadEvent{ASIN: item.ASIN, BookID: item.BookID, Title: title, Type: "failed", Stage: "downloading", Error: err.Error()})
+	dm.pauseForPermissionError(err, "processing downloads")
 }
 
 // downloadInfo holds the decryption keys saved alongside the downloaded file.

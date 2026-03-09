@@ -134,6 +134,15 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     margin-bottom: 1.5rem;
 }
 
+.queue-paused-banner {
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid #7f1d1d;
+    border-radius: var(--radius);
+    background: rgba(244, 67, 54, 0.12);
+    color: #ffb3aa;
+}
+
 /* Tables */
 .data-table {
     width: 100%;

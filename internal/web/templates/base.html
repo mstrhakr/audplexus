@@ -63,6 +63,19 @@
         es.addEventListener('pipeline', function(e) {
             var d = JSON.parse(e.data);
 
+            if (d.type === 'paused' || d.type === 'resumed') {
+                var statusEl = document.getElementById('dl-status');
+                if (statusEl) {
+                    if (d.type === 'paused') {
+                        statusEl.textContent = 'Queue paused: ' + (d.error || 'permission issue');
+                        statusEl.className = 'status-msg error';
+                    } else {
+                        statusEl.textContent = 'Queue resumed';
+                        statusEl.className = 'status-msg success';
+                    }
+                }
+            }
+
             // Helper: increment/decrement a counter element
             function adj(id, delta) {
                 var el = document.getElementById(id);

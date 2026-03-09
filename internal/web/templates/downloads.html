@@ -3,8 +3,19 @@
 
 <div class="actions-bar">
     <button hx-post="/api/downloads/retry-all" hx-target="#dl-status" hx-swap="innerHTML" class="btn btn-danger">Retry All Failed</button>
+    {{if .QueuePaused}}
+    <button hx-post="/api/downloads/resume" hx-swap="none" hx-on::after-request="window.location.reload()" class="btn btn-primary">Resume Queue</button>
+    {{else}}
+    <button hx-post="/api/downloads/pause" hx-swap="none" hx-on::after-request="window.location.reload()" class="btn btn-secondary">Pause Queue</button>
+    {{end}}
     <span id="dl-status"></span>
 </div>
+
+{{if .QueuePaused}}
+<div class="queue-paused-banner">
+    <strong>Queue paused:</strong> {{.QueuePauseReason}}
+</div>
+{{end}}
 
 <h2>Active Pipeline</h2>
 <div id="pipeline-cards">
