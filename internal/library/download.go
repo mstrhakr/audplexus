@@ -787,18 +787,7 @@ func (dm *DownloadManager) cleanupOrphanedFiles(ctx context.Context) {
 	}
 }
 
-// getEffectiveLibraryPath returns the Plex library path if configured and available,
-// otherwise falls back to the configured library directory.
-func (dm *DownloadManager) getEffectiveLibraryPath(ctx context.Context) string {
-	plexPath, err := dm.db.GetSetting(ctx, "plex_section_path")
-	if err == nil && strings.TrimSpace(plexPath) != "" {
-		dlLog.Debug().Str("plex_path", plexPath).Msg("using plex library path")
-		return plexPath
-	}
-	dlLog.Debug().Str("fallback_path", dm.libraryDir).Msg("using configured library directory")
-	return dm.libraryDir
-}
-
+// QueueBook adds a book to the download queue.
 // The returned bool reports whether a new queue item was created.
 func (dm *DownloadManager) QueueBook(ctx context.Context, bookID int64, asin string, priority int) (bool, error) {
 	book, err := dm.db.GetBook(ctx, bookID)
