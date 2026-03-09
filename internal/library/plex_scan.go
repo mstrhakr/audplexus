@@ -40,7 +40,7 @@ func (dm *DownloadManager) triggerPlexScanForBook(finalPath string) {
 		}
 
 		localScanPath := filepath.Dir(finalPath)
-		
+
 		// If Plex path is configured, translate local path to Plex path
 		scanPath := localScanPath
 		if plexPath, err := dm.db.GetSetting(ctx, "plex_section_path"); err == nil && strings.TrimSpace(plexPath) != "" {
@@ -59,7 +59,7 @@ func (dm *DownloadManager) triggerPlexScanForBook(finalPath string) {
 				}
 			}
 		}
-		
+
 		if err := dm.triggerPlexSectionScan(ctx, plexURL, plexToken, sectionID, scanPath); err != nil {
 			dlLog.Warn().Err(err).Str("scan_path", scanPath).Msg("plex scan trigger failed")
 			return
