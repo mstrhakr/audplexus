@@ -299,6 +299,7 @@ func (dm *DownloadManager) handleProcessStage(ctx context.Context, item *pipelin
 	}
 
 	asinLog.Info().Str("path", finalPath).Msg("pipeline complete")
+	dm.triggerPlexScanForBook(finalPath)
 	dm.emit(DownloadEvent{
 		ASIN:     item.ASIN,
 		BookID:   item.BookID,

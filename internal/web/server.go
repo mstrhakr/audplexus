@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -209,6 +210,12 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/auth/start", s.handleAuthStart)
 	s.router.POST("/auth/callback", s.handleAuthCallback)
 	s.router.GET("/auth/status", s.handleAuthStatus)
+	s.router.POST("/auth/plex/start", s.handlePlexStart)
+	s.router.POST("/auth/plex/complete", s.handlePlexComplete)
+	s.router.POST("/auth/plex/select", s.handlePlexSelect)
+	s.router.POST("/auth/plex/section", s.handlePlexSectionSelect)
+	s.router.POST("/auth/plex/scan", s.handlePlexScan)
+	s.router.POST("/auth/plex/check", s.handlePlexCheck)
 
 	// API / HTMX endpoints
 	api := s.router.Group("/api")
@@ -421,10 +428,10 @@ func (s *Server) handleSettings(c *gin.Context) {
 	devices, _ := s.db.ListDevices(ctx)
 
 	c.HTML(http.StatusOK, "settings.html", gin.H{
-		"SyncSchedule":  syncSchedule,
-		"OutputFormat":  outputFormat,
-		"Devices":       devices,
-		"Page":          "settings",
+		"SyncSchedule":   syncSchedule,
+		"OutputFormat":   outputFormat,
+		"Devices":        devices,
+		"Page":           "settings",
 		"AudiobooksPath": s.audiobooksPath,
 		"DownloadsPath":  s.downloadsPath,
 		"ConfigPath":     s.configPath,
@@ -664,11 +671,45 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 
 // handleAuth renders the authentication page.
 func (s *Server) handleAuth(c *gin.Context) {
-	authenticated := s.audible.IsAuthenticated()
-	c.HTML(http.StatusOK, "auth.html", gin.H{
-		"Page":          "auth",
-		"Authenticated": authenticated,
-	})
+	s.renderAuthPage(c, http.StatusOK, nil)
+}
+
+func (s *Server) authBaseData(ctx context.Context) gin.H {
+	plexURL, _ := s.db.GetSetting(ctx, "plex_url")
+	plexToken, _ := s.db.GetSetting(ctx, "plex_token")
+	plexSectionID, _ := s.db.GetSetting(ctx, "plex_section_id")
+	plexSectionTitle, _ := s.db.GetSetting(ctx, "plex_section_title")
+
+	plexConfigured := plexURL != "" && plexToken != ""
+	plexSectionConfigured := strings.TrimSpace(plexSectionID) != ""
+
+	data := gin.H{
+		"Page":                  "auth",
+		"Authenticated":         s.audible.IsAuthenticated(),
+		"PlexURL":               plexURL,
+		"PlexTokenSet":          plexToken != "",
+		"PlexConfigured":        plexConfigured,
+		"PlexSectionID":         plexSectionID,
+		"PlexSectionTitle":      plexSectionTitle,
+		"PlexSectionConfigured": plexSectionConfigured,
+	}
+
+	if plexConfigured {
+		sections, err := s.plexListSections(ctx, plexURL, plexToken)
+		if err == nil && len(sections) > 0 {
+			data["PlexSections"] = sections
+		}
+	}
+
+	return data
+}
+
+func (s *Server) renderAuthPage(c *gin.Context, status int, extra gin.H) {
+	data := s.authBaseData(c.Request.Context())
+	for k, v := range extra {
+		data[k] = v
+	}
+	c.HTML(status, "auth.html", data)
 }
 
 // handleAuthStart generates an OAuth URL and shows it to the user.
@@ -676,8 +717,7 @@ func (s *Server) handleAuthStart(c *gin.Context) {
 	authURL, err := s.audible.GetAuthURL()
 	if err != nil {
 		webLog.Error().Err(err).Msg("failed to generate auth URL")
-		c.HTML(http.StatusInternalServerError, "auth.html", gin.H{
-			"Page":  "auth",
+		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{
 			"Error": "Failed to generate login URL: " + err.Error(),
 		})
 		return
@@ -685,8 +725,7 @@ func (s *Server) handleAuthStart(c *gin.Context) {
 
 	webLog.Info().Msg("auth URL generated")
 
-	c.HTML(http.StatusOK, "auth.html", gin.H{
-		"Page":         "auth",
+	s.renderAuthPage(c, http.StatusOK, gin.H{
 		"AuthURL":      authURL.URL,
 		"CodeVerifier": authURL.CodeVerifier,
 		"DeviceSerial": authURL.DeviceSerial,
@@ -705,8 +744,7 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 			code, err = audible.HandleAuthRedirect(redirectURL)
 			if err != nil {
 				webLog.Error().Err(err).Msg("failed to parse redirect URL")
-				c.HTML(http.StatusBadRequest, "auth.html", gin.H{
-					"Page":  "auth",
+				s.renderAuthPage(c, http.StatusBadRequest, gin.H{
 					"Error": "Invalid redirect URL: " + err.Error(),
 				})
 				return
@@ -715,8 +753,7 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 	}
 
 	if code == "" {
-		c.HTML(http.StatusBadRequest, "auth.html", gin.H{
-			"Page":  "auth",
+		s.renderAuthPage(c, http.StatusBadRequest, gin.H{
 			"Error": "No authorization code received. Please try again.",
 		})
 		return
@@ -733,8 +770,7 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 	})
 	if err != nil {
 		webLog.Error().Err(err).Msg("authentication failed")
-		c.HTML(http.StatusInternalServerError, "auth.html", gin.H{
-			"Page":  "auth",
+		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{
 			"Error": "Authentication failed: " + err.Error(),
 		})
 		return
@@ -754,8 +790,7 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 	}
 
 	webLog.Info().Msg("authentication successful")
-	c.HTML(http.StatusOK, "auth.html", gin.H{
-		"Page":          "auth",
+	s.renderAuthPage(c, http.StatusOK, gin.H{
 		"Authenticated": true,
 		"Success":       "Successfully authenticated with Audible!",
 	})

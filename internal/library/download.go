@@ -27,15 +27,16 @@ var dlLog = logging.Component("download")
 // DownloadManager handles the full audiobook pipeline:
 // download → decrypt → enrich metadata → organize into library.
 type DownloadManager struct {
-	db          database.Database
-	client      *audible.Client
-	ffmpeg      *audio.FFmpeg
-	audnexus    *audnexus.Client
-	organizer   *organizer.PlexOrganizer
-	libraryDir  string
-	downloadDir string
-	outputFmt   string // "m4b" or "mp3"
-	embedCover  bool
+	db           database.Database
+	client       *audible.Client
+	ffmpeg       *audio.FFmpeg
+	audnexus     *audnexus.Client
+	organizer    *organizer.PlexOrganizer
+	libraryDir   string
+	downloadDir  string
+	outputFmt    string // "m4b" or "mp3"
+	embedCover   bool
+	plexClientID string
 
 	// Pipeline concurrency settings
 	downloadConcurrency int
@@ -156,6 +157,7 @@ func NewDownloadManager(
 		downloadDir:         downloadDir,
 		outputFmt:           outputFmt,
 		embedCover:          embedCover,
+		plexClientID:        buildPlexClientID(),
 		downloadConcurrency: downloadConcurrency,
 		decryptConcurrency:  decryptConcurrency,
 		processConcurrency:  processConcurrency,

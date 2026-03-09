@@ -65,19 +65,88 @@
         <h2>Plex</h2>
         <div class="auth-flow">
             <div class="info-box" style="margin-bottom: 1rem;">
-                Configure Plex so this app can trigger library scans after downloads complete.
-            </div>
-
-            <div class="info-box" style="margin-bottom: 1rem;">
-                <strong>Step 1:</strong> Open your Plex account settings and copy your auth token.
+                {{if .PlexConfigured}}
+                <strong>&#10003; Plex configured</strong>{{if .PlexURL}} &mdash; {{.PlexURL}}{{end}}
+                {{if .PlexSectionConfigured}}
                 <br>
-                <strong>Step 2:</strong> Set <code>PLEX_URL</code> and <code>PLEX_TOKEN</code> in your environment or config.
+                <strong>Library section:</strong> {{if .PlexSectionTitle}}{{.PlexSectionTitle}}{{else}}ID {{.PlexSectionID}}{{end}}
+                {{end}}
+                {{else if .PlexTokenSet}}
+                Plex login complete. Select a server URL below.
+                {{else}}
+                Sign in with plex.tv, choose a server URL, then trigger scans and search checks from here.
+                {{end}}
             </div>
 
-            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
-                <a href="https://app.plex.tv/desktop/#!/settings/account" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">Open Plex Account</a>
-                <a href="https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">How to Find Plex Token</a>
+            {{if .PlexAuthURL}}
+            <div class="info-box" style="margin-bottom: 1rem;">
+                <strong>Step 1:</strong> Click "Open Plex Login" and approve access.
+                <br>
+                <strong>Step 2:</strong> Return here and click "Check Plex Login".
             </div>
+            <p>
+                <a href="{{.PlexAuthURL}}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">Open Plex Login</a>
+            </p>
+            <form method="POST" action="/auth/plex/complete" style="margin-bottom: 1rem;">
+                <input type="hidden" name="pin_id" value="{{.PlexPendingPinID}}">
+                <input type="hidden" name="pin_code" value="{{.PlexPendingPinCode}}">
+                <button type="submit" class="btn btn-secondary">Check Plex Login</button>
+            </form>
+            {{else if not .PlexTokenSet}}
+            <form method="POST" action="/auth/plex/start" style="margin-bottom: 1rem;">
+                <button type="submit" class="btn btn-primary">Sign In With Plex.tv</button>
+            </form>
+            {{end}}
+
+            {{if .PlexServers}}
+            <form method="POST" action="/auth/plex/select" class="settings-form" style="margin-bottom: 1rem;">
+                <div class="form-group">
+                    <label for="plex_url">Choose Plex Server URL</label>
+                    <select id="plex_url" name="plex_url" required>
+                        <option value="">Select a server connection</option>
+                        {{range .PlexServers}}
+                        <option value="{{.URL}}" {{if eq $.PlexURL .URL}}selected{{end}}>{{.Name}} &mdash; {{.URL}}{{if .Local}} (local){{end}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary">Save Plex Server</button>
+            </form>
+            {{end}}
+
+            {{if .PlexConfigured}}
+            <form method="POST" action="/auth/plex/section" class="settings-form" style="margin-bottom: 1rem;">
+                <div class="form-group">
+                    <label for="plex_section_id">Choose Plex Library Section</label>
+                    <select id="plex_section_id" name="plex_section_id" required>
+                        <option value="">Select a library</option>
+                        {{range .PlexSections}}
+                        <option value="{{.ID}}" {{if eq $.PlexSectionID .ID}}selected{{end}}>{{.Title}} ({{.Type}}) &mdash; ID {{.ID}}</option>
+                        {{end}}
+                    </select>
+                    <input type="hidden" id="plex_section_title" name="plex_section_title" value="{{.PlexSectionTitle}}">
+                </div>
+                <button type="submit" class="btn btn-primary">Save Plex Library</button>
+            </form>
+            {{end}}
+
+            {{if .PlexConfigured}}
+            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem;">
+                <form method="POST" action="/auth/plex/scan">
+                    <button type="submit" class="btn btn-secondary">Trigger Plex Library Scan</button>
+                </form>
+                <form method="POST" action="/auth/plex/start">
+                    <button type="submit" class="btn btn-secondary">Re-connect Plex Account</button>
+                </form>
+            </div>
+
+            <form method="POST" action="/auth/plex/check" class="settings-form">
+                <div class="form-group">
+                    <label for="plex_query">Check If Audiobook Exists In Plex</label>
+                    <input type="text" id="plex_query" name="query" placeholder="Enter title to search in Plex" value="{{.PlexCheckQuery}}" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Search Plex</button>
+            </form>
+            {{end}}
         </div>
     </section>
 </div>
@@ -105,4 +174,22 @@
         color: var(--text-muted);
     }
 </style>
+<script>
+    (function() {
+        var sectionSelect = document.getElementById('plex_section_id');
+        var titleInput = document.getElementById('plex_section_title');
+        if (!sectionSelect || !titleInput) return;
+
+        sectionSelect.addEventListener('change', function() {
+            var option = sectionSelect.options[sectionSelect.selectedIndex];
+            if (!option) {
+                titleInput.value = '';
+                return;
+            }
+            var text = option.text || '';
+            var title = text.split(' (')[0];
+            titleInput.value = title;
+        });
+    })();
+</script>
 {{end}}
