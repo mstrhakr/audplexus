@@ -1,5 +1,5 @@
 {{define "content"}}
-<h1>Audible Authentication</h1>
+<h1>Authentication</h1>
 
 {{if .Error}}
 <div class="info-box" style="border-color: var(--error); margin-bottom: 1.5rem;">
@@ -13,44 +13,96 @@
 </div>
 {{end}}
 
-{{if .Authenticated}}
-<div class="info-box" style="border-color: var(--success); margin-bottom: 1.5rem;">
-    <strong>&#10003; Authenticated</strong> &mdash; You are connected to Audible.
-    <br><br>
-    <a href="/" class="btn btn-primary">Go to Dashboard</a>
-</div>
-{{else if .AuthURL}}
-<div class="auth-flow">
-    <div class="info-box" style="margin-bottom: 1.5rem;">
-        <strong>Step 1:</strong> A new tab has opened with Amazon's login page. Sign in with your Amazon/Audible account.
-    </div>
+<div class="auth-grid">
+    <section class="auth-panel">
+        <h2>Amazon / Audible</h2>
 
-    <div class="info-box" style="margin-bottom: 1.5rem;">
-        <strong>Step 2:</strong> After signing in you'll land on a page that says <em>"Looking for Something?"</em> or shows a blank page.
-        That's normal! <strong>Copy the entire URL</strong> from that tab's address bar and paste it below.
-    </div>
-
-    <form method="POST" action="/auth/callback" class="settings-form">
-        <input type="hidden" name="code_verifier" value="{{.CodeVerifier}}">
-        <input type="hidden" name="device_serial" value="{{.DeviceSerial}}">
-        <div class="form-group">
-            <label for="redirect_url">Redirect URL</label>
-            <input type="text" id="redirect_url" name="redirect_url"
-                   placeholder="https://www.amazon.com/ap/maplanding?openid.oa2.authorization_code=..."
-                   autofocus required>
+        {{if .Authenticated}}
+        <div class="info-box" style="border-color: var(--success); margin-bottom: 1.5rem;">
+            <strong>&#10003; Authenticated</strong> &mdash; You are connected to Audible.
+            <br><br>
+            <a href="/" class="btn btn-primary">Go to Dashboard</a>
         </div>
-        <button type="submit" class="btn btn-primary">Complete Authentication</button>
-    </form>
+        {{else if .AuthURL}}
+        <div class="auth-flow">
+            <div class="info-box" style="margin-bottom: 1rem;">
+                <strong>Step 1:</strong> Click the button below to open Amazon's login page in a new tab.
+            </div>
+
+            <p style="margin-bottom: 1rem;">
+                <a href="{{.AuthURL}}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">Open Amazon Login</a>
+            </p>
+
+            <div class="info-box" style="margin-bottom: 1.5rem;">
+                <strong>Step 2:</strong> After signing in you'll land on a page that says <em>"Looking for Something?"</em> or shows a blank page.
+                That's normal! <strong>Copy the entire URL</strong> from that tab's address bar and paste it below.
+            </div>
+
+            <form method="POST" action="/auth/callback" class="settings-form">
+                <input type="hidden" name="code_verifier" value="{{.CodeVerifier}}">
+                <input type="hidden" name="device_serial" value="{{.DeviceSerial}}">
+                <div class="form-group">
+                    <label for="redirect_url">Redirect URL</label>
+                    <input type="text" id="redirect_url" name="redirect_url"
+                        placeholder="https://www.amazon.com/ap/maplanding?openid.oa2.authorization_code=..."
+                        autofocus required>
+                </div>
+                <button type="submit" class="btn btn-primary">Complete Authentication</button>
+            </form>
+        </div>
+        {{else}}
+        <div class="auth-flow">
+            <p>You need to authenticate with your Amazon/Audible account to sync and download your library.</p>
+            <p>This flow generates a login URL. After signing in, paste the redirect URL back here to complete authentication.</p>
+            <form method="POST" action="/auth/start">
+                <button type="submit" class="btn btn-primary">Generate Amazon Login Link</button>
+            </form>
+        </div>
+        {{end}}
+    </section>
+
+    <section class="auth-panel">
+        <h2>Plex</h2>
+        <div class="auth-flow">
+            <div class="info-box" style="margin-bottom: 1rem;">
+                Configure Plex so this app can trigger library scans after downloads complete.
+            </div>
+
+            <div class="info-box" style="margin-bottom: 1rem;">
+                <strong>Step 1:</strong> Open your Plex account settings and copy your auth token.
+                <br>
+                <strong>Step 2:</strong> Set <code>PLEX_URL</code> and <code>PLEX_TOKEN</code> in your environment or config.
+            </div>
+
+            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                <a href="https://app.plex.tv/desktop/#!/settings/account" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">Open Plex Account</a>
+                <a href="https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">How to Find Plex Token</a>
+            </div>
+        </div>
+    </section>
 </div>
-<script>window.open("{{.AuthURL}}", "_blank");</script>
-{{else}}
-<div class="auth-flow">
-    <p>You need to authenticate with your Amazon/Audible account to sync and download your library.</p>
-    <p>This will open Amazon's login page in a new tab. After signing in, you'll paste the
-       redirect URL back here to complete the process.</p>
-    <form method="POST" action="/auth/start">
-        <button type="submit" class="btn btn-primary">Sign in with Amazon</button>
-    </form>
-</div>
-{{end}}
+
+<style>
+    .auth-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+        gap: 1.5rem;
+    }
+
+    .auth-panel {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1.25rem;
+    }
+
+    .auth-panel h2 {
+        margin-top: 0;
+    }
+
+    .auth-flow p {
+        margin-bottom: 1rem;
+        color: var(--text-muted);
+    }
+</style>
 {{end}}
