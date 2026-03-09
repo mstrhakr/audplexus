@@ -1,9 +1,12 @@
 package audio
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
+	"strings"
 
 	"github.com/mstrhakr/audible-plex-downloader/internal/logging"
 )
@@ -33,12 +36,27 @@ func (f *FFmpeg) DecryptAAXWithMetadata(inputPath, outputPath, activationBytes s
 		decryptLog.Warn().
 			Int("length", len(activationBytes)).
 			Str("sample", activationBytes[:min(20, len(activationBytes))]).
-			Msg("activation bytes format looks unusual (expected hex format, 40 chars for AAX)")
+			Msg("activation bytes format looks unusual (expected hex format, 32+ chars)")
 	} else {
-		decryptLog.Debug().Msg("activation bytes format validated (128-bit hex)")
+		decryptLog.Debug().Msg("activation bytes format validated (hex string)")
 	}
 
-	err := f.runWithProgress(f.buildDecryptArgs(inputPath, outputPath, activationBytes, "", "", meta), progressCb)
+	// Check container type to detect if file is AAXC instead of AAX
+	containerType, err := f.detectContainerType(inputPath)
+	if err != nil {
+		decryptLog.Warn().
+			Err(err).
+			Str("input", inputPath).
+			Msg("could not detect container type, proceeding with AAX decryption")
+	} else if containerType == "aaxc" {
+		decryptLog.Error().
+			Str("input", inputPath).
+			Str("container", containerType).
+			Msg("file is AAXC format (DRM v4) but AAX activation bytes provided (DRM v2/v3); this will produce corrupted output")
+		return fmt.Errorf("container format mismatch: file is %s format but AAX activation bytes provided; AAXC format requires audible_key+audible_iv credentials", containerType)
+	}
+
+	err = f.runWithProgress(f.buildDecryptArgs(inputPath, outputPath, activationBytes, "", "", meta), progressCb)
 	if err != nil {
 		decryptLog.Error().
 			Err(err).
@@ -84,7 +102,21 @@ func (f *FFmpeg) DecryptAAXCWithMetadata(inputPath, outputPath, key, iv string, 
 			Msg("key and IV format validated (hex strings)")
 	}
 
-	err := f.runWithProgress(f.buildDecryptArgs(inputPath, outputPath, "", key, iv, meta), progressCb)
+	// Check container type to verify this is actually AAXC
+	containerType, err := f.detectContainerType(inputPath)
+	if err != nil {
+		decryptLog.Warn().
+			Err(err).
+			Str("input", inputPath).
+			Msg("could not detect container type, proceeding with AAXC decryption")
+	} else if containerType != "aaxc" && containerType != "" {
+		decryptLog.Warn().
+			Str("input", inputPath).
+			Str("container", containerType).
+			Msg("file appears to be " + containerType + " format but AAXC credentials provided; may cause issues")
+	}
+
+	err = f.runWithProgress(f.buildDecryptArgs(inputPath, outputPath, "", key, iv, meta), progressCb)
 	if err != nil {
 		decryptLog.Error().
 			Err(err).
@@ -156,7 +188,35 @@ func (f *FFmpeg) validateDecryption(inputPath, outputPath, activationBytes strin
 }
 
 // Decrypt auto-detects the DRM type and decrypts accordingly.
+// Prefers container-type detection when possible to prevent format mismatches.
 func (f *FFmpeg) Decrypt(inputPath, outputPath, activationBytes, key, iv string) error {
+	// Try to detect container type to choose right decryption method
+	containerType, detectionErr := f.detectContainerType(inputPath)
+	if detectionErr == nil {
+		if containerType == "aaxc" {
+			if key != "" && iv != "" {
+				decryptLog.Debug().Str("input", inputPath).Msg("detected AAXC container, using key+iv decryption")
+				return f.DecryptAAXC(inputPath, outputPath, key, iv, nil)
+			}
+			if activationBytes != "" {
+				decryptLog.Error().
+					Str("input", inputPath).
+					Msg("detected AAXC container format but only activation bytes available; AAXC requires audible_key+audible_iv")
+				return fmt.Errorf("file is AAXC format (requires key+iv) but only activation bytes provided")
+			}
+		} else if containerType == "aax" {
+			if activationBytes != "" {
+				decryptLog.Debug().Str("input", inputPath).Msg("detected AAX container, using activation bytes decryption")
+				return f.DecryptAAX(inputPath, outputPath, activationBytes, nil)
+			}
+			if key != "" && iv != "" {
+				decryptLog.Debug().Str("input", inputPath).Msg("detected AAX container but key+iv available, trying AAXC decryption anyway")
+				return f.DecryptAAXC(inputPath, outputPath, key, iv, nil)
+			}
+		}
+	}
+
+	// Fallback: use credential type to decide (original behavior)
 	if key != "" && iv != "" {
 		decryptLog.Debug().Str("input", inputPath).Msg("using AAXC decryption (key+iv)")
 		return f.DecryptAAXC(inputPath, outputPath, key, iv, nil)
@@ -289,6 +349,41 @@ func isValidActivationBytes(ab string) bool {
 		return false
 	}
 	return isValidHexString(ab)
+}
+
+// detectContainerType probes the input file to determine if it's AAX or AAXC format.
+// Returns "aax", "aaxc", or empty string if detection fails.
+func (f *FFmpeg) detectContainerType(inputPath string) (string, error) {
+	cmd := exec.Command(f.probePath,
+		"-show_entries", "format=major_brand",
+		"-of", "json",
+		inputPath,
+	)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("ffprobe failed: %w", err)
+	}
+
+	var result struct {
+		Format struct {
+			MajorBrand string `json:"major_brand"`
+		} `json:"format"`
+	}
+
+	if err := json.Unmarshal(output, &result); err != nil {
+		return "", fmt.Errorf("failed to parse ffprobe output: %w", err)
+	}
+
+	brand := strings.ToLower(result.Format.MajorBrand)
+	if strings.Contains(brand, "aaxc") {
+		return "aaxc", nil
+	}
+	if strings.Contains(brand, "aax") || strings.Contains(brand, "m4a") || strings.Contains(brand, "mp42") {
+		return "aax", nil
+	}
+
+	return "", nil
 }
 
 // min returns the minimum of two integers.
