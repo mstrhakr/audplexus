@@ -145,7 +145,25 @@ go build -o audible-plex-downloader ./cmd/server
 ./audible-plex-downloader
 ```
 
-Requires Go 1.22+ and CGO (for SQLite).
+Requires Go 1.22+. Uses pure Go SQLite implementation (modernc.org/sqlite), so no CGO required.
+
+## Releasing
+
+To create a new release with automated binary builds and Docker images:
+
+1. **Tag the release:**
+   ```bash
+   git tag -a v0.1.0 -m "Release v0.1.0"
+   git push origin v0.1.0
+   ```
+
+2. **Automated actions:**
+   - GitHub Actions builds binaries for Linux, macOS, and Windows (amd64 + arm64)
+   - Creates a GitHub Release with downloadable archives
+   - Builds and publishes Docker images with floating tags:
+     - `latest`, `v0`, `v0.1`, `v0.1.0`, `0`, `0.1`, `0.1.0`
+
+All releases are available at: https://github.com/mstrhakr/audible-plex-downloader/releases
 
 ## License
 

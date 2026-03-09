@@ -1,0 +1,149 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            output: audible-plex-downloader-linux-amd64
+          - goos: linux
+            goarch: arm64
+            output: audible-plex-downloader-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            output: audible-plex-downloader-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            output: audible-plex-downloader-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            output: audible-plex-downloader-windows-amd64.exe
+          - goos: windows
+            goarch: arm64
+            output: audible-plex-downloader-windows-arm64.exe
+    
+    steps:
+      - name: Checkout audible-plex-downloader
+        uses: actions/checkout@v4
+        with:
+          path: audible-plex-downloader
+
+      - name: Checkout go-audible
+        uses: actions/checkout@v4
+        with:
+          repository: mstrhakr/go-audible
+          path: go-audible
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        working-directory: audible-plex-downloader
+        run: |
+          # Pure Go build - no CGO needed (using modernc.org/sqlite)
+          mkdir -p ../build
+          go build -ldflags="-s -w" -o ../build/${{ matrix.output }} ./cmd/server
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: build/${{ matrix.output }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          cd release-artifacts
+          for dir in */; do
+            binary=$(basename "$dir")
+            if [[ "$binary" == *.exe ]]; then
+              # Windows binary - create zip
+              cd "$dir"
+              chmod +x "$binary" 2>/dev/null || true
+              zip "../../release/${binary%.exe}.zip" "$binary"
+              cd ..
+            else
+              # Unix binary - create tar.gz
+              cd "$dir"
+              chmod +x "$binary"
+              tar czf "../../release/${binary}.tar.gz" "$binary"
+              cd ..
+            fi
+          done
+
+      - name: Extract release notes
+        id: extract-notes
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          
+          # Try to extract changelog section for this version
+          if [ -f CHANGELOG.md ]; then
+            VERSION=${TAG#v}
+            NOTES=$(awk "/^## \[$VERSION\]|^## $VERSION/,/^## /" CHANGELOG.md | sed '$d' | tail -n +2)
+            if [ -z "$NOTES" ]; then
+              NOTES="Release $TAG"
+            fi
+          else
+            NOTES=$(cat <<-END
+          Release $TAG
+          
+          ## Installation
+          
+          Download the appropriate binary for your platform and run it.
+          
+          ### Docker
+          \`\`\`bash
+          docker pull ghcr.io/mstrhakr/audible-plex-downloader:$TAG
+          \`\`\`
+          
+          See the [README](https://github.com/mstrhakr/audible-plex-downloader#readme) for configuration options.
+          END
+          )
+          fi
+          
+          {
+            echo "notes<<EOF"
+            echo "$NOTES"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          body: ${{ steps.extract-notes.outputs.notes }}
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}

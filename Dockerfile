@@ -1,8 +1,6 @@
 # Build stage
 FROM golang:1.22-alpine AS builder
 
-RUN apk add --no-cache gcc musl-dev
-
 WORKDIR /build
 
 # Copy both repos (structure created by CI or build script)
@@ -13,8 +11,8 @@ COPY audible-plex-downloader/ ./
 # Download Go dependencies
 RUN go mod download
 
-# Build the application
-RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o /audible-plex-downloader ./cmd/server
+# Build the application (pure Go, no CGO needed for modernc.org/sqlite)
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /audible-plex-downloader ./cmd/server
 
 # Runtime stage
 FROM alpine:3.19
