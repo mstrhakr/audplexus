@@ -25,16 +25,8 @@ jobs:
       packages: write
       
     steps:
-      - name: Checkout audible-plex-downloader
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          path: audible-plex-downloader
-
-      - name: Checkout go-audible
-        uses: actions/checkout@v4
-        with:
-          repository: mstrhakr/go-audible
-          path: go-audible
           
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -67,7 +59,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./audible-plex-downloader/Dockerfile
+          file: ./Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

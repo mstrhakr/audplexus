@@ -3,15 +3,14 @@ FROM golang:1.22-alpine AS builder
 
 WORKDIR /build
 
-# Copy both repos (structure created by CI or build script)
-COPY go-audible/ ./go-audible/
-COPY audible-plex-downloader/ ./audible-plex-downloader/
+# Copy go module files
+COPY go.mod go.sum ./
 
-# Build from the audible-plex-downloader directory
-WORKDIR /build/audible-plex-downloader
-
-# Download Go dependencies (go.mod has replace directive to ../go-audible)
+# Download Go dependencies
 RUN go mod download
+
+# Copy source code
+COPY . .
 
 # Build the application (pure Go, no CGO needed for modernc.org/sqlite)
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /audible-plex-downloader ./cmd/server
