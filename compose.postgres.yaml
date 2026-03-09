@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: audible-plex-postgres
+    environment:
+      POSTGRES_DB: audible
+      POSTGRES_USER: audible
+      POSTGRES_PASSWORD: changeme
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U audible -d audible"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - audible-net
+
+  audible-plex:
+    image: ghcr.io/mstrhakr/audible-plex-downloader:latest
+    container_name: audible-plex-downloader
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/config
+      - ./audiobooks:/audiobooks
+      - ./downloads:/downloads
+    environment:
+      # Database Configuration
+      - DATABASE_TYPE=postgres
+      - DATABASE_DSN=postgres://audible:changeme@postgres:5432/audible?sslmode=disable
+      
+      # Paths
+      - CONFIG_PATH=/config
+      - AUDIOBOOKS_PATH=/audiobooks
+      - DOWNLOADS_PATH=/downloads
+      
+      # Optional: Plex integration
+      # - PLEX_URL=http://plex:32400
+      # - PLEX_TOKEN=your-plex-token
+      
+      # Optional: Output format and concurrency
+      # - OUTPUT_FORMAT=m4b
+      # - DOWNLOAD_CONCURRENCY=2
+      # - DECRYPT_CONCURRENCY=2
+      # - PROCESS_CONCURRENCY=1
+      
+      # Optional: Sync schedule (cron format)
+      # - SYNC_SCHEDULE=0 */6 * * *
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - audible-net
+
+volumes:
+  postgres-data:
+
+networks:
+  audible-net:
+    driver: bridge

@@ -63,7 +63,7 @@ Configuration can be provided via `config.yaml` or environment variables:
 
 ## Docker Compose
 
-The docker-compose.yml is configured to use the pre-built image from GitHub Container Registry:
+The `compose.yaml` is configured to use the pre-built image from GitHub Container Registry:
 
 ```yaml
 services:
@@ -78,6 +78,12 @@ services:
     environment:
       - DATABASE_TYPE=sqlite
     restart: unless-stopped
+```
+
+For PostgreSQL with proper health checks, use `compose.postgres.yaml`:
+
+```bash
+docker compose -f compose.postgres.yaml up -d
 ```
 
 ### Available Docker Tags
