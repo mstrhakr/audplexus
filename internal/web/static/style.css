@@ -276,6 +276,10 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     color: var(--text-muted);
 }
 
+.info-box-compact {
+    margin-bottom: 1rem;
+}
+
 /* Forms */
 .settings-form { max-width: 500px; }
 

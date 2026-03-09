@@ -48,6 +48,11 @@ type plexSearchResponse struct {
 	Size int `xml:"size,attr"`
 }
 
+type plexSectionItemsResponse struct {
+	TotalSize int `xml:"totalSize,attr"`
+	Size      int `xml:"size,attr"`
+}
+
 type plexServerOption struct {
 	Name  string
 	URL   string
@@ -491,6 +496,43 @@ func (s *Server) plexSearchCount(ctx context.Context, plexURL, token, query stri
 		return 0, err
 	}
 	return searchResp.Size, nil
+}
+
+func (s *Server) plexSectionItemCount(ctx context.Context, plexURL, token, sectionID string) (int, error) {
+	u, err := buildPlexURL(plexURL, "/library/sections/"+url.PathEscape(sectionID)+"/all", token, map[string]string{
+		"X-Plex-Container-Start": "0",
+		"X-Plex-Container-Size":  "0",
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return 0, err
+	}
+	s.addPlexHeaders(req, token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return 0, fmt.Errorf("section items endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var sectionResp plexSectionItemsResponse
+	if err := xml.NewDecoder(resp.Body).Decode(&sectionResp); err != nil {
+		return 0, err
+	}
+
+	if sectionResp.TotalSize > 0 {
+		return sectionResp.TotalSize, nil
+	}
+	return sectionResp.Size, nil
 }
 
 func (s *Server) addPlexHeaders(req *http.Request, token string) {

@@ -297,6 +297,28 @@ func (s *Server) getDashboardData(ctx context.Context) gin.H {
 
 	lastSync, _ := s.db.GetLastSync(ctx)
 
+	plexURL, plexToken := s.getPlexSettings(ctx)
+	plexSectionID, _ := s.db.GetSetting(ctx, "plex_section_id")
+	plexSectionTitle, _ := s.db.GetSetting(ctx, "plex_section_title")
+
+	plexConfigured := strings.TrimSpace(plexURL) != "" && strings.TrimSpace(plexToken) != ""
+	plexSectionConfigured := strings.TrimSpace(plexSectionID) != ""
+
+	plexLibraryItems := 0
+	plexLibraryItemsAvailable := false
+	if plexConfigured && plexSectionConfigured {
+		plexCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+
+		items, err := s.plexSectionItemCount(plexCtx, plexURL, plexToken, strings.TrimSpace(plexSectionID))
+		if err != nil {
+			webLog.Debug().Err(err).Msg("failed to fetch Plex section item count for dashboard")
+		} else {
+			plexLibraryItems = items
+			plexLibraryItemsAvailable = true
+		}
+	}
+
 	return gin.H{
 		"TotalBooks":      totalBooks,
 		"CompleteBooks":   completeBooks,
@@ -308,6 +330,10 @@ func (s *Server) getDashboardData(ctx context.Context) gin.H {
 		"DoneDownloads":   completeDownloads,
 		"DownloadTitles":  downloadTitles,
 		"LastSync":        lastSync,
+		"PlexConfigured":  plexConfigured,
+		"PlexSection":     strings.TrimSpace(plexSectionTitle),
+		"PlexItems":       plexLibraryItems,
+		"PlexItemsSet":    plexLibraryItemsAvailable,
 		"Page":            "dashboard",
 	}
 }

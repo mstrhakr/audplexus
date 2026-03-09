@@ -24,7 +24,27 @@
         <div class="stat-value" id="stat-failed-dl">{{.FailedDL}}</div>
         <div class="stat-label">Failed</div>
     </div>
+    {{if .PlexConfigured}}
+    <div class="stat-card">
+        <div class="stat-value" id="stat-plex-conn">1</div>
+        <div class="stat-label">Plex Connected</div>
+    </div>
+    {{if .PlexItemsSet}}
+    <div class="stat-card">
+        <div class="stat-value" id="stat-plex-items">{{.PlexItems}}</div>
+        <div class="stat-label">Plex Library Items</div>
+    </div>
+    {{end}}
+    {{end}}
 </div>
+
+{{if .PlexConfigured}}
+<div class="info-box info-box-compact">
+    <strong>Plex:</strong>
+    {{if .PlexSection}}Section {{.PlexSection}}{{else}}Connected{{end}}
+    {{if .PlexItemsSet}}&mdash; {{.PlexItems}} item(s) indexed{{end}}
+</div>
+{{end}}
 
 {{if .LastSync}}
 <div class="info-box">
