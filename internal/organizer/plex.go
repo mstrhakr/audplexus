@@ -40,7 +40,7 @@ func NewPlexOrganizer(db database.Database, ffmpeg *audio.FFmpeg, libraryRoot st
 }
 
 // Organize takes a decrypted audiobook file and moves it into the Plex library structure.
-// Structure: {libraryRoot}/{Author}/{Title}/{Title}.m4b
+// Structure: {libraryRoot}/{Author}/{Title}/{Title - Author}.m4b
 // Optionally embeds metadata, cover art, and generates a chapters file.
 func (o *PlexOrganizer) Organize(ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, inputPath string) (string, error) {
 	return o.OrganizeWithProgress(ctx, book, enriched, inputPath, nil)
@@ -50,8 +50,8 @@ func (o *PlexOrganizer) Organize(ctx context.Context, book *database.Book, enric
 // The callback receives bytes moved and total bytes.
 func (o *PlexOrganizer) OrganizeWithProgress(ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, inputPath string, onMoveProgress func(moved, total int64)) (string, error) {
 	_ = ctx
-	author := sanitizePath(enriched.Author())
-	title := buildTitle(enriched)
+	author := strings.TrimSpace(enriched.Author())
+	title := strings.TrimSpace(enriched.Title())
 
 	if author == "" {
 		author = "Unknown Author"
@@ -59,14 +59,15 @@ func (o *PlexOrganizer) OrganizeWithProgress(ctx context.Context, book *database
 	if title == "" {
 		title = "Unknown Title"
 	}
+	filenameBase := buildFilenameBase(title, author)
 
-	bookDir := filepath.Join(o.libraryRoot, author, sanitizePath(title))
+	bookDir := filepath.Join(o.libraryRoot, sanitizePath(author), sanitizePath(title))
 	if err := os.MkdirAll(bookDir, 0750); err != nil {
 		return "", fmt.Errorf("create book directory: %w", err)
 	}
 
 	ext := filepath.Ext(inputPath)
-	finalPath := filepath.Join(bookDir, sanitizePath(title)+ext)
+	finalPath := filepath.Join(bookDir, sanitizePath(filenameBase)+ext)
 
 	orgLog.Info().
 		Str("asin", book.ASIN).
@@ -95,7 +96,7 @@ func (o *PlexOrganizer) OrganizeWithProgress(ctx context.Context, book *database
 	if o.chapterFile {
 		chapters := enriched.ChapterMarks()
 		if len(chapters) > 0 {
-			chapterPath := filepath.Join(bookDir, sanitizePath(title)+".chapters.txt")
+			chapterPath := filepath.Join(bookDir, sanitizePath(filenameBase)+".chapters.txt")
 			if err := writeChaptersFile(chapterPath, chapters); err != nil {
 				orgLog.Warn().Err(err).Msg("failed to write chapters file")
 			} else {
@@ -124,16 +125,17 @@ func (o *PlexOrganizer) OrganizeWithProgress(ctx context.Context, book *database
 	return finalPath, nil
 }
 
-// buildTitle creates the display title, including series info if available.
-func buildTitle(enriched *audnexus.EnrichedBook) string {
-	title := enriched.Title()
-	series := enriched.Series()
-	pos := enriched.SeriesPosition()
-
-	if series != "" && pos != "" {
-		return fmt.Sprintf("%s - %s, Book %s", title, series, pos)
+// buildFilenameBase builds a Plex-friendly filename in "Title - Author" format.
+func buildFilenameBase(title, author string) string {
+	title = strings.TrimSpace(title)
+	author = strings.TrimSpace(author)
+	if title == "" {
+		title = "Unknown Title"
 	}
-	return title
+	if author == "" {
+		return title
+	}
+	return fmt.Sprintf("%s - %s", title, author)
 }
 
 // writeChaptersFile writes a Plex-compatible chapters.txt file.
