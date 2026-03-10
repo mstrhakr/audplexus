@@ -117,7 +117,87 @@
         </table>
     </div>
     {{end}}
+
+    <!-- Danger Zone -->
+    <div class="settings-section danger-section">
+        <h2>Danger Zone</h2>
+        <p class="danger-description">These actions are destructive and cannot be undone.</p>
+
+        <div class="danger-actions">
+            <div class="danger-action">
+                <div>
+                    <strong>Download Database Backup</strong>
+                    <p>Download a copy of the SQLite database before making destructive changes.</p>
+                </div>
+                <a href="/api/settings/db-backup" class="btn btn-outline" download>Download Backup</a>
+            </div>
+
+            <div class="danger-action">
+                <div>
+                    <strong>Factory Reset</strong>
+                    <p>Wipe all books, downloads, sync history, settings, and device registrations. Your audiobook files on disk will NOT be deleted.</p>
+                </div>
+                <button type="button" class="btn btn-danger" onclick="confirmFactoryReset()">Factory Reset</button>
+            </div>
+        </div>
+        <span id="reset-status"></span>
+    </div>
 </div>
+
+<!-- Factory Reset confirmation modal -->
+<div id="reset-modal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+        <h3>⚠️ Factory Reset</h3>
+        <p>This will <strong>permanently delete</strong> all data from the database:</p>
+        <ul>
+            <li>All synced books &amp; metadata</li>
+            <li>Download queue &amp; history</li>
+            <li>Settings &amp; Plex configuration</li>
+            <li>Registered devices</li>
+        </ul>
+        <p>Audiobook files on disk are <strong>not affected</strong>.</p>
+        <p class="modal-warn">Have you downloaded a database backup?</p>
+        <div class="modal-buttons">
+            <button class="btn btn-outline" onclick="closeResetModal()">Cancel</button>
+            <button class="btn btn-danger" onclick="showFinalConfirm()">I understand, continue</button>
+        </div>
+        <div id="final-confirm" style="display:none">
+            <hr style="border-color:rgba(255,255,255,0.1);margin:1rem 0">
+            <p class="modal-warn">Type <code>RESET</code> to confirm:</p>
+            <input type="text" id="reset-confirm-input" class="reset-input" placeholder="Type RESET" autocomplete="off">
+            <button class="btn btn-danger" style="margin-top:0.75rem;width:100%" onclick="executeReset()">Permanently Delete All Data</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function confirmFactoryReset() {
+    document.getElementById('reset-modal').style.display = 'flex';
+    document.getElementById('final-confirm').style.display = 'none';
+    document.getElementById('reset-confirm-input').value = '';
+}
+function closeResetModal() {
+    document.getElementById('reset-modal').style.display = 'none';
+}
+function showFinalConfirm() {
+    document.getElementById('final-confirm').style.display = 'block';
+    document.getElementById('reset-confirm-input').focus();
+}
+function executeReset() {
+    var input = document.getElementById('reset-confirm-input');
+    if (input.value.trim() !== 'RESET') {
+        input.style.borderColor = '#ff4444';
+        input.focus();
+        return;
+    }
+    fetch('/api/settings/factory-reset', {
+        method: 'POST',
+        headers: { 'HX-Request': 'true' }
+    }).then(function() {
+        window.location.href = '/settings';
+    });
+}
+</script>
 
 <style>
     .settings-container {
@@ -337,6 +417,124 @@
 
     .toggle-switch input:checked + .toggle-slider::before {
         transform: translateX(24px);
+    }
+
+    /* Danger Zone */
+    .danger-section {
+        border-color: rgba(255, 68, 68, 0.3);
+    }
+
+    .danger-section h2 {
+        color: #ff4444;
+    }
+
+    .danger-description {
+        color: #999;
+        margin-bottom: 1.5rem;
+    }
+
+    .danger-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .danger-action {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        padding: 1rem;
+        background: rgba(0,0,0,0.2);
+        border-radius: 4px;
+        border-left: 3px solid rgba(255, 68, 68, 0.4);
+    }
+
+    .danger-action p {
+        margin: 0.25rem 0 0;
+        font-size: 0.85rem;
+        color: #999;
+    }
+
+    .btn-outline {
+        background: transparent;
+        border: 1px solid rgba(255,255,255,0.3);
+        color: #ddd;
+        white-space: nowrap;
+    }
+
+    .btn-outline:hover {
+        border-color: #00d9ff;
+        color: #00d9ff;
+    }
+
+    .btn-danger {
+        background: #cc0000;
+        color: #fff;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    .btn-danger:hover {
+        background: #ff4444;
+    }
+
+    /* Modal */
+    .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+    }
+
+    .modal-box {
+        background: #1a1e2e;
+        border: 1px solid rgba(255, 68, 68, 0.4);
+        border-radius: 8px;
+        padding: 2rem;
+        max-width: 500px;
+        width: 90%;
+    }
+
+    .modal-box h3 {
+        margin-top: 0;
+        color: #ff4444;
+    }
+
+    .modal-box ul {
+        color: #ccc;
+        padding-left: 1.5rem;
+    }
+
+    .modal-warn {
+        color: #ffaa00;
+        font-weight: 500;
+    }
+
+    .modal-buttons {
+        display: flex;
+        gap: 1rem;
+        margin-top: 1rem;
+    }
+
+    .reset-input {
+        width: 100%;
+        padding: 0.75rem;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 4px;
+        background: rgba(255,255,255,0.05);
+        color: #fff;
+        font-family: monospace;
+        font-size: 1rem;
+        text-align: center;
+    }
+
+    .reset-input:focus {
+        outline: none;
+        border-color: #ff4444;
     }
 </style>
 

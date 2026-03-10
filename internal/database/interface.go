@@ -8,6 +8,7 @@ type Database interface {
 	// Lifecycle
 	Close() error
 	Migrate() error
+	Reset(ctx context.Context) error
 
 	// Books
 	GetBook(ctx context.Context, id int64) (*Book, error)

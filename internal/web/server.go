@@ -13,6 +13,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -249,6 +250,8 @@ func (s *Server) setupRoutes() {
 		api.GET("/downloads/state", s.handleDownloadsState)
 		api.GET("/events", s.handleSSE)
 		api.POST("/settings", s.handleSaveSettings)
+		api.GET("/settings/db-backup", s.handleDBBackup)
+		api.POST("/settings/factory-reset", s.handleFactoryReset)
 	}
 }
 
@@ -880,6 +883,57 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 
 	if c.GetHeader("HX-Request") == "true" {
 		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": "Settings saved"})
+		return
+	}
+	c.Redirect(http.StatusSeeOther, "/settings")
+}
+
+// handleDBBackup streams a SQLite database backup as a downloadable file.
+// For PostgreSQL this is not supported.
+func (s *Server) handleDBBackup(c *gin.Context) {
+	dbPath := filepath.Join(s.configPath, "audible.db")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Database backup is only available for SQLite"})
+		return
+	}
+
+	ts := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("audible-backup-%s.db", ts)
+
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	c.Header("Content-Type", "application/x-sqlite3")
+	c.File(dbPath)
+}
+
+// handleFactoryReset wipes all data from the database and re-runs migrations.
+func (s *Server) handleFactoryReset(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// Pause downloads to prevent pipeline activity during reset.
+	s.downloads.Pause("factory reset in progress")
+
+	if err := s.db.Reset(ctx); err != nil {
+		webLog.Error().Err(err).Msg("factory reset failed")
+		s.downloads.Resume()
+		if c.GetHeader("HX-Request") == "true" {
+			c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": "Reset failed: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Re-run migrations to ensure schema is intact (idempotent).
+	if err := s.db.Migrate(); err != nil {
+		webLog.Error().Err(err).Msg("post-reset migration failed")
+	}
+
+	s.downloads.Resume()
+	webLog.Info().Msg("factory reset complete — database wiped")
+
+	if c.GetHeader("HX-Request") == "true" {
+		c.Header("HX-Redirect", "/settings")
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": "Factory reset complete. Redirecting…"})
 		return
 	}
 	c.Redirect(http.StatusSeeOther, "/settings")

@@ -36,6 +36,16 @@ func (s *SQLiteDB) Close() error {
 	return s.db.Close()
 }
 
+func (s *SQLiteDB) Reset(ctx context.Context) error {
+	tables := []string{"download_queue", "sync_history", "settings", "devices", "books"}
+	for _, t := range tables {
+		if _, err := s.db.ExecContext(ctx, "DELETE FROM "+t); err != nil {
+			return fmt.Errorf("reset table %s: %w", t, err)
+		}
+	}
+	return nil
+}
+
 func (s *SQLiteDB) Migrate() error {
 	sourceDriver, err := iofs.New(migrations, "migrations")
 	if err != nil {

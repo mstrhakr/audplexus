@@ -37,6 +37,14 @@ func (p *PostgresDB) Close() error {
 	return p.db.Close()
 }
 
+func (p *PostgresDB) Reset(ctx context.Context) error {
+	_, err := p.db.ExecContext(ctx, `TRUNCATE books, download_queue, sync_history, settings, devices RESTART IDENTITY CASCADE`)
+	if err != nil {
+		return fmt.Errorf("reset postgres: %w", err)
+	}
+	return nil
+}
+
 func (p *PostgresDB) Migrate() error {
 	sourceDriver, err := iofs.New(migrationsPostgres, "migrations_postgres")
 	if err != nil {
