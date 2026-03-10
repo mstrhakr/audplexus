@@ -31,10 +31,10 @@ const (
 type SyncPhase string
 
 const (
-	PhaseAudibleSync  SyncPhase = "audible_sync"
-	PhaseFileScan     SyncPhase = "file_scan"
-	PhasePlexQuery    SyncPhase = "plex_query"
-	PhasePlexScan     SyncPhase = "plex_scan"
+	PhaseAudibleSync   SyncPhase = "audible_sync"
+	PhaseFileScan      SyncPhase = "file_scan"
+	PhasePlexQuery     SyncPhase = "plex_query"
+	PhasePlexScan      SyncPhase = "plex_scan"
 	PhaseDownloadQueue SyncPhase = "download_queue"
 )
 
