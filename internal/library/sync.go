@@ -247,7 +247,8 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 	}
 
 	now := time.Now()
-	phases := s.buildPhases(mode)
+	prevPhases := append([]PhaseStatus(nil), s.progress.Phases...)
+	phases := s.buildPhases(mode, prevPhases)
 
 	s.progress = SyncProgress{
 		Running:   true,
@@ -396,17 +397,53 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 	return added, nil
 }
 
-func (s *SyncService) buildPhases(mode SyncMode) []PhaseStatus {
-	phases := []PhaseStatus{
-		{Name: PhaseAudibleSync, Label: "Audible Library", Status: "pending"},
+func (s *SyncService) buildPhases(mode SyncMode, prev []PhaseStatus) []PhaseStatus {
+	defaultPhase := func(name SyncPhase, label string) PhaseStatus {
+		return PhaseStatus{Name: name, Label: label, Status: "pending"}
 	}
+
+	findPrev := func(name SyncPhase) (PhaseStatus, bool) {
+		for i := range prev {
+			if prev[i].Name == name {
+				return prev[i], true
+			}
+		}
+		return PhaseStatus{}, false
+	}
+
 	if mode == SyncModeFull {
-		phases = append(phases,
-			PhaseStatus{Name: PhaseFileScan, Label: "File System Scan", Status: "pending"},
-			PhaseStatus{Name: PhasePlexQuery, Label: "Plex Library Query", Status: "pending"},
-			PhaseStatus{Name: PhasePlexScan, Label: "Plex Scan", Status: "pending"},
-		)
+		return []PhaseStatus{
+			defaultPhase(PhaseAudibleSync, "Audible Library"),
+			defaultPhase(PhaseFileScan, "File System Scan"),
+			defaultPhase(PhasePlexQuery, "Plex Library Query"),
+			defaultPhase(PhasePlexScan, "Plex Scan"),
+		}
 	}
+
+	phases := []PhaseStatus{defaultPhase(PhaseAudibleSync, "Audible Library")}
+	for _, phase := range []struct {
+		name  SyncPhase
+		label string
+	}{
+		{name: PhaseFileScan, label: "File System Scan"},
+		{name: PhasePlexQuery, label: "Plex Library Query"},
+		{name: PhasePlexScan, label: "Plex Scan"},
+	} {
+		if prevPhase, ok := findPrev(phase.name); ok {
+			phases = append(phases, prevPhase)
+			continue
+		}
+		phases = append(phases, PhaseStatus{
+			Name:    phase.name,
+			Label:   phase.label,
+			Status:  "skipped",
+			Message: "Not run in quick sync",
+			Current: 1,
+			Total:   1,
+			Percent: 1,
+		})
+	}
+
 	return phases
 }
 
@@ -536,7 +573,11 @@ func (s *SyncService) overallStatus() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	hasFailed := false
+	mode := s.progress.Mode
 	for _, p := range s.progress.Phases {
+		if !phaseRunsInMode(mode, p.Name) {
+			continue
+		}
 		if p.Status == "failed" {
 			hasFailed = true
 		}
@@ -551,12 +592,23 @@ func (s *SyncService) collectErrors() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var errs []string
+	mode := s.progress.Mode
 	for _, p := range s.progress.Phases {
+		if !phaseRunsInMode(mode, p.Name) {
+			continue
+		}
 		if p.Status == "failed" && p.Error != "" {
 			errs = append(errs, p.Label+": "+p.Error)
 		}
 	}
 	return strings.Join(errs, "; ")
+}
+
+func phaseRunsInMode(mode SyncMode, phase SyncPhase) bool {
+	if mode == SyncModeFull {
+		return true
+	}
+	return phase == PhaseAudibleSync
 }
 
 func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.SyncHistory) (int, error) {

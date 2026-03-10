@@ -222,7 +222,8 @@
                 if (d.phases && d.phases.length > 0) {
                     html += '<div class="sync-phases">';
                     for (var i = 0; i < d.phases.length; i++) {
-                        html += renderSyncPhase(d.phases[i]);
+                        var p = d.phases[i];
+                        html += renderSyncPhase(p, { id: 'phase-' + p.name });
                     }
                     html += '</div>';
                 }
@@ -237,9 +238,9 @@
                         var p = d.phases[i];
                         if (p.status === 'failed') {
                             p.message = p.error || p.message;
-                            html += renderSyncPhase(p, { detailClass: 'error' });
+                            html += renderSyncPhase(p, { detailClass: 'error', id: 'phase-' + p.name });
                         } else if (p.status === 'complete') {
-                            html += renderSyncPhase(p);
+                            html += renderSyncPhase(p, { id: 'phase-' + p.name });
                         }
                     }
                     html += '</div>';
@@ -248,15 +249,49 @@
                 el.innerHTML = html;
                 if (window.htmx) htmx.process(el);
             } else if (d.status === 'complete') {
+                var isQuickComplete = d.mode === 'quick';
+                if (isQuickComplete) {
+                    var phasesEl = el.querySelector('.sync-phases');
+                    if (phasesEl) {
+                        var successMsg = d.message || 'Quick sync complete';
+                        var header = el.querySelector('.sync-header .status-msg');
+                        if (!header) {
+                            var statusContainer = el.querySelector('.sync-status-container') || el;
+                            var headerWrap = document.createElement('div');
+                            headerWrap.className = 'sync-header';
+                            headerWrap.innerHTML = '<span class="status-msg success"></span>';
+                            statusContainer.insertBefore(headerWrap, statusContainer.firstChild);
+                            header = headerWrap.querySelector('.status-msg');
+                        }
+                        header.className = 'status-msg success';
+                        header.textContent = successMsg;
+
+                        if (d.phases && d.phases.length > 0) {
+                            for (var i = 0; i < d.phases.length; i++) {
+                                var p = d.phases[i];
+                                var phaseId = 'phase-' + p.name;
+                                var phaseEl = phasesEl.querySelector('[id="' + phaseId + '"]');
+                                var phaseHTML = renderSyncPhase(p, { id: phaseId });
+                                if (phaseEl) {
+                                    phaseEl.outerHTML = phaseHTML;
+                                } else {
+                                    phasesEl.insertAdjacentHTML('beforeend', phaseHTML);
+                                }
+                            }
+                        }
+                        return;
+                    }
+                }
+
                 var html = '<div class="sync-status-container"><div class="sync-header"><span class="status-msg success">' + (d.message || 'Sync complete') + '</span></div>';
                 if (d.phases && d.phases.length > 0) {
                     html += '<div class="sync-phases">';
                     for (var i = 0; i < d.phases.length; i++) {
                         var p = d.phases[i];
                         if (p.status === 'complete') {
-                            html += renderSyncPhase(p);
+                            html += renderSyncPhase(p, { id: 'phase-' + p.name });
                         } else if (p.status === 'skipped') {
-                            html += renderSyncPhase(p);
+                            html += renderSyncPhase(p, { id: 'phase-' + p.name });
                         }
                     }
                     html += '</div>';

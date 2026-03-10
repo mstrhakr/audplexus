@@ -405,28 +405,28 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 
 /* Sync phase indicators */
 .sync-phases {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.4rem;
     margin: 0.35rem 0;
 }
 .sync-phase {
     display: flex;
     flex-direction: column;
-    flex: 0 0 calc(25% - 0.3rem);
-    min-height: 74px;
+    height: 56px;
     padding: 0.2rem 0.35rem;
     border-radius: var(--radius);
     font-size: 0.75rem;
     background: var(--card-bg);
     border: 1px solid var(--border);
+    overflow: hidden;
 }
 .phase-main {
     display: flex;
     align-items: center;
     gap: 0.25rem;
-    flex-wrap: wrap;
-    row-gap: 0.15rem;
+    flex-wrap: nowrap;
+    min-width: 0;
 }
 .sync-phase.complete { border-color: var(--success); }
 .sync-phase.complete .phase-icon { color: var(--success); }
@@ -439,18 +439,32 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     font-size: 0.8rem;
     flex-shrink: 0;
 }
-.phase-label { font-weight: 500; font-size: 0.75rem; }
-.phase-detail { color: var(--text-muted); font-size: 0.7rem; }
+.phase-label {
+    font-weight: 500;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.phase-detail {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 .phase-detail.error { color: var(--error); }
 .phase-count {
     margin-left: auto;
     color: var(--text-muted);
     font-size: 0.65rem;
     white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .phase-progress-track {
-    margin-top: 0.15rem;
+    margin-top: auto;
     height: 3px;
     background: var(--border);
     border-radius: 2px;
@@ -496,7 +510,7 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 /* Responsive */
 @media (max-width: 768px) {
     .sync-phases { gap: 0.25rem; }
-    .sync-phase { flex: 0 0 100%; }
+    .sync-phases { grid-template-columns: 1fr; }
     .sidebar {
         width: 100%;
         position: relative;
