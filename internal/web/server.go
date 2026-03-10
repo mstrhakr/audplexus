@@ -585,6 +585,8 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 				if fetched, err := s.plexSectionLocation(ctx, plexURL, plexToken, sectionID); err == nil && fetched != "" {
 					plexSectionPath = fetched
 					_ = s.db.SetSetting(ctx, "plex_section_path", fetched)
+				} else if err != nil {
+					webLog.Debug().Err(err).Str("section_id", sectionID).Msg("plex section path not available from API")
 				}
 			}
 		}

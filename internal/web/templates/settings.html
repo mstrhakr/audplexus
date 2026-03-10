@@ -179,8 +179,9 @@
                 <div class="info-value">{{if .NativeAudiobooksPath}}{{.NativeAudiobooksPath}}{{else}}<span class="muted">Not configured</span>{{end}}</div>
             </div>
             <div class="info-item">
-                <label>Plex Library Path</label>
-                <div class="info-value">{{if .PlexSectionPath}}{{.PlexSectionPath}}{{else}}<span class="muted">Not configured</span>{{end}}</div>
+                <label>Plex Library Path (best effort)</label>
+                <div class="info-value">{{if .PlexSectionPath}}{{.PlexSectionPath}}{{else}}<span class="muted">Not exposed by Plex API for this connection</span>{{end}}</div>
+                <small class="muted">Section scans still work via section ID even when path is unavailable.</small>
             </div>
         </div>
 

@@ -63,6 +63,7 @@ type plexLibrarySection struct {
 	ID    string
 	Title string
 	Type  string
+	Locations []plexLocation
 }
 
 type plexSectionsResponse struct {
@@ -73,6 +74,8 @@ type plexSectionDirectory struct {
 	Key   string `xml:"key,attr"`
 	Title string `xml:"title,attr"`
 	Type  string `xml:"type,attr"`
+	// Some Plex servers include Location nodes on section list responses.
+	Locations []plexLocation `xml:"Location"`
 }
 
 // plexSectionDetailResponse wraps the detailed response from /library/sections/{id}
@@ -214,6 +217,8 @@ func (s *Server) handlePlexSectionSelect(c *gin.Context) {
 	if plexURL != "" && plexToken != "" {
 		if sectionPath, err := s.plexSectionLocation(ctx, plexURL, plexToken, sectionID); err == nil && sectionPath != "" {
 			_ = s.db.SetSetting(ctx, "plex_section_path", sectionPath)
+		} else if err != nil {
+			webLog.Debug().Err(err).Str("section_id", sectionID).Msg("plex section path not available from API")
 		}
 	}
 
@@ -438,7 +443,7 @@ func (s *Server) plexListSections(ctx context.Context, plexURL, token string) ([
 		if id == "" {
 			continue
 		}
-		sections = append(sections, plexLibrarySection{ID: id, Title: d.Title, Type: d.Type})
+		sections = append(sections, plexLibrarySection{ID: id, Title: d.Title, Type: d.Type, Locations: d.Locations})
 	}
 
 	sort.Slice(sections, func(i, j int) bool {
@@ -597,7 +602,27 @@ func (s *Server) plexSectionLocation(ctx context.Context, plexURL, token, sectio
 		}
 	}
 
-	return "", fmt.Errorf("no location path found for section %s", sectionID)
+	// Fallback: some Plex setups omit Location in section detail but include it
+	// in the section list response.
+	sections, listErr := s.plexListSections(ctx, plexURL, token)
+	if listErr == nil {
+		for _, sec := range sections {
+			if sec.ID != sectionID {
+				continue
+			}
+			for _, loc := range sec.Locations {
+				if p := strings.TrimSpace(loc.Path); p != "" {
+					return p, nil
+				}
+			}
+			break
+		}
+	}
+
+	if listErr != nil {
+		return "", fmt.Errorf("no location path found for section %s (detail endpoint had no Location; list fallback failed: %v)", sectionID, listErr)
+	}
+	return "", fmt.Errorf("no location path found for section %s; Plex may not expose filesystem paths for this connection", sectionID)
 }
 
 func (s *Server) addPlexHeaders(req *http.Request, token string) {

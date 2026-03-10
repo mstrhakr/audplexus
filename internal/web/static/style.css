@@ -376,6 +376,7 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 .status-msg.error { color: var(--error); }
 .status-msg.warning { color: var(--warning, #e6a817); }
 .status-msg.sync-running { font-weight: 600; }
+.muted { color: var(--text-muted); }
 .sync-progress {
     margin-top: 0.35rem;
     max-width: 360px;
