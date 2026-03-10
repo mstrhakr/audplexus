@@ -14,14 +14,20 @@ func TestBuildFilenameBase(t *testing.T) {
 		want           string
 	}{
 		{
-			name:           "title subtitle series asin and region",
+			name:           "title series asin and region",
 			title:          "Harry Potter and the Goblet of Fire",
-			subtitle:       "Book 4",
 			series:         "Harry Potter",
 			seriesPosition: "4",
 			asin:           "B017V4IM1G",
 			region:         "us",
-			want:           "Harry Potter and the Goblet of Fire: Book 4 - Harry Potter 4 B017V4IM1G [us]",
+			want:           "Harry Potter and the Goblet of Fire - Harry Potter 4 B017V4IM1G [us]",
+		},
+		{
+			name:     "title with meaningful subtitle",
+			title:    "The Expanse",
+			subtitle: "A Telltale Series",
+			asin:     "B08G9PRS1K",
+			want:     "The Expanse: A Telltale Series B08G9PRS1K",
 		},
 		{
 			name:  "title and asin without series or region",
