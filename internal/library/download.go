@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,6 +62,41 @@ type DownloadManager struct {
 	subMu       sync.Mutex
 	subscribers map[int]chan DownloadEvent
 	nextSubID   int
+
+	pipeMu         sync.RWMutex
+	activeByASIN   map[string]PipelineStateItem
+	waitingDecrypt map[string]PipelineStateItem
+	waitingMoving  map[string]PipelineStateItem
+}
+
+// PipelineStateItem is a live in-memory view of one item in the pipeline.
+type PipelineStateItem struct {
+	ASIN         string    `json:"asin"`
+	BookID       int64     `json:"book_id"`
+	Title        string    `json:"title,omitempty"`
+	Stage        string    `json:"stage"`
+	Progress     float64   `json:"progress"`
+	BytesWritten int64     `json:"bytes_written,omitempty"`
+	TotalBytes   int64     `json:"total_bytes,omitempty"`
+	Speed        float64   `json:"speed,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// WorkerPoolSnapshot describes one worker pool and its queue.
+type WorkerPoolSnapshot struct {
+	ID         string              `json:"id"`
+	Label      string              `json:"label"`
+	Workers    int                 `json:"workers"`
+	Active     int                 `json:"active"`
+	QueueDepth int                 `json:"queue_depth"`
+	Waiting    []PipelineStateItem `json:"waiting"`
+}
+
+// PipelineSnapshot is the full runtime snapshot consumed by the web UI.
+type PipelineSnapshot struct {
+	Type  string               `json:"type"`
+	Pools []WorkerPoolSnapshot `json:"pools"`
+	Items []PipelineStateItem  `json:"items"`
 }
 
 // QueueState reports whether downloads are paused and why.
@@ -104,6 +140,8 @@ type DownloadEvent struct {
 	BytesWritten int64   `json:"bytes_written"`
 	TotalBytes   int64   `json:"total_bytes"`
 	Speed        float64 `json:"speed,omitempty"` // bytes per second
+	QueueDepth   int     `json:"queue_depth,omitempty"`
+	QueueItem    bool    `json:"queue_item,omitempty"`
 	Error        string  `json:"error,omitempty"`
 }
 
@@ -265,6 +303,9 @@ func NewDownloadManager(
 		processQueue:        make(chan *pipelineItem, 100),
 		stopCh:              make(chan struct{}),
 		subscribers:         make(map[int]chan DownloadEvent),
+		activeByASIN:        make(map[string]PipelineStateItem),
+		waitingDecrypt:      make(map[string]PipelineStateItem),
+		waitingMoving:       make(map[string]PipelineStateItem),
 	}
 }
 
@@ -290,6 +331,8 @@ func (dm *DownloadManager) Unsubscribe(id int) {
 }
 
 func (dm *DownloadManager) emit(event DownloadEvent) {
+	dm.updatePipelineState(event)
+
 	dm.subMu.Lock()
 	defer dm.subMu.Unlock()
 	for _, ch := range dm.subscribers {
@@ -298,6 +341,184 @@ func (dm *DownloadManager) emit(event DownloadEvent) {
 		default:
 			// Drop if subscriber is slow
 		}
+	}
+}
+
+// PipelineSnapshot builds a runtime view of worker pools, active items, and waiting queues.
+func (dm *DownloadManager) PipelineSnapshot(ctx context.Context) PipelineSnapshot {
+	pendingStatus := database.DownloadStatusPending
+	pending, _ := dm.db.ListDownloads(ctx, &pendingStatus)
+
+	pendingItems := make([]PipelineStateItem, 0, len(pending))
+	for _, p := range pending {
+		title := p.ASIN
+		if b, err := dm.db.GetBook(ctx, p.BookID); err == nil && b != nil && b.Title != "" {
+			title = b.Title
+		}
+		pendingItems = append(pendingItems, PipelineStateItem{
+			ASIN:      p.ASIN,
+			BookID:    p.BookID,
+			Title:     title,
+			Stage:     "queued",
+			Progress:  p.Progress,
+			UpdatedAt: p.UpdatedAt,
+		})
+	}
+	sort.Slice(pendingItems, func(i, j int) bool {
+		return pendingItems[i].UpdatedAt.Before(pendingItems[j].UpdatedAt)
+	})
+
+	dm.pipeMu.RLock()
+	active := copyAndSortStateItems(dm.activeByASIN)
+	waitDecrypt := copyAndSortStateItems(dm.waitingDecrypt)
+	waitMoving := copyAndSortStateItems(dm.waitingMoving)
+	dm.pipeMu.RUnlock()
+
+	activeDownloading := 0
+	activeDecrypting := 0
+	activeMoving := 0
+	for _, it := range active {
+		switch it.Stage {
+		case "downloading":
+			activeDownloading++
+		case "decrypting":
+			activeDecrypting++
+		case "moving", "processing":
+			activeMoving++
+		}
+	}
+
+	for i := range pendingItems {
+		pendingItems[i].Progress = 0
+	}
+
+	items := make([]PipelineStateItem, 0, len(active)+len(pendingItems)+len(waitDecrypt)+len(waitMoving))
+	items = append(items, active...)
+	items = append(items, pendingItems...)
+	items = append(items, waitDecrypt...)
+	items = append(items, waitMoving...)
+
+	return PipelineSnapshot{
+		Type: "pool_state",
+		Pools: []WorkerPoolSnapshot{
+			{
+				ID:         "download",
+				Label:      "Download",
+				Workers:    dm.downloadConcurrency,
+				Active:     activeDownloading,
+				QueueDepth: len(pendingItems),
+				Waiting:    pendingItems,
+			},
+			{
+				ID:         "decrypt",
+				Label:      "Decrypt",
+				Workers:    dm.decryptConcurrency,
+				Active:     activeDecrypting,
+				QueueDepth: len(waitDecrypt),
+				Waiting:    waitDecrypt,
+			},
+			{
+				ID:         "moving",
+				Label:      "Moving",
+				Workers:    dm.processConcurrency,
+				Active:     activeMoving,
+				QueueDepth: len(waitMoving),
+				Waiting:    waitMoving,
+			},
+		},
+		Items: items,
+	}
+}
+
+func copyAndSortStateItems(src map[string]PipelineStateItem) []PipelineStateItem {
+	items := make([]PipelineStateItem, 0, len(src))
+	for _, it := range src {
+		items = append(items, it)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].UpdatedAt.Equal(items[j].UpdatedAt) {
+			return items[i].ASIN < items[j].ASIN
+		}
+		return items[i].UpdatedAt.Before(items[j].UpdatedAt)
+	})
+	return items
+}
+
+func (dm *DownloadManager) updatePipelineState(event DownloadEvent) {
+	if event.ASIN == "" {
+		return
+	}
+
+	dm.pipeMu.Lock()
+	defer dm.pipeMu.Unlock()
+
+	build := func(stage string) PipelineStateItem {
+		existing := dm.activeByASIN[event.ASIN]
+		if existing.ASIN == "" {
+			existing = dm.waitingDecrypt[event.ASIN]
+		}
+		if existing.ASIN == "" {
+			existing = dm.waitingMoving[event.ASIN]
+		}
+		title := event.Title
+		if title == "" {
+			title = existing.Title
+		}
+		progress := event.Progress
+		if progress == 0 && existing.Progress > 0 && event.Type != "started" {
+			progress = existing.Progress
+		}
+		return PipelineStateItem{
+			ASIN:         event.ASIN,
+			BookID:       event.BookID,
+			Title:        title,
+			Stage:        stage,
+			Progress:     progress,
+			BytesWritten: event.BytesWritten,
+			TotalBytes:   event.TotalBytes,
+			Speed:        event.Speed,
+			UpdatedAt:    time.Now(),
+		}
+	}
+
+	clear := func() {
+		delete(dm.activeByASIN, event.ASIN)
+		delete(dm.waitingDecrypt, event.ASIN)
+		delete(dm.waitingMoving, event.ASIN)
+	}
+
+	switch event.Type {
+	case "failed", "complete", "cancelled":
+		clear()
+		return
+	}
+
+	stage := strings.TrimSpace(event.Stage)
+	if stage == "" {
+		if event.Type == "started" {
+			stage = "downloading"
+		} else {
+			return
+		}
+	}
+
+	switch stage {
+	case "waiting_decrypt":
+		delete(dm.activeByASIN, event.ASIN)
+		dm.waitingDecrypt[event.ASIN] = build(stage)
+	case "waiting_moving":
+		delete(dm.activeByASIN, event.ASIN)
+		dm.waitingMoving[event.ASIN] = build(stage)
+	case "downloading", "decrypting", "processing", "moving":
+		delete(dm.waitingDecrypt, event.ASIN)
+		delete(dm.waitingMoving, event.ASIN)
+		dm.activeByASIN[event.ASIN] = build(stage)
+	case "complete":
+		clear()
+	default:
+		delete(dm.waitingDecrypt, event.ASIN)
+		delete(dm.waitingMoving, event.ASIN)
+		dm.activeByASIN[event.ASIN] = build(stage)
 	}
 }
 

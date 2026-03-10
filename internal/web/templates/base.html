@@ -36,15 +36,102 @@
             'decrypting':  'badge-warning',
             'processing':  'badge-warning',
             'moving':      'badge-warning',
+            'waiting_decrypt': 'badge-info',
+            'waiting_moving':  'badge-info',
+            'queued':      'badge-info',
             'complete':    'badge-success',
             'failed':      'badge-error',
-            'queued':      'badge-info',
             'new':         'badge-neutral'
         };
 
         function stageLabel(stage) {
             if (stage === 'moving') return 'moving file';
+            if (stage === 'waiting_decrypt') return 'waiting for decrypt worker';
+            if (stage === 'waiting_moving') return 'waiting for moving worker';
             return stage || '';
+        }
+
+        function isVisiblePipelineStage(stage) {
+            return stage === 'downloading' ||
+                stage === 'decrypting' ||
+                stage === 'processing' ||
+                stage === 'moving' ||
+                stage === 'waiting_decrypt' ||
+                stage === 'waiting_moving';
+        }
+
+        function renderPipelinePools(snapshot) {
+            var wrap = document.getElementById('pipeline-pools');
+            if (!wrap || !snapshot || !snapshot.pools) return;
+
+            var html = '';
+            for (var i = 0; i < snapshot.pools.length; i++) {
+                var p = snapshot.pools[i];
+                var waitingHtml = '';
+                if (p.waiting && p.waiting.length > 0) {
+                    waitingHtml += '<ul class="pool-waiting-list">';
+                    for (var j = 0; j < p.waiting.length && j < 8; j++) {
+                        var w = p.waiting[j];
+                        waitingHtml += '<li><span class="pool-item-title">' + (w.title || w.asin) + '</span><span class="pool-item-asin">' + w.asin + '</span></li>';
+                    }
+                    if (p.waiting.length > 8) {
+                        waitingHtml += '<li class="pool-more">+' + (p.waiting.length - 8) + ' more</li>';
+                    }
+                    waitingHtml += '</ul>';
+                } else {
+                    waitingHtml = '<div class="pool-empty">No waiting items</div>';
+                }
+
+                html += '<div class="pool-card">' +
+                    '<div class="pool-head"><strong>' + p.label + ' Pool</strong><span class="pool-workers">workers ' + p.workers + '</span></div>' +
+                    '<div class="pool-stats"><span>active ' + p.active + '</span><span>queue ' + p.queue_depth + '</span></div>' +
+                    waitingHtml +
+                '</div>';
+            }
+
+            wrap.innerHTML = html;
+        }
+
+        function renderSnapshotItems(snapshot) {
+            if (!snapshot || !snapshot.items) return;
+            var keep = {};
+            for (var i = 0; i < snapshot.items.length; i++) {
+                var item = snapshot.items[i];
+                if (!item || !item.asin) continue;
+                keep[item.asin] = true;
+                onPipelineEvent({ data: JSON.stringify({
+                    type: item.stage === 'queued' ? 'queue' : 'stage',
+                    stage: item.stage,
+                    asin: item.asin,
+                    title: item.title,
+                    book_id: item.book_id,
+                    progress: item.progress,
+                    bytes_written: item.bytes_written,
+                    total_bytes: item.total_bytes,
+                    speed: item.speed,
+                    queue_item: item.stage === 'queued'
+                })});
+            }
+
+            var cardsWrap = document.getElementById('pipeline-cards');
+            if (cardsWrap) {
+                var cards = cardsWrap.querySelectorAll('.download-card[id^="pipe-"]');
+                for (var c = 0; c < cards.length; c++) {
+                    var id = cards[c].id || '';
+                    var asin = id.indexOf('pipe-') === 0 ? id.substring(5) : '';
+                    if (asin && !keep[asin]) {
+                        cards[c].remove();
+                    }
+                }
+
+                if (!cardsWrap.querySelector('.download-card[id^="pipe-"]') && !document.getElementById('pipe-empty')) {
+                    var empty = document.createElement('p');
+                    empty.className = 'empty';
+                    empty.id = 'pipe-empty';
+                    empty.textContent = 'No active downloads';
+                    cardsWrap.appendChild(empty);
+                }
+            }
         }
 
         function fmtBytes(b) {
@@ -130,6 +217,12 @@
         function onPipelineEvent(e) {
             var d = JSON.parse(e.data);
 
+            if (d.type === 'pool_state') {
+                renderPipelinePools(d);
+                renderSnapshotItems(d);
+                return;
+            }
+
             if (d.type === 'paused' || d.type === 'resumed') {
                 var statusEl = document.getElementById('dl-status');
                 if (statusEl) {
@@ -177,9 +270,9 @@
             var activity = document.getElementById('pipeline-cards');
             if (activity) {
                 var card = document.getElementById('pipe-' + d.asin);
-                if (d.type === 'started' || d.type === 'progress' || d.type === 'stage') {
+                if (d.type === 'started' || d.type === 'progress' || d.type === 'stage' || d.type === 'queue') {
                     var stage = d.stage || (d.type === 'started' ? 'downloading' : '');
-                    var isActiveStage = stage === 'downloading' || stage === 'decrypting' || stage === 'processing' || stage === 'moving';
+                    var isActiveStage = isVisiblePipelineStage(stage);
 
                     // Keep cards focused on active work only; queued/non-active states should not linger.
                     if (!isActiveStage) {
@@ -223,13 +316,19 @@
                         if (speedInfo) parts.push(speedInfo);
                         if (eta) parts.push('ETA ' + eta);
                         details = parts.length > 0 ? '<div class="dl-details">' + parts.join(' &middot; ') + '</div>' : '';
+                    } else if (stage === 'waiting_decrypt' || stage === 'waiting_moving') {
+                        var waitingParts = [];
+                        if (d.queue_depth > 0) waitingParts.push('queue ' + d.queue_depth);
+                        if (pct > 0) waitingParts.push('stage done');
+                        details = waitingParts.length > 0 ? '<div class="dl-details">' + waitingParts.join(' &middot; ') + '</div>' : '';
                     }
 
+                    var bClass = badgeClass[stage] || 'badge-warning';
                     card.innerHTML = '<div class="dl-info"><strong>' + label + '</strong>' +
-                        '<span class="badge badge-warning">' + stageText +
+                        '<span class="badge ' + bClass + '">' + stageText +
                         (pct > 0 ? ' ' + pct + '%' : '') +
                         '</span></div>' + details +
-                        ((stage === 'downloading' || stage === 'decrypting' || stage === 'processing' || stage === 'moving') ? '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div>' : '');
+                        ((stage === 'downloading' || stage === 'decrypting' || stage === 'processing' || stage === 'moving' || stage === 'waiting_decrypt' || stage === 'waiting_moving') ? '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div>' : '');
                 } else if (d.type === 'complete') {
                     if (card) card.remove();
                     // Add row to completed table
@@ -288,6 +387,15 @@
             if (document.visibilityState === 'hidden') {
                 return;
             }
+
+            // Pull one full snapshot so reconnects never miss final 100% transitions.
+            fetch('/api/pipeline/state')
+                .then(function(r) { return r.json(); })
+                .then(function(state) {
+                    renderPipelinePools(state);
+                    renderSnapshotItems(state);
+                })
+                .catch(function() {});
 
             closeEventSource();
             es = new EventSource('/api/events');

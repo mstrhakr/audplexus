@@ -129,10 +129,31 @@ func (dm *DownloadManager) handleDownloadStage(ctx context.Context, item *databa
 	now = time.Now()
 	item.Progress = 1.0
 	_ = dm.db.UpdateDownload(ctx, item)
+	dm.emit(DownloadEvent{
+		ASIN:         item.ASIN,
+		BookID:       item.BookID,
+		Title:        bookTitle,
+		Type:         "progress",
+		Stage:        "downloading",
+		Progress:     1.0,
+		BytesWritten: bytesWritten,
+		TotalBytes:   bytesWritten,
+	})
 
 	// Push to decrypt queue
+	queueDepth := len(dm.decryptQueue) + 1
 	select {
 	case dm.decryptQueue <- pipeItem:
+		dm.emit(DownloadEvent{
+			ASIN:       item.ASIN,
+			BookID:     item.BookID,
+			Title:      bookTitle,
+			Type:       "stage",
+			Stage:      "waiting_decrypt",
+			Progress:   1.0,
+			QueueDepth: queueDepth,
+			QueueItem:  true,
+		})
 		asinLog.Debug().Msg("pushed to decrypt queue")
 	case <-ctx.Done():
 		asinLog.Warn().Msg("context cancelled while queuing for decrypt")
@@ -188,10 +209,29 @@ func (dm *DownloadManager) handleDecryptStage(ctx context.Context, item *pipelin
 	item.DecryptedPath = decryptedPath
 	item.Enriched = enriched
 	asinLog.Info().Str("path", decryptedPath).Msg("decryption complete")
+	dm.emit(DownloadEvent{
+		ASIN:     item.ASIN,
+		BookID:   item.BookID,
+		Title:    item.Title,
+		Type:     "progress",
+		Stage:    "decrypting",
+		Progress: 1.0,
+	})
 
 	// Push to process queue
+	queueDepth := len(dm.processQueue) + 1
 	select {
 	case dm.processQueue <- item:
+		dm.emit(DownloadEvent{
+			ASIN:       item.ASIN,
+			BookID:     item.BookID,
+			Title:      item.Title,
+			Type:       "stage",
+			Stage:      "waiting_moving",
+			Progress:   1.0,
+			QueueDepth: queueDepth,
+			QueueItem:  true,
+		})
 		asinLog.Debug().Msg("pushed to process queue")
 	case <-ctx.Done():
 		asinLog.Warn().Msg("context cancelled while queuing for processing")

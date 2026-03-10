@@ -265,6 +265,67 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     margin-top: 0.25rem;
 }
 
+.pool-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.pool-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+}
+
+.pool-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.35rem;
+}
+
+.pool-workers {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.pool-stats {
+    display: flex;
+    gap: 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-bottom: 0.45rem;
+}
+
+.pool-waiting-list {
+    list-style: none;
+}
+
+.pool-waiting-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.2rem 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 0.82rem;
+}
+
+.pool-item-title {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pool-item-asin,
+.pool-more,
+.pool-empty {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+
 .error-text { color: var(--error); font-size: 0.85rem; }
 
 /* Info box */

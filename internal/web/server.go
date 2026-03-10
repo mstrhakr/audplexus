@@ -254,6 +254,7 @@ func (s *Server) setupRoutes() {
 		api.POST("/downloads/pause", s.handlePauseDownloads)
 		api.POST("/downloads/resume", s.handleResumeDownloads)
 		api.GET("/downloads/state", s.handleDownloadsState)
+		api.GET("/pipeline/state", s.handlePipelineState)
 		api.GET("/events", s.handleSSE)
 		api.POST("/settings", s.handleSaveSettings)
 		api.GET("/settings/db-backup", s.handleDBBackup)
@@ -963,6 +964,11 @@ func (s *Server) handleDownloadsState(c *gin.Context) {
 	c.JSON(http.StatusOK, state)
 }
 
+// handlePipelineState returns the current worker-pool and waiting-item snapshot.
+func (s *Server) handlePipelineState(c *gin.Context) {
+	c.JSON(http.StatusOK, s.downloads.PipelineSnapshot(c.Request.Context()))
+}
+
 // handleSSE streams pipeline and sync events via Server-Sent Events.
 func (s *Server) handleSSE(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
@@ -976,10 +982,19 @@ func (s *Server) handleSSE(c *gin.Context) {
 	defer s.sync.Unsubscribe(syncID)
 
 	ctx := c.Request.Context()
+	poolTicker := time.NewTicker(3 * time.Second)
+	defer poolTicker.Stop()
+
+	// Prime the client with a full state snapshot on connect/reconnect.
+	c.SSEvent("pipeline", s.downloads.PipelineSnapshot(ctx))
+
 	c.Stream(func(w io.Writer) bool {
 		select {
 		case <-ctx.Done():
 			return false
+		case <-poolTicker.C:
+			c.SSEvent("pipeline", s.downloads.PipelineSnapshot(ctx))
+			return true
 		case evt, ok := <-dlEvents:
 			if !ok {
 				return false

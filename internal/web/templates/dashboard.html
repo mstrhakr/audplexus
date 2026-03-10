@@ -23,6 +23,10 @@
     {{template "dashboard_summary.html" .}}
 </div>
 
+<h2>Worker Pools</h2>
+<div id="pipeline-pools" class="pool-grid"></div>
+
+<h2>Active Pipeline</h2>
 <div id="pipeline-cards"></div>
 
 <div id="dashboard-downloads" hx-get="/api/dashboard/downloads" hx-trigger="load, every 12s queue:last" hx-swap="innerHTML">
