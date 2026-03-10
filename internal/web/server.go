@@ -11,7 +11,9 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -283,6 +285,7 @@ func ginLogger() gin.HandlerFunc {
 		if realIP == "" {
 			realIP = c.ClientIP()
 		}
+		realIP = normalizeClientIPForLog(realIP)
 
 		// /api/events is a long-lived SSE stream; duration mostly reflects
 		// connection lifetime rather than handler slowness.
@@ -311,6 +314,36 @@ func ginLogger() gin.HandlerFunc {
 			// Include proxyied real ip if present, since c.ClientIP() will return the proxy's IP.
 			Msg(c.Request.Method + " request from " + realIP + " to " + path)
 	}
+}
+
+func normalizeClientIPForLog(ip string) string {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return ip
+	}
+
+	if i := strings.IndexByte(ip, ','); i >= 0 {
+		ip = strings.TrimSpace(ip[:i])
+	}
+
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	} else {
+		ip = strings.TrimPrefix(ip, "[")
+		ip = strings.TrimSuffix(ip, "]")
+	}
+
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+
+	addr = addr.Unmap()
+	if addr == netip.IPv6Loopback() {
+		return "127.0.0.1"
+	}
+
+	return addr.String()
 }
 
 // handleDashboard renders the main dashboard page.
