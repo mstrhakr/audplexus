@@ -192,6 +192,9 @@
                     html += '<div class="sync-phases">';
                     for (var i = 0; i < d.phases.length; i++) {
                         html += renderSyncPhase(d.phases[i]);
+                    }
+                    html += '</div>';
+                }
                 html += '</div>';
                 el.innerHTML = html;
             } else if (d.status === 'failed') {
