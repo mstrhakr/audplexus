@@ -8,11 +8,19 @@
 	<div class="sync-phases">
 		{{range .Phases}}
 		<div class="sync-phase {{.Status}}">
-			<span class="phase-icon">
-				{{if eq .Status "complete"}}&#10003;{{else if eq .Status "failed"}}&#10007;{{else if eq .Status "running"}}&#9679;{{else if eq .Status "skipped"}}&#8212;{{else}}&#9675;{{end}}
-			</span>
-			<span class="phase-label">{{.Label}}</span>
-			{{if .Message}}<span class="phase-detail">{{.Message}}</span>{{end}}
+			<div class="phase-main">
+				<span class="phase-icon">
+					{{if eq .Status "complete"}}&#10003;{{else if eq .Status "failed"}}&#10007;{{else if eq .Status "running"}}&#9679;{{else if eq .Status "skipped"}}&#8212;{{else}}&#9675;{{end}}
+				</span>
+				<span class="phase-label">{{.Label}}</span>
+				{{if .Message}}<span class="phase-detail">{{.Message}}</span>{{end}}
+				{{if gt .Total 0}}<span class="phase-count">{{.Current}} / {{.Total}}</span>{{end}}
+			</div>
+			{{if and .Indeterminate (eq .Status "running")}}
+			<div class="phase-progress-track indeterminate"><div class="phase-progress-fill"></div></div>
+			{{else}}
+			<div class="phase-progress-track"><div class="phase-progress-fill" style="width: {{printf "%.0f" (mul .Percent 100)}}%"></div></div>
+			{{end}}
 		</div>
 		{{end}}
 	</div>
@@ -37,15 +45,23 @@
 		{{range .Phases}}
 		{{if eq .Status "failed"}}
 		<div class="sync-phase failed">
-			<span class="phase-icon">&#10007;</span>
-			<span class="phase-label">{{.Label}}</span>
-			<span class="phase-detail error">{{.Error}}</span>
+			<div class="phase-main">
+				<span class="phase-icon">&#10007;</span>
+				<span class="phase-label">{{.Label}}</span>
+				<span class="phase-detail error">{{.Error}}</span>
+				{{if gt .Total 0}}<span class="phase-count">{{.Current}} / {{.Total}}</span>{{end}}
+			</div>
+			<div class="phase-progress-track"><div class="phase-progress-fill" style="width: {{printf "%.0f" (mul .Percent 100)}}%"></div></div>
 		</div>
 		{{else if eq .Status "complete"}}
 		<div class="sync-phase complete">
-			<span class="phase-icon">&#10003;</span>
-			<span class="phase-label">{{.Label}}</span>
-			{{if .Message}}<span class="phase-detail">{{.Message}}</span>{{end}}
+			<div class="phase-main">
+				<span class="phase-icon">&#10003;</span>
+				<span class="phase-label">{{.Label}}</span>
+				{{if .Message}}<span class="phase-detail">{{.Message}}</span>{{end}}
+				{{if gt .Total 0}}<span class="phase-count">{{.Current}} / {{.Total}}</span>{{end}}
+			</div>
+			<div class="phase-progress-track"><div class="phase-progress-fill" style="width: {{printf "%.0f" (mul .Percent 100)}}%"></div></div>
 		</div>
 		{{end}}
 		{{end}}
@@ -63,15 +79,23 @@
 		{{range .Phases}}
 		{{if eq .Status "complete"}}
 		<div class="sync-phase complete">
-			<span class="phase-icon">&#10003;</span>
-			<span class="phase-label">{{.Label}}</span>
-			{{if .Message}}<span class="phase-detail">{{.Message}}</span>{{end}}
+			<div class="phase-main">
+				<span class="phase-icon">&#10003;</span>
+				<span class="phase-label">{{.Label}}</span>
+				{{if .Message}}<span class="phase-detail">{{.Message}}</span>{{end}}
+				{{if gt .Total 0}}<span class="phase-count">{{.Current}} / {{.Total}}</span>{{end}}
+			</div>
+			<div class="phase-progress-track"><div class="phase-progress-fill" style="width: {{printf "%.0f" (mul .Percent 100)}}%"></div></div>
 		</div>
 		{{else if eq .Status "skipped"}}
 		<div class="sync-phase skipped">
-			<span class="phase-icon">&#8212;</span>
-			<span class="phase-label">{{.Label}}</span>
-			<span class="phase-detail">{{.Message}}</span>
+			<div class="phase-main">
+				<span class="phase-icon">&#8212;</span>
+				<span class="phase-label">{{.Label}}</span>
+				<span class="phase-detail">{{.Message}}</span>
+				{{if gt .Total 0}}<span class="phase-count">{{.Current}} / {{.Total}}</span>{{end}}
+			</div>
+			<div class="phase-progress-track"><div class="phase-progress-fill" style="width: {{printf "%.0f" (mul .Percent 100)}}%"></div></div>
 		</div>
 		{{end}}
 		{{end}}

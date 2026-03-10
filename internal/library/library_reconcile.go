@@ -17,11 +17,20 @@ var unsafePathChars = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1f]`)
 // audiobook file exists and marks previously complete books as new when the file
 // is missing so they can be re-downloaded.
 func reconcileExistingAudiobookFiles(ctx context.Context, db database.Database, libraryRoot string) (int, error) {
+	return reconcileExistingAudiobookFilesWithProgress(ctx, db, libraryRoot, nil)
+}
+
+// reconcileExistingAudiobookFilesWithProgress behaves like reconcileExistingAudiobookFiles
+// and optionally reports scan progress as processed/total books.
+func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db database.Database, libraryRoot string, onProgress func(processed, total int)) (int, error) {
 	if strings.TrimSpace(libraryRoot) == "" {
 		return 0, nil
 	}
 
 	updated := 0
+	processed := 0
+	totalBooks := 0
+	totalKnown := false
 	limit := 200
 	offset := 0
 
@@ -29,6 +38,13 @@ func reconcileExistingAudiobookFiles(ctx context.Context, db database.Database, 
 		books, total, err := db.ListBooks(ctx, database.BookFilter{Limit: limit, Offset: offset})
 		if err != nil {
 			return updated, err
+		}
+		if !totalKnown {
+			totalBooks = total
+			totalKnown = true
+			if onProgress != nil {
+				onProgress(0, totalBooks)
+			}
 		}
 		if len(books) == 0 {
 			break
@@ -39,6 +55,10 @@ func reconcileExistingAudiobookFiles(ctx context.Context, db database.Database, 
 			if err != nil {
 				return updated, err
 			}
+			processed++
+			if onProgress != nil {
+				onProgress(processed, totalBooks)
+			}
 			if changed {
 				updated++
 			}
@@ -48,6 +68,10 @@ func reconcileExistingAudiobookFiles(ctx context.Context, db database.Database, 
 		if offset >= total {
 			break
 		}
+	}
+
+	if onProgress != nil {
+		onProgress(processed, totalBooks)
 	}
 
 	return updated, nil

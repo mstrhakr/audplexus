@@ -40,13 +40,17 @@ const (
 
 // PhaseStatus tracks the state of a single sync phase.
 type PhaseStatus struct {
-	Name      SyncPhase `json:"name"`
-	Label     string    `json:"label"`
-	Status    string    `json:"status"` // "pending", "running", "complete", "failed", "skipped"
-	Message   string    `json:"message,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	StartedAt time.Time `json:"started_at,omitempty"`
-	EndedAt   time.Time `json:"ended_at,omitempty"`
+	Name          SyncPhase `json:"name"`
+	Label         string    `json:"label"`
+	Status        string    `json:"status"` // "pending", "running", "complete", "failed", "skipped"
+	Message       string    `json:"message,omitempty"`
+	Error         string    `json:"error,omitempty"`
+	Current       int       `json:"current,omitempty"`
+	Total         int       `json:"total,omitempty"`
+	Percent       float64   `json:"percent,omitempty"`
+	Indeterminate bool      `json:"indeterminate,omitempty"`
+	StartedAt     time.Time `json:"started_at,omitempty"`
+	EndedAt       time.Time `json:"ended_at,omitempty"`
 }
 
 // SyncProgress tracks the current state of a library sync.
@@ -282,7 +286,14 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 	if mode == SyncModeFull {
 		s.setPhase(PhaseFileScan, "running", "Scanning filesystem for existing books...")
 		syncLog.Info().Msg("starting filesystem file scan")
-		reconciled, fsErr := reconcileExistingAudiobookFiles(ctx, s.db, s.libraryDir)
+		lastEmit := 0
+		reconciled, fsErr := reconcileExistingAudiobookFilesWithProgress(ctx, s.db, s.libraryDir, func(processed, total int) {
+			if processed != total && processed-lastEmit < 20 {
+				return
+			}
+			lastEmit = processed
+			s.updatePhaseProgress(PhaseFileScan, processed, total, false)
+		})
 		if fsErr != nil {
 			s.setPhase(PhaseFileScan, "failed", fsErr.Error())
 			syncLog.Warn().Err(fsErr).Msg("file scan phase failed")
@@ -298,7 +309,7 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 	} else {
 		// Quick sync: only reconcile new books (search FS for them before queuing)
 		if added > 0 {
-			reconciled, fsErr := reconcileExistingAudiobookFiles(ctx, s.db, s.libraryDir)
+			reconciled, fsErr := reconcileExistingAudiobookFilesWithProgress(ctx, s.db, s.libraryDir, nil)
 			if fsErr != nil {
 				syncLog.Warn().Err(fsErr).Msg("quick reconcile failed")
 			} else if reconciled > 0 {
@@ -410,6 +421,11 @@ func (s *SyncService) setPhase(phase SyncPhase, status, message string) {
 			s.progress.Phases[i].Message = message
 			if status == "running" {
 				s.progress.Phases[i].StartedAt = now
+				s.progress.Phases[i].EndedAt = time.Time{}
+				s.progress.Phases[i].Error = ""
+				if phase == PhasePlexQuery || phase == PhasePlexScan {
+					setPhaseProgress(&s.progress.Phases[i], 0, 0, true, status)
+				}
 			}
 			if status == "complete" || status == "failed" || status == "skipped" {
 				// Ensure phase is visible for at least 1 second from when it started running
@@ -431,6 +447,18 @@ func (s *SyncService) setPhase(phase SyncPhase, status, message string) {
 			}
 			if status == "failed" {
 				s.progress.Phases[i].Error = message
+				s.progress.Phases[i].Indeterminate = false
+				setPhaseProgress(&s.progress.Phases[i], s.progress.Phases[i].Current, s.progress.Phases[i].Total, false, status)
+			}
+			if status == "skipped" {
+				setPhaseProgress(&s.progress.Phases[i], 1, 1, false, status)
+			}
+			if status == "complete" {
+				if phase == PhasePlexQuery || phase == PhasePlexScan {
+					setPhaseProgress(&s.progress.Phases[i], 1, 1, false, status)
+				} else {
+					setPhaseProgress(&s.progress.Phases[i], s.progress.Phases[i].Total, s.progress.Phases[i].Total, false, status)
+				}
 			}
 			break
 		}
@@ -443,6 +471,65 @@ func (s *SyncService) setPhase(phase SyncPhase, status, message string) {
 		}
 	}
 	s.emitLocked()
+}
+
+func (s *SyncService) updatePhaseProgress(phase SyncPhase, current, total int, indeterminate bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.progress.Phases {
+		if s.progress.Phases[i].Name == phase {
+			setPhaseProgress(&s.progress.Phases[i], current, total, indeterminate, s.progress.Phases[i].Status)
+			break
+		}
+	}
+	s.emitLocked()
+}
+
+func setPhaseProgress(phase *PhaseStatus, current, total int, indeterminate bool, status string) {
+	if current < 0 {
+		current = 0
+	}
+	if total < 0 {
+		total = 0
+	}
+	if total > 0 && current > total {
+		current = total
+	}
+
+	phase.Current = current
+	phase.Total = total
+	phase.Indeterminate = indeterminate
+
+	if indeterminate {
+		phase.Percent = 0
+		if status == "complete" || status == "skipped" {
+			phase.Indeterminate = false
+			phase.Current = 1
+			phase.Total = 1
+			phase.Percent = 1
+		}
+		return
+	}
+
+	if phase.Total > 0 {
+		phase.Percent = float64(phase.Current) / float64(phase.Total)
+		if phase.Percent < 0 {
+			phase.Percent = 0
+		}
+		if phase.Percent > 1 {
+			phase.Percent = 1
+		}
+		return
+	}
+
+	if status == "complete" || status == "skipped" {
+		phase.Current = 1
+		phase.Total = 1
+		phase.Percent = 1
+		return
+	}
+
+	phase.Percent = 0
 }
 
 func (s *SyncService) overallStatus() string {
@@ -484,6 +571,12 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	syncRecord.BooksFound = len(books)
 	s.mu.Lock()
 	s.progress.BooksFound = len(books)
+	for i := range s.progress.Phases {
+		if s.progress.Phases[i].Name == PhaseAudibleSync {
+			setPhaseProgress(&s.progress.Phases[i], 0, len(books), false, s.progress.Phases[i].Status)
+			break
+		}
+	}
 	s.emitLocked()
 	s.mu.Unlock()
 	_ = s.db.UpdateSync(ctx, syncRecord)
@@ -502,6 +595,12 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			s.mu.Lock()
 			s.progress.BooksScanned = scanned
 			s.progress.BooksAdded = added
+			for i := range s.progress.Phases {
+				if s.progress.Phases[i].Name == PhaseAudibleSync {
+					setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
+					break
+				}
+			}
 			if scanned%10 == 0 {
 				s.emitLocked()
 			}
@@ -527,6 +626,12 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			s.mu.Lock()
 			s.progress.BooksScanned = scanned
 			s.progress.BooksAdded = added
+			for i := range s.progress.Phases {
+				if s.progress.Phases[i].Name == PhaseAudibleSync {
+					setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
+					break
+				}
+			}
 			if scanned%10 == 0 {
 				s.emitLocked()
 			}
@@ -542,6 +647,12 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		s.mu.Lock()
 		s.progress.BooksScanned = scanned
 		s.progress.BooksAdded = added
+		for i := range s.progress.Phases {
+			if s.progress.Phases[i].Name == PhaseAudibleSync {
+				setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
+				break
+			}
+		}
 		if scanned%10 == 0 {
 			s.emitLocked()
 		}
