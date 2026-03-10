@@ -16,8 +16,7 @@
         <ul class="nav-links">
             <li><a href="/" class="{{if eq .Page "dashboard"}}active{{end}}">Dashboard</a></li>
             <li><a href="/library" class="{{if eq .Page "library"}}active{{end}}">Library</a></li>
-            <li><a href="/downloads" class="{{if eq .Page "downloads"}}active{{end}}">Downloads</a></li>
-            <li><a href="/auth" class="{{if eq .Page "auth"}}active{{end}}">Auth</a></li>
+            <li><a href="/downloads" class="{{if eq .Page "pipeline"}}active{{end}}">Pipline</a></li>
             <li><a href="/settings" class="{{if eq .Page "settings"}}active{{end}}">Settings</a></li>
         </ul>
     </nav>
@@ -174,7 +173,7 @@
                 badge.className = 'badge ' + (badgeClass[stage] || 'badge-neutral');
             }
 
-            // --- Downloads page: active pipeline card ---
+            // --- Pipeline page: active pipeline card ---
             var activity = document.getElementById('pipeline-cards');
             if (activity) {
                 var card = document.getElementById('pipe-' + d.asin);

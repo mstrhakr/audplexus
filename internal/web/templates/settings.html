@@ -2,6 +2,159 @@
 <h1>Settings</h1>
 
 <div class="settings-container">
+    <!-- Authentication & Integrations -->
+    <div class="settings-section" id="auth-settings">
+        <h2>Authentication & Integrations</h2>
+
+        {{if .Error}}
+        <div class="info-box" style="border-color: var(--error); margin-bottom: 1.5rem;">
+            <strong>Error:</strong> {{.Error}}
+        </div>
+        {{end}}
+
+        {{if .Success}}
+        <div class="info-box" style="border-color: var(--success); margin-bottom: 1.5rem;">
+            <strong>{{.Success}}</strong>
+        </div>
+        {{end}}
+
+        <div class="auth-grid">
+            <section class="auth-panel">
+                <h3>Amazon / Audible</h3>
+
+                {{if .Authenticated}}
+                <div class="info-box" style="border-color: var(--success); margin-bottom: 1.5rem;">
+                    <strong>&#10003; Authenticated</strong> &mdash; You are connected to Audible.
+                </div>
+                {{else if .AuthURL}}
+                <div class="auth-flow">
+                    <div class="info-box" style="margin-bottom: 1rem;">
+                        <strong>Step 1:</strong> Click the button below to open Amazon's login page in a new tab.
+                    </div>
+
+                    <p style="margin-bottom: 1rem;">
+                        <a href="{{.AuthURL}}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">Open Amazon Login</a>
+                    </p>
+
+                    <div class="info-box" style="margin-bottom: 1.5rem;">
+                        <strong>Step 2:</strong> After signing in you'll land on a page that says <em>"Looking for Something?"</em> or shows a blank page.
+                        That's normal. <strong>Copy the entire URL</strong> from that tab's address bar and paste it below.
+                    </div>
+
+                    <form method="POST" action="/auth/callback" class="settings-form">
+                        <input type="hidden" name="code_verifier" value="{{.CodeVerifier}}">
+                        <input type="hidden" name="device_serial" value="{{.DeviceSerial}}">
+                        <div class="form-group">
+                            <label for="redirect_url">Redirect URL</label>
+                            <input type="text" id="redirect_url" name="redirect_url"
+                                placeholder="https://www.amazon.com/ap/maplanding?openid.oa2.authorization_code=..."
+                                autofocus required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Complete Authentication</button>
+                    </form>
+                </div>
+                {{else}}
+                <div class="auth-flow">
+                    <p>You need to authenticate with your Amazon/Audible account to sync and download your library.</p>
+                    <p>This flow generates a login URL. After signing in, paste the redirect URL back here to complete authentication.</p>
+                    <form method="POST" action="/auth/start">
+                        <button type="submit" class="btn btn-primary">Generate Amazon Login Link</button>
+                    </form>
+                </div>
+                {{end}}
+            </section>
+
+            <section class="auth-panel">
+                <h3>Plex</h3>
+                <div class="auth-flow">
+                    <div class="info-box" style="margin-bottom: 1rem;">
+                        {{if .PlexConfigured}}
+                        <strong>&#10003; Plex configured</strong>{{if .PlexURL}} &mdash; {{.PlexURL}}{{end}}
+                        {{if .PlexSectionConfigured}}
+                        <br>
+                        <strong>Library section:</strong> {{if .PlexSectionTitle}}{{.PlexSectionTitle}}{{else}}ID {{.PlexSectionID}}{{end}}
+                        {{end}}
+                        {{else if .PlexTokenSet}}
+                        Plex login complete. Select a server URL below.
+                        {{else}}
+                        Sign in with plex.tv, choose a server URL, then trigger scans and search checks from here.
+                        {{end}}
+                    </div>
+
+                    {{if .PlexAuthURL}}
+                    <div class="info-box" style="margin-bottom: 1rem;">
+                        <strong>Step 1:</strong> Click "Open Plex Login" and approve access.
+                        <br>
+                        <strong>Step 2:</strong> Return here and click "Check Plex Login".
+                    </div>
+                    <p>
+                        <a href="{{.PlexAuthURL}}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">Open Plex Login</a>
+                    </p>
+                    <form method="POST" action="/auth/plex/complete" style="margin-bottom: 1rem;">
+                        <input type="hidden" name="pin_id" value="{{.PlexPendingPinID}}">
+                        <input type="hidden" name="pin_code" value="{{.PlexPendingPinCode}}">
+                        <button type="submit" class="btn btn-secondary">Check Plex Login</button>
+                    </form>
+                    {{else if not .PlexTokenSet}}
+                    <form method="POST" action="/auth/plex/start" style="margin-bottom: 1rem;">
+                        <button type="submit" class="btn btn-primary">Sign In With Plex.tv</button>
+                    </form>
+                    {{end}}
+
+                    {{if .PlexServers}}
+                    <form method="POST" action="/auth/plex/select" class="settings-form" style="margin-bottom: 1rem;">
+                        <div class="form-group">
+                            <label for="plex_url">Choose Plex Server URL</label>
+                            <select id="plex_url" name="plex_url" required>
+                                <option value="">Select a server connection</option>
+                                {{range .PlexServers}}
+                                <option value="{{.URL}}" {{if eq $.PlexURL .URL}}selected{{end}}>{{.Name}} &mdash; {{.URL}}{{if .Local}} (local){{end}}</option>
+                                {{end}}
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save Plex Server</button>
+                    </form>
+                    {{end}}
+
+                    {{if .PlexConfigured}}
+                    <form method="POST" action="/auth/plex/section" class="settings-form" style="margin-bottom: 1rem;">
+                        <div class="form-group">
+                            <label for="plex_section_id">Choose Plex Library Section</label>
+                            <select id="plex_section_id" name="plex_section_id" required>
+                                <option value="">Select a library</option>
+                                {{range .PlexSections}}
+                                <option value="{{.ID}}" {{if eq $.PlexSectionID .ID}}selected{{end}}>{{.Title}} ({{.Type}}) &mdash; ID {{.ID}}</option>
+                                {{end}}
+                            </select>
+                            <input type="hidden" id="plex_section_title" name="plex_section_title" value="{{.PlexSectionTitle}}">
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save Plex Library</button>
+                    </form>
+                    {{end}}
+
+                    {{if .PlexConfigured}}
+                    <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem;">
+                        <form method="POST" action="/auth/plex/scan">
+                            <button type="submit" class="btn btn-secondary">Trigger Plex Library Scan</button>
+                        </form>
+                        <form method="POST" action="/auth/plex/start">
+                            <button type="submit" class="btn btn-secondary">Re-connect Plex Account</button>
+                        </form>
+                    </div>
+
+                    <form method="POST" action="/auth/plex/check" class="settings-form">
+                        <div class="form-group">
+                            <label for="plex_query">Check If Audiobook Exists In Plex</label>
+                            <input type="text" id="plex_query" name="query" placeholder="Enter title to search in Plex" value="{{.PlexCheckQuery}}" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Search Plex</button>
+                    </form>
+                    {{end}}
+                </div>
+            </section>
+        </div>
+    </div>
+
     <!-- System Information -->
     <div class="settings-section">
         <h2>System Information</h2>
@@ -237,6 +390,30 @@ function executeReset() {
         window.location.href = '/settings';
     });
 }
+
+(function() {
+    var sectionSelect = document.getElementById('plex_section_id');
+    var titleInput = document.getElementById('plex_section_title');
+    if (sectionSelect && titleInput) {
+        sectionSelect.addEventListener('change', function() {
+            var option = sectionSelect.options[sectionSelect.selectedIndex];
+            if (!option) {
+                titleInput.value = '';
+                return;
+            }
+            var text = option.text || '';
+            var title = text.split(' (')[0];
+            titleInput.value = title;
+        });
+    }
+
+    {{if .FocusSection}}
+    var focusEl = document.getElementById('{{.FocusSection}}-settings');
+    if (focusEl) {
+        focusEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    {{end}}
+})();
 </script>
 
 <style>
@@ -257,6 +434,29 @@ function executeReset() {
         margin-top: 0;
         margin-bottom: 1.5rem;
         color: #00d9ff;
+    }
+
+    .auth-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+        gap: 1.5rem;
+    }
+
+    .auth-panel {
+        background: rgba(0,0,0,0.2);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 6px;
+        padding: 1.25rem;
+    }
+
+    .auth-panel h3 {
+        margin-top: 0;
+        margin-bottom: 1rem;
+    }
+
+    .auth-flow p {
+        margin-bottom: 1rem;
+        color: #b7bcc6;
     }
 
     .info-grid {

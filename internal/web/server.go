@@ -548,13 +548,18 @@ func (s *Server) handleDownloads(c *gin.Context) {
 		"QueuePaused":      queueState.Paused,
 		"QueuePauseReason": queueState.Reason,
 		"QueuePausedAt":    queueState.PausedAt,
-		"Page":             "downloads",
+		"Page":             "pipeline",
 	})
 }
 
 // handleSettings renders the settings page.
 func (s *Server) handleSettings(c *gin.Context) {
-	ctx := c.Request.Context()
+	data := s.settingsPageData(c.Request.Context())
+	c.HTML(http.StatusOK, "settings.html", data)
+}
+
+func (s *Server) settingsPageData(ctx context.Context) gin.H {
+	authData := s.authBaseData(ctx)
 
 	syncSchedule, _ := s.db.GetSetting(ctx, "sync_schedule")
 	syncEnabled := s.settingBool(ctx, "sync_enabled", true)
@@ -590,7 +595,7 @@ func (s *Server) handleSettings(c *gin.Context) {
 
 	devices, _ := s.db.ListDevices(ctx)
 
-	c.HTML(http.StatusOK, "settings.html", gin.H{
+	data := gin.H{
 		"SyncSchedule":         syncSchedule,
 		"SyncEnabled":          syncEnabled,
 		"SyncMode":             syncMode,
@@ -608,7 +613,14 @@ func (s *Server) handleSettings(c *gin.Context) {
 		"AudiobooksPath":       s.audiobooksPath,
 		"DownloadsPath":        s.downloadsPath,
 		"ConfigPath":           s.configPath,
-	})
+	}
+
+	for k, v := range authData {
+		data[k] = v
+	}
+
+	data["Page"] = "settings"
+	return data
 }
 
 // settingBool reads a boolean setting from DB, returning the given default
@@ -731,7 +743,7 @@ func (s *Server) handleSyncRetry(c *gin.Context) {
 
 func (s *Server) triggerSync(c *gin.Context, mode library.SyncMode) {
 	if !s.audible.IsAuthenticated() {
-		msg := "Not authenticated — please sign in on the Auth page first."
+		msg := "Not authenticated — please sign in on the Settings page first."
 		if c.GetHeader("HX-Request") == "true" {
 			c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(library.SyncProgress{
 				Status:  "failed",
@@ -1121,7 +1133,7 @@ func (s *Server) purgeDirectory(dir string) {
 
 // handleAuth renders the authentication page.
 func (s *Server) handleAuth(c *gin.Context) {
-	s.renderAuthPage(c, http.StatusOK, nil)
+	c.Redirect(http.StatusSeeOther, "/settings#auth-settings")
 }
 
 func (s *Server) authBaseData(ctx context.Context) gin.H {
@@ -1134,7 +1146,6 @@ func (s *Server) authBaseData(ctx context.Context) gin.H {
 	plexSectionConfigured := strings.TrimSpace(plexSectionID) != ""
 
 	data := gin.H{
-		"Page":                  "auth",
 		"Authenticated":         s.audible.IsAuthenticated(),
 		"PlexURL":               plexURL,
 		"PlexTokenSet":          plexToken != "",
@@ -1155,11 +1166,13 @@ func (s *Server) authBaseData(ctx context.Context) gin.H {
 }
 
 func (s *Server) renderAuthPage(c *gin.Context, status int, extra gin.H) {
-	data := s.authBaseData(c.Request.Context())
+	data := s.settingsPageData(c.Request.Context())
+	data["FocusSection"] = "auth"
 	for k, v := range extra {
 		data[k] = v
 	}
-	c.HTML(status, "auth.html", data)
+	data["Page"] = "settings"
+	c.HTML(status, "settings.html", data)
 }
 
 // handleAuthStart generates an OAuth URL and shows it to the user.
