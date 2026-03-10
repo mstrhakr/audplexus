@@ -55,6 +55,14 @@ func (e *EnrichedBook) Title() string {
 	return e.Book.Title
 }
 
+// Region returns the region code (e.g., "us", "uk").
+func (e *EnrichedBook) Region() string {
+	if e.AudnexusBook != nil && e.AudnexusBook.Region != "" {
+		return e.AudnexusBook.Region
+	}
+	return ""
+}
+
 // Author returns the best available author name.
 func (e *EnrichedBook) Author() string {
 	if e.AudnexusBook != nil && len(e.AudnexusBook.Authors) > 0 {
