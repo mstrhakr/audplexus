@@ -157,7 +157,8 @@
             else if (p.status === 'running') icon = '&#9679;';
             else if (p.status === 'skipped') icon = '&#8212;';
 
-            var html = '<div class="sync-phase ' + p.status + '">';
+            var idAttr = opts.id ? ' id="' + opts.id + '"' : '';
+            var html = '<div class="sync-phase ' + p.status + '"' + idAttr + '>';
             html += '<div class="phase-main">';
             html += '<span class="phase-icon">' + icon + '</span>';
             html += '<span class="phase-label">' + (p.label || '') + '</span>';
@@ -206,17 +207,14 @@
                     for (var i = 0; i < d.phases.length; i++) {
                         var p = d.phases[i];
                         var phaseId = 'phase-' + p.name;
-                        var phaseEl = document.getElementById(phaseId);
-                        
-                        if (!phaseEl) {
-                            // Create new phase element
-                            phaseEl = document.createElement('div');
-                            phaseEl.id = phaseId;
-                            phasesEl.appendChild(phaseEl);
+                        var phaseEl = phasesEl.querySelector('[id="' + phaseId + '"]');
+                        var phaseHTML = renderSyncPhase(p, { id: phaseId });
+
+                        if (phaseEl) {
+                            phaseEl.outerHTML = phaseHTML;
+                        } else {
+                            phasesEl.insertAdjacentHTML('beforeend', phaseHTML);
                         }
-                        
-                        // Update phase content
-                        phaseEl.innerHTML = renderSyncPhase(p);
                     }
                 }
             } else if (d.status === 'failed') {

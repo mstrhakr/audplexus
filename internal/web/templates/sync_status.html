@@ -7,7 +7,7 @@
 	{{if .Phases}}
 	<div class="sync-phases">
 		{{range .Phases}}
-		<div class="sync-phase {{.Status}}">
+		<div id="phase-{{.Name}}" class="sync-phase {{.Status}}">
 			<div class="phase-main">
 				<span class="phase-icon">
 					{{if eq .Status "complete"}}&#10003;{{else if eq .Status "failed"}}&#10007;{{else if eq .Status "running"}}&#9679;{{else if eq .Status "skipped"}}&#8212;{{else}}&#9675;{{end}}
@@ -32,7 +32,7 @@
 	{{if .Phases}}
 	<div class="sync-phases">
 		{{range .Phases}}
-		<div class="sync-phase {{.Status}}">
+		<div id="phase-{{.Name}}" class="sync-phase {{.Status}}">
 			<div class="phase-main">
 				<span class="phase-icon">
 					{{if eq .Status "complete"}}&#10003;{{else if eq .Status "failed"}}&#10007;{{else if eq .Status "skipped"}}&#8212;{{else}}&#9675;{{end}}
@@ -55,7 +55,7 @@
 	<div class="sync-phases">
 		{{range .Phases}}
 		{{if eq .Status "failed"}}
-		<div class="sync-phase failed">
+		<div id="phase-{{.Name}}" class="sync-phase failed">
 			<div class="phase-main">
 				<span class="phase-icon">&#10007;</span>
 				<span class="phase-label">{{.Label}}</span>
@@ -65,7 +65,7 @@
 			<div class="phase-progress-track"><div class="phase-progress-fill" style="width: {{printf "%.0f" (mul .Percent 100)}}%"></div></div>
 		</div>
 		{{else if eq .Status "complete"}}
-		<div class="sync-phase complete">
+		<div id="phase-{{.Name}}" class="sync-phase complete">
 			<div class="phase-main">
 				<span class="phase-icon">&#10003;</span>
 				<span class="phase-label">{{.Label}}</span>
@@ -89,7 +89,7 @@
 	<div class="sync-phases">
 		{{range .Phases}}
 		{{if eq .Status "complete"}}
-		<div class="sync-phase complete">
+		<div id="phase-{{.Name}}" class="sync-phase complete">
 			<div class="phase-main">
 				<span class="phase-icon">&#10003;</span>
 				<span class="phase-label">{{.Label}}</span>
@@ -99,7 +99,7 @@
 			<div class="phase-progress-track"><div class="phase-progress-fill" style="width: {{printf "%.0f" (mul .Percent 100)}}%"></div></div>
 		</div>
 		{{else if eq .Status "skipped"}}
-		<div class="sync-phase skipped">
+		<div id="phase-{{.Name}}" class="sync-phase skipped">
 			<div class="phase-main">
 				<span class="phase-icon">&#8212;</span>
 				<span class="phase-label">{{.Label}}</span>
