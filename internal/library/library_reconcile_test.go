@@ -81,9 +81,9 @@ type reconcileMockDB struct {
 	upserted *database.Book
 }
 
-func (m *reconcileMockDB) Close() error                          { return nil }
-func (m *reconcileMockDB) Migrate() error                        { return nil }
-func (m *reconcileMockDB) Reset(ctx context.Context) error       { return nil }
+func (m *reconcileMockDB) Close() error                    { return nil }
+func (m *reconcileMockDB) Migrate() error                  { return nil }
+func (m *reconcileMockDB) Reset(ctx context.Context) error { return nil }
 func (m *reconcileMockDB) GetBook(ctx context.Context, id int64) (*database.Book, error) {
 	return nil, nil
 }
