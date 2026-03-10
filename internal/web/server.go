@@ -559,6 +559,19 @@ func (s *Server) handleSettings(c *gin.Context) {
 	outputFormat, _ := s.db.GetSetting(ctx, "output_format")
 	plexSectionPath, _ := s.db.GetSetting(ctx, "plex_section_path")
 
+	// Auto-fetch from Plex API if we have a section ID but no saved path.
+	if plexSectionPath == "" {
+		if sectionID, _ := s.db.GetSetting(ctx, "plex_section_id"); sectionID != "" {
+			plexURL, plexToken := s.getPlexSettings(ctx)
+			if plexURL != "" && plexToken != "" {
+				if fetched, err := s.plexSectionLocation(ctx, plexURL, plexToken, sectionID); err == nil && fetched != "" {
+					plexSectionPath = fetched
+					_ = s.db.SetSetting(ctx, "plex_section_path", fetched)
+				}
+			}
+		}
+	}
+
 	embedCover := s.settingBool(ctx, "embed_cover", true)
 	chapterFile := s.settingBool(ctx, "chapter_file", true)
 
@@ -614,14 +627,44 @@ func detectHostMountPath(containerPath string) string {
 	// underlying filesystem, and "mount_point" (field 4) is the container path.
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
+		line := scanner.Text()
+		fields := strings.Fields(line)
 		if len(fields) < 5 {
 			continue
 		}
 		mountPoint := fields[4]
-		if mountPoint == containerPath {
-			return fields[3]
+		if mountPoint != containerPath {
+			continue
 		}
+		root := fields[3]
+		// root="/" is common with ZFS datasets, BTRFS subvolumes, and
+		// named Docker volumes where the filesystem root IS the mount.
+		// In that case, look for a subvol= option or the mount source
+		// after the "-" separator.
+		if root != "/" {
+			return root
+		}
+
+		// Find the "-" separator to reach fs_type and source.
+		dashIdx := -1
+		for i, f := range fields {
+			if f == "-" {
+				dashIdx = i
+				break
+			}
+		}
+		if dashIdx >= 0 && len(fields) > dashIdx+3 {
+			superOpts := fields[dashIdx+3]
+			// BTRFS: look for subvol= in super options.
+			for _, opt := range strings.Split(superOpts, ",") {
+				if strings.HasPrefix(opt, "subvol=") {
+					return strings.TrimPrefix(opt, "subvol=")
+				}
+			}
+		}
+
+		// Cannot determine a meaningful host path.
+		return ""
 	}
 	return ""
 }
