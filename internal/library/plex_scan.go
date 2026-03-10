@@ -142,13 +142,40 @@ func (dm *DownloadManager) fetchPlexSectionPath(ctx context.Context, plexURL, to
 		return "", fmt.Errorf("plex section detail endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
+	// Read and log the response for debugging
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read section detail response: %w", err)
+	}
+
+	dlLog.Debug().
+		Str("section_id", sectionID).
+		Str("response_body", string(body)).
+		Msg("plex section detail response")
+
 	var detailResp plexSectionDetailResponse
-	if err := xml.NewDecoder(resp.Body).Decode(&detailResp); err != nil {
+	if err := xml.Unmarshal(body, &detailResp); err != nil {
 		return "", fmt.Errorf("failed to parse section details: %w", err)
 	}
 
-	for _, dir := range detailResp.Directories {
-		for _, loc := range dir.Locations {
+	dlLog.Debug().
+		Str("section_id", sectionID).
+		Int("directories_count", len(detailResp.Directories)).
+		Msg("parsed plex section detail response")
+
+	for i, dir := range detailResp.Directories {
+		dlLog.Debug().
+			Str("section_id", sectionID).
+			Int("directory_index", i).
+			Int("locations_count", len(dir.Locations)).
+			Msg("checking directory for locations")
+		for j, loc := range dir.Locations {
+			dlLog.Debug().
+				Str("section_id", sectionID).
+				Int("directory_index", i).
+				Int("location_index", j).
+				Str("path", loc.Path).
+				Msg("found location path")
 			if p := strings.TrimSpace(loc.Path); p != "" {
 				return p, nil
 			}
