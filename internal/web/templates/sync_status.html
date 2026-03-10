@@ -25,16 +25,27 @@
 		{{end}}
 	</div>
 	{{end}}
-	{{if gt .BooksFound 0}}
-	<div class="sync-detail">{{.BooksScanned}} / {{.BooksFound}} books scanned, {{.BooksAdded}} new</div>
-	<div class="progress-bar sync-progress">
-		<div class="progress-fill" style="width: {{printf "%.0f" (mul .Percent 100)}}%"></div>
-	</div>
-	{{end}}
 </div>
 {{else if eq .Status "failed"}}
 <div class="sync-status-container">
 	<span class="status-msg error">Sync failed: {{.Error}}</span>
+	{{if .Phases}}
+	<div class="sync-phases">
+		{{range .Phases}}
+		<div class="sync-phase {{.Status}}">
+			<div class="phase-main">
+				<span class="phase-icon">
+					{{if eq .Status "complete"}}&#10003;{{else if eq .Status "failed"}}&#10007;{{else if eq .Status "skipped"}}&#8212;{{else}}&#9675;{{end}}
+				</span>
+				<span class="phase-label">{{.Label}}</span>
+				{{if .Message}}<span class="phase-detail {{if eq .Status "failed"}}error{{end}}">{{.Message}}</span>{{end}}
+				{{if gt .Total 0}}<span class="phase-count">{{.Current}} / {{.Total}}</span>{{end}}
+			</div>
+			<div class="phase-progress-track"><div class="phase-progress-fill" style="width: {{printf "%.0f" (mul .Percent 100)}}%"></div></div>
+		</div>
+		{{end}}
+	</div>
+	{{end}}
 	<button hx-post="/api/sync/retry" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-sm btn-danger" style="margin-left: 0.5rem;">Retry</button>
 </div>
 {{else if eq .Status "partial"}}
