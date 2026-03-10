@@ -131,7 +131,11 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     display: flex;
     gap: 0.75rem;
     align-items: center;
-    margin-bottom: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.sync-status-row {
+    margin-bottom: 1.25rem;
 }
 
 .queue-paused-banner {
@@ -385,8 +389,8 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 
 /* Sync status container */
 .sync-status-container {
-    display: inline-block;
-    margin-left: 0.5rem;
+    display: block;
+    margin-left: 0;
     font-size: 0.9rem;
 }
 .sync-header {

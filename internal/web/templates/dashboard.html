@@ -16,6 +16,9 @@
     <button hx-post="/api/downloads/retry-all" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-danger">
         Retry All Failed
     </button>
+</div>
+
+<div class="sync-status-row">
     <span id="sync-status" hx-get="/api/sync/status" hx-trigger="load" hx-swap="innerHTML"></span>
 </div>
 
