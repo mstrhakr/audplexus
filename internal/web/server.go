@@ -915,7 +915,6 @@ func (s *Server) handleFactoryReset(c *gin.Context) {
 
 	if err := s.db.Reset(ctx); err != nil {
 		webLog.Error().Err(err).Msg("factory reset failed")
-		// Restart the pipeline even on error so the app isn't stuck.
 		s.downloads.Start(context.Background())
 		if c.GetHeader("HX-Request") == "true" {
 			c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": "Reset failed: " + err.Error()})
@@ -925,6 +924,17 @@ func (s *Server) handleFactoryReset(c *gin.Context) {
 		return
 	}
 
+	// Purge the downloads (cache) folder contents.
+	s.purgeDirectory(s.downloadsPath)
+
+	// Remove credentials file so the user must re-authenticate.
+	if err := os.Remove(s.credPath); err != nil && !os.IsNotExist(err) {
+		webLog.Warn().Err(err).Str("path", s.credPath).Msg("factory reset: failed to remove credentials")
+	} else {
+		webLog.Info().Msg("factory reset: credentials file removed")
+	}
+	s.audible.SetCredentials(nil)
+
 	// Re-run migrations to ensure schema is intact (idempotent).
 	if err := s.db.Migrate(); err != nil {
 		webLog.Error().Err(err).Msg("post-reset migration failed")
@@ -932,7 +942,7 @@ func (s *Server) handleFactoryReset(c *gin.Context) {
 
 	// Restart the download pipeline with a fresh context.
 	s.downloads.Start(context.Background())
-	webLog.Info().Msg("factory reset complete — database wiped, pipeline restarted")
+	webLog.Info().Msg("factory reset complete — database wiped, downloads cleared, credentials removed, pipeline restarted")
 
 	if c.GetHeader("HX-Request") == "true" {
 		c.Header("HX-Redirect", "/settings")
@@ -940,6 +950,22 @@ func (s *Server) handleFactoryReset(c *gin.Context) {
 		return
 	}
 	c.Redirect(http.StatusSeeOther, "/settings")
+}
+
+// purgeDirectory removes all files and subdirectories inside dir, but keeps dir itself.
+func (s *Server) purgeDirectory(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		webLog.Warn().Err(err).Str("path", dir).Msg("factory reset: failed to read directory")
+		return
+	}
+	for _, e := range entries {
+		p := filepath.Join(dir, e.Name())
+		if err := os.RemoveAll(p); err != nil {
+			webLog.Warn().Err(err).Str("path", p).Msg("factory reset: failed to remove")
+		}
+	}
+	webLog.Info().Str("path", dir).Msg("factory reset: directory purged")
 }
 
 // handleAuth renders the authentication page.
