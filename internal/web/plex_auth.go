@@ -60,9 +60,9 @@ type plexServerOption struct {
 }
 
 type plexLibrarySection struct {
-	ID    string
-	Title string
-	Type  string
+	ID        string
+	Title     string
+	Type      string
 	Locations []plexLocation
 }
 

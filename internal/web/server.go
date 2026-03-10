@@ -283,7 +283,7 @@ func ginLogger() gin.HandlerFunc {
 		if realIP == "" {
 			realIP = c.ClientIP()
 		}
-		
+
 		// /api/events is a long-lived SSE stream; duration mostly reflects
 		// connection lifetime rather than handler slowness.
 		if path == "/api/events" {
