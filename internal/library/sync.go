@@ -281,6 +281,7 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 	filesReconciled := 0
 	if mode == SyncModeFull {
 		s.setPhase(PhaseFileScan, "running", "Scanning filesystem for existing books...")
+		syncLog.Info().Msg("starting filesystem file scan")
 		reconciled, fsErr := reconcileExistingAudiobookFiles(ctx, s.db, s.libraryDir)
 		if fsErr != nil {
 			s.setPhase(PhaseFileScan, "failed", fsErr.Error())
@@ -292,9 +293,7 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 			s.emitLocked()
 			s.mu.Unlock()
 			s.setPhase(PhaseFileScan, "complete", fmt.Sprintf("%d files reconciled", reconciled))
-			if reconciled > 0 {
-				syncLog.Info().Int("books_reconciled", reconciled).Msg("reconciled audiobook files against disk")
-			}
+			syncLog.Info().Int("files_reconciled", reconciled).Msg("filesystem file scan complete")
 		}
 	} else {
 		// Quick sync: only reconcile new books (search FS for them before queuing)
