@@ -186,17 +186,39 @@
 
             if (d.running) {
                 var modeLabel = d.mode === 'quick' ? 'Quick' : 'Full';
-                var html = '<div class="sync-status-container">';
-                html += '<div class="sync-header"><span class="status-msg sync-running">' + modeLabel + ' sync in progress</span></div>';
-                if (d.phases && d.phases.length > 0) {
-                    html += '<div class="sync-phases">';
-                    for (var i = 0; i < d.phases.length; i++) {
-                        html += renderSyncPhase(d.phases[i]);
-                    }
-                    html += '</div>';
+                var phasesEl = el.querySelector('.sync-phases');
+                
+                // Initialize container and phases div if not present
+                if (!phasesEl) {
+                    var html = '<div class="sync-status-container">';
+                    html += '<div class="sync-header"><span class="status-msg sync-running">' + modeLabel + ' sync in progress</span></div>';
+                    html += '<div class="sync-phases"></div></div>';
+                    el.innerHTML = html;
+                    phasesEl = el.querySelector('.sync-phases');
                 }
-                html += '</div>';
-                el.innerHTML = html;
+                
+                // Update header mode label
+                var header = el.querySelector('.status-msg.sync-running');
+                if (header) header.textContent = modeLabel + ' sync in progress';
+                
+                // Update or add each phase
+                if (d.phases && d.phases.length > 0) {
+                    for (var i = 0; i < d.phases.length; i++) {
+                        var p = d.phases[i];
+                        var phaseId = 'phase-' + p.name;
+                        var phaseEl = document.getElementById(phaseId);
+                        
+                        if (!phaseEl) {
+                            // Create new phase element
+                            phaseEl = document.createElement('div');
+                            phaseEl.id = phaseId;
+                            phasesEl.appendChild(phaseEl);
+                        }
+                        
+                        // Update phase content
+                        phaseEl.innerHTML = renderSyncPhase(p);
+                    }
+                }
             } else if (d.status === 'failed') {
                 var html = '<div class="sync-status-container"><span class="status-msg error">Sync failed: ' + (d.error || '') + '</span>';
                 if (d.phases && d.phases.length > 0) {

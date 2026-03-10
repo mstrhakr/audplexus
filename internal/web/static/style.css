@@ -414,6 +414,7 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     display: flex;
     flex-direction: column;
     flex: 0 0 calc(25% - 0.3rem);
+    min-height: 74px;
     padding: 0.2rem 0.35rem;
     border-radius: var(--radius);
     font-size: 0.75rem;
