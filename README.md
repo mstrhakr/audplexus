@@ -55,7 +55,7 @@ Precedence is:
 3. `config.yaml` defaults
 
 | Env Variable | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `DATABASE_TYPE` | `sqlite` | Database backend (`sqlite` or `postgres`) |
 | `DATABASE_PATH` | `/config/audible.db` | SQLite database path |
 | `DATABASE_DSN` | | PostgreSQL connection string |
@@ -219,7 +219,8 @@ To create a new release with automated binary builds and Docker images:
 1. **Tag the release:**
 
   ```bash
-  git tag -a v0.1.4 -m "Release v0.1.4"
+  git commit --allow-empty -m "chore: release v0.1.4"
+  git tag -a v0.1.4"
   git push origin v0.1.4
   ```
 
