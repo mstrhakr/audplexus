@@ -77,14 +77,7 @@ func main() {
 	if err := loadCredentials(audibleClient, credPath); err != nil {
 		log.Warn().Err(err).Msg("no audible credentials loaded — authenticate via the web UI")
 	} else {
-		// Update marketplace from loaded credentials if available
-		if creds := audibleClient.GetCredentials(); creds != nil && creds.Marketplace != "" {
-			if mp, ok := audible.GetMarketplace(creds.Marketplace); ok {
-				audibleClient.SetMarketplace(mp)
-				region = mp.CountryCode
-				log.Info().Str("marketplace", creds.Marketplace).Msg("using marketplace from credentials")
-			}
-		}
+		// Marketplace/region are detected from credentials before client init.
 		log.Info().Msg("audible credentials loaded")
 	}
 
