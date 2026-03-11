@@ -2,7 +2,7 @@ package library
 
 import (
 	"context"
-	"encoding/xml"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,16 +61,21 @@ func (dm *DownloadManager) triggerPlexScanForBook(finalPath string) {
 	}()
 }
 
+// plexSectionDetailResponse wraps the JSON response from /library/sections/{id}
 type plexSectionDetailResponse struct {
-	Directories []plexSectionDetailDirectory `xml:"Directory"`
+	MediaContainer plexSectionDetailContainer `json:"MediaContainer"`
+}
+
+type plexSectionDetailContainer struct {
+	Directories []plexSectionDetailDirectory `json:"Directory"`
 }
 
 type plexSectionDetailDirectory struct {
-	Locations []plexLocation `xml:"Location"`
+	Locations []plexLocation `json:"Location"`
 }
 
 type plexLocation struct {
-	Path string `xml:"path,attr"`
+	Path string `json:"path"`
 }
 
 func (dm *DownloadManager) resolvePlexScanPath(ctx context.Context, plexURL, plexToken, sectionID, localScanPath string) (string, bool) {
@@ -154,16 +159,16 @@ func (dm *DownloadManager) fetchPlexSectionPath(ctx context.Context, plexURL, to
 		Msg("plex section detail response")
 
 	var detailResp plexSectionDetailResponse
-	if err := xml.Unmarshal(body, &detailResp); err != nil {
+	if err := json.Unmarshal(body, &detailResp); err != nil {
 		return "", fmt.Errorf("failed to parse section details: %w", err)
 	}
 
 	dlLog.Debug().
 		Str("section_id", sectionID).
-		Int("directories_count", len(detailResp.Directories)).
+		Int("directories_count", len(detailResp.MediaContainer.Directories)).
 		Msg("parsed plex section detail response")
 
-	for i, dir := range detailResp.Directories {
+	for i, dir := range detailResp.MediaContainer.Directories {
 		dlLog.Debug().
 			Str("section_id", sectionID).
 			Int("directory_index", i).
@@ -253,7 +258,8 @@ func (dm *DownloadManager) triggerPlexSectionScan(ctx context.Context, plexURL, 
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	// Per OpenAPI spec: /library/sections/{sectionId}/refresh is a POST endpoint
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
 	if err != nil {
 		return err
 	}
@@ -291,10 +297,12 @@ func buildPlexSectionScanURL(plexURL, token, sectionID, scanPath string) (string
 }
 
 func (dm *DownloadManager) addPlexHeaders(req *http.Request, token string) {
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Plex-Product", plexProduct)
 	req.Header.Set("X-Plex-Client-Identifier", dm.plexClientID)
 	req.Header.Set("X-Plex-Device-Name", "Audible Plex Downloader")
 	req.Header.Set("X-Plex-Platform", "Go")
+	req.Header.Set("X-Plex-Version", "1.0")
 	if strings.TrimSpace(token) != "" {
 		req.Header.Set("X-Plex-Token", token)
 	}

@@ -22,6 +22,13 @@
     <span id="sync-status" hx-get="/api/sync/status" hx-trigger="load" hx-swap="innerHTML"></span>
 </div>
 
+<!-- Plex scan status - polls when scanning, stopped when not -->
+<div id="plex-scan-status" 
+     hx-get="/api/plex/scan/status" 
+     hx-trigger="load, every 2s [document.querySelector('#plex-scan-status.scanning')]" 
+     hx-swap="innerHTML">
+</div>
+
 <div id="dashboard-summary" hx-get="/api/dashboard/summary" hx-trigger="load, every 12s queue:last" hx-swap="innerHTML">
     {{template "dashboard_summary.html" .}}
 </div>

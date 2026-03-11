@@ -257,6 +257,7 @@ func (s *Server) setupRoutes() {
 		api.POST("/downloads/resume", s.handleResumeDownloads)
 		api.GET("/downloads/state", s.handleDownloadsState)
 		api.GET("/pipeline/state", s.handlePipelineState)
+		api.GET("/plex/scan/status", s.handlePlexScanStatus)
 		api.GET("/events", s.handleSSE)
 		api.POST("/settings", s.handleSaveSettings)
 		api.GET("/settings/db-backup", s.handleDBBackup)
@@ -887,8 +888,76 @@ func (s *Server) plexTriggerScanForSync(ctx context.Context) error {
 	if sectionID == "" {
 		return fmt.Errorf("Plex library section not configured")
 	}
-	// Empty path triggers a full section scan
-	return s.plexTriggerSectionScan(ctx, plexURL, plexToken, sectionID, "")
+	// Empty path triggers a full section scan, force=false for routine syncs
+	return s.plexTriggerSectionScan(ctx, plexURL, plexToken, sectionID, "", false)
+}
+
+// handlePlexScanStatus returns the current Plex library scan status as HTML for HTMX.
+func (s *Server) handlePlexScanStatus(c *gin.Context) {
+	ctx := c.Request.Context()
+	plexURL, plexToken := s.getPlexSettings(ctx)
+
+	if plexURL == "" || plexToken == "" {
+		// No Plex configured, return empty container that doesn't poll
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(""))
+		return
+	}
+
+	status, err := s.plexGetScanStatus(ctx, plexURL, plexToken)
+	if err != nil {
+		webLog.Debug().Err(err).Msg("failed to get Plex scan status")
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(""))
+		return
+	}
+
+	if !status.Scanning {
+		// Not scanning, return empty container that continues polling (for when scan starts)
+		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(`<div hx-get="/api/plex/scan/status" hx-trigger="every 5s" hx-swap="outerHTML"></div>`))
+		return
+	}
+
+	// Build progress HTML
+	progress := status.Progress
+	isIndeterminate := progress < 0
+	if progress < 0 {
+		progress = 0
+	}
+
+	title := status.Title
+	if title == "" {
+		title = "Scanning Library"
+	}
+
+	subtitle := status.Subtitle
+	progressText := ""
+	if !isIndeterminate && progress > 0 {
+		progressText = fmt.Sprintf("%.0f%%", progress)
+	}
+
+	var html strings.Builder
+	html.WriteString(`<div class="plex-scan-status scanning" hx-get="/api/plex/scan/status" hx-trigger="every 2s" hx-swap="outerHTML">`)
+	html.WriteString(`<div class="info-box info-box-compact">`)
+	html.WriteString(`<div class="plex-scan-header">`)
+	html.WriteString(`<span class="plex-scan-icon">&#9679;</span>`)
+	html.WriteString(fmt.Sprintf(`<strong>%s</strong>`, title))
+	if subtitle != "" {
+		html.WriteString(fmt.Sprintf(`<span class="plex-scan-detail">%s</span>`, subtitle))
+	}
+	if progressText != "" {
+		html.WriteString(fmt.Sprintf(`<span class="plex-scan-percent">%s</span>`, progressText))
+	}
+	html.WriteString(`</div>`)
+
+	// Progress bar
+	if isIndeterminate {
+		html.WriteString(`<div class="phase-progress-track indeterminate"><div class="phase-progress-fill"></div></div>`)
+	} else {
+		html.WriteString(fmt.Sprintf(`<div class="phase-progress-track"><div class="phase-progress-fill" style="width: %.0f%%"></div></div>`, progress))
+	}
+
+	html.WriteString(`</div></div>`)
+
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html.String()))
 }
 
 // handleQueueAll queues all new books for download.

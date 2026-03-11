@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,30 +26,35 @@ type plexPinResponse struct {
 	AuthToken string `json:"authToken"`
 }
 
-type plexResources struct {
-	Devices []plexDevice `xml:"Device"`
-}
-
+// plexResourcesResponse wraps the JSON response from plex.tv/api/v2/resources.
+// Note: The v2 resources endpoint returns an array of devices directly (not wrapped in MediaContainer).
 type plexDevice struct {
-	Name        string           `xml:"name,attr"`
-	Product     string           `xml:"product,attr"`
-	Provides    string           `xml:"provides,attr"`
-	Owned       string           `xml:"owned,attr"`
-	Connections []plexConnection `xml:"Connection"`
+	Name        string           `json:"name"`
+	Product     string           `json:"product"`
+	Provides    string           `json:"provides"`
+	Owned       bool             `json:"owned"`
+	Connections []plexConnection `json:"connections"`
 }
 
 type plexConnection struct {
-	URI   string `xml:"uri,attr"`
-	Local string `xml:"local,attr"`
+	URI   string `json:"uri"`
+	Local bool   `json:"local"`
 }
 
+// plexMediaContainer wraps all standard Plex server JSON responses.
+type plexMediaContainer struct {
+	Size      int `json:"size"`
+	TotalSize int `json:"totalSize"`
+}
+
+// plexSearchResponse wraps search endpoint JSON response.
 type plexSearchResponse struct {
-	Size int `xml:"size,attr"`
+	MediaContainer plexMediaContainer `json:"MediaContainer"`
 }
 
+// plexSectionItemsResponse wraps section items endpoint JSON response (e.g., /library/sections/{id}/albums).
 type plexSectionItemsResponse struct {
-	TotalSize int `xml:"totalSize,attr"`
-	Size      int `xml:"size,attr"`
+	MediaContainer plexMediaContainer `json:"MediaContainer"`
 }
 
 type plexServerOption struct {
@@ -66,32 +70,73 @@ type plexLibrarySection struct {
 	Locations []plexLocation
 }
 
+// plexSectionsResponse wraps /library/sections JSON response.
 type plexSectionsResponse struct {
-	Directories []plexSectionDirectory `xml:"Directory"`
+	MediaContainer plexSectionsContainer `json:"MediaContainer"`
+}
+
+type plexSectionsContainer struct {
+	Size        int                    `json:"size"`
+	Directories []plexSectionDirectory `json:"Directory"`
 }
 
 type plexSectionDirectory struct {
-	Key   string `xml:"key,attr"`
-	Title string `xml:"title,attr"`
-	Type  string `xml:"type,attr"`
+	Key   string `json:"key"`
+	Title string `json:"title"`
+	Type  string `json:"type"`
 	// Some Plex servers include Location nodes on section list responses.
-	Locations []plexLocation `xml:"Location"`
+	Locations []plexLocation `json:"Location"`
 }
 
 // plexSectionDetailResponse wraps the detailed response from /library/sections/{id}
 type plexSectionDetailResponse struct {
-	Directories []plexSectionDetailDirectory `xml:"Directory"`
+	MediaContainer plexSectionDetailContainer `json:"MediaContainer"`
+}
+
+type plexSectionDetailContainer struct {
+	Size        int                          `json:"size"`
+	Directories []plexSectionDetailDirectory `json:"Directory"`
 }
 
 type plexSectionDetailDirectory struct {
-	Key       string         `xml:"key,attr"`
-	Title     string         `xml:"title,attr"`
-	Type      string         `xml:"type,attr"`
-	Locations []plexLocation `xml:"Location"`
+	Key       string         `json:"key"`
+	Title     string         `json:"title"`
+	Type      string         `json:"type"`
+	Locations []plexLocation `json:"Location"`
 }
 
 type plexLocation struct {
-	Path string `xml:"path,attr"`
+	Path string `json:"path"`
+}
+
+// plexActivitiesResponse is the JSON response from /activities endpoint.
+type plexActivitiesResponse struct {
+	MediaContainer plexActivitiesContainer `json:"MediaContainer"`
+}
+
+type plexActivitiesContainer struct {
+	Size       int            `json:"size"`
+	Activities []plexActivity `json:"Activity"`
+}
+
+type plexActivity struct {
+	UUID        string  `json:"uuid"`
+	Type        string  `json:"type"`
+	Cancellable bool    `json:"cancellable"`
+	UserID      int     `json:"userID"`
+	Title       string  `json:"title"`
+	Subtitle    string  `json:"subtitle"`
+	Progress    float64 `json:"progress"` // -1 means indeterminate
+}
+
+// PlexScanStatus represents the status of a Plex library scan.
+type PlexScanStatus struct {
+	Scanning    bool    `json:"scanning"`
+	Progress    float64 `json:"progress"` // 0-100, or -1 for indeterminate
+	Title       string  `json:"title"`
+	Subtitle    string  `json:"subtitle"`
+	Cancellable bool    `json:"cancellable"`
+	ActivityID  string  `json:"activity_id,omitempty"`
 }
 
 func (s *Server) plexClientID() string {
@@ -238,7 +283,7 @@ func (s *Server) handlePlexScan(c *gin.Context) {
 		return
 	}
 
-	if err := s.plexTriggerSectionScan(c.Request.Context(), plexURL, plexToken, sectionID, ""); err != nil {
+	if err := s.plexTriggerSectionScan(c.Request.Context(), plexURL, plexToken, sectionID, "", false); err != nil {
 		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to trigger Plex scan: " + err.Error()})
 		return
 	}
@@ -351,7 +396,7 @@ func (s *Server) plexGetPin(ctx context.Context, pinID int64, pinCode string) (*
 }
 
 func (s *Server) plexListServerOptions(ctx context.Context, token string) ([]plexServerOption, error) {
-	u := "https://plex.tv/api/resources?includeHttps=1&includeRelay=1"
+	u := "https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -369,14 +414,14 @@ func (s *Server) plexListServerOptions(ctx context.Context, token string) ([]ple
 		return nil, fmt.Errorf("plex resources returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	var resources plexResources
-	if err := xml.NewDecoder(resp.Body).Decode(&resources); err != nil {
+	var devices []plexDevice
+	if err := json.NewDecoder(resp.Body).Decode(&devices); err != nil {
 		return nil, err
 	}
 
 	options := make([]plexServerOption, 0)
 	seen := make(map[string]struct{})
-	for _, dev := range resources.Devices {
+	for _, dev := range devices {
 		if !strings.Contains(strings.ToLower(dev.Provides), "server") {
 			continue
 		}
@@ -392,7 +437,7 @@ func (s *Server) plexListServerOptions(ctx context.Context, token string) ([]ple
 			options = append(options, plexServerOption{
 				Name:  fmt.Sprintf("%s (%s)", dev.Name, dev.Product),
 				URL:   u,
-				Local: conn.Local == "1",
+				Local: conn.Local,
 			})
 		}
 	}
@@ -433,12 +478,12 @@ func (s *Server) plexListSections(ctx context.Context, plexURL, token string) ([
 	}
 
 	var sectionsResp plexSectionsResponse
-	if err := xml.NewDecoder(resp.Body).Decode(&sectionsResp); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&sectionsResp); err != nil {
 		return nil, err
 	}
 
-	sections := make([]plexLibrarySection, 0, len(sectionsResp.Directories))
-	for _, d := range sectionsResp.Directories {
+	sections := make([]plexLibrarySection, 0, len(sectionsResp.MediaContainer.Directories))
+	for _, d := range sectionsResp.MediaContainer.Directories {
 		id := extractSectionID(d.Key)
 		if id == "" {
 			continue
@@ -465,22 +510,27 @@ func extractSectionID(key string) string {
 	return parts[len(parts)-1]
 }
 
-func (s *Server) plexTriggerSectionScan(ctx context.Context, plexURL, token, sectionID, scanPath string) error {
+func (s *Server) plexTriggerSectionScan(ctx context.Context, plexURL, token, sectionID, scanPath string, force bool) error {
 	u, err := buildPlexURL(plexURL, "/library/sections/"+url.PathEscape(sectionID)+"/refresh", token, nil)
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(scanPath) != "" {
-		parsed, err := url.Parse(u)
-		if err != nil {
-			return err
-		}
-		q := parsed.Query()
-		q.Set("path", scanPath)
-		parsed.RawQuery = q.Encode()
-		u = parsed.String()
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	q := parsed.Query()
+	if strings.TrimSpace(scanPath) != "" {
+		q.Set("path", scanPath)
+	}
+	if force {
+		q.Set("force", "1") // Force metadata refresh for existing items
+	}
+	parsed.RawQuery = q.Encode()
+	u = parsed.String()
+
+	// Per OpenAPI spec: /library/sections/{sectionId}/refresh is a POST endpoint
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
 	if err != nil {
 		return err
 	}
@@ -522,10 +572,10 @@ func (s *Server) plexSearchCount(ctx context.Context, plexURL, token, query stri
 	}
 
 	var searchResp plexSearchResponse
-	if err := xml.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
 		return 0, err
 	}
-	return searchResp.Size, nil
+	return searchResp.MediaContainer.Size, nil
 }
 
 func (s *Server) plexSectionItemCount(ctx context.Context, plexURL, token, sectionID string) (int, error) {
@@ -538,6 +588,8 @@ func (s *Server) plexSectionItemCount(ctx context.Context, plexURL, token, secti
 		return 0, err
 	}
 
+	webLog.Debug().Str("url", u).Str("section_id", sectionID).Msg("querying plex section item count")
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return 0, err
@@ -546,24 +598,52 @@ func (s *Server) plexSectionItemCount(ctx context.Context, plexURL, token, secti
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		webLog.Debug().Err(err).Str("section_id", sectionID).Msg("plex request failed")
 		return 0, err
 	}
 	defer resp.Body.Close()
+
+	webLog.Debug().
+		Int("status_code", resp.StatusCode).
+		Str("content_type", resp.Header.Get("Content-Type")).
+		Int64("content_length", resp.ContentLength).
+		Str("section_id", sectionID).
+		Msg("plex section items response received")
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return 0, fmt.Errorf("section items endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	var sectionResp plexSectionItemsResponse
-	if err := xml.NewDecoder(resp.Body).Decode(&sectionResp); err != nil {
-		return 0, err
+	// Read bytes first to log and inspect
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		webLog.Debug().Err(err).Str("section_id", sectionID).Msg("failed to read plex response body")
+		return 0, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	if sectionResp.TotalSize > 0 {
-		return sectionResp.TotalSize, nil
+	webLog.Debug().
+		Int("body_length", len(bodyBytes)).
+		Str("body_preview", string(bodyBytes[:min(len(bodyBytes), 500)])).
+		Str("section_id", sectionID).
+		Msg("plex section items response body")
+
+	var sectionResp plexSectionItemsResponse
+	if err := json.Unmarshal(bodyBytes, &sectionResp); err != nil {
+		webLog.Debug().Err(err).Str("section_id", sectionID).Str("body", string(bodyBytes)).Msg("failed to parse plex JSON response")
+		return 0, fmt.Errorf("failed to parse JSON: %w", err)
 	}
-	return sectionResp.Size, nil
+
+	webLog.Debug().
+		Int("total_size", sectionResp.MediaContainer.TotalSize).
+		Int("size", sectionResp.MediaContainer.Size).
+		Str("section_id", sectionID).
+		Msg("parsed plex section items")
+
+	if sectionResp.MediaContainer.TotalSize > 0 {
+		return sectionResp.MediaContainer.TotalSize, nil
+	}
+	return sectionResp.MediaContainer.Size, nil
 }
 
 // plexSectionLocation queries Plex for the filesystem path of a library section.
@@ -592,12 +672,12 @@ func (s *Server) plexSectionLocation(ctx context.Context, plexURL, token, sectio
 	}
 
 	var detailResp plexSectionDetailResponse
-	if err := xml.NewDecoder(resp.Body).Decode(&detailResp); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&detailResp); err != nil {
 		return "", fmt.Errorf("failed to parse section details: %w", err)
 	}
 
 	// Return the first location path found
-	for _, dir := range detailResp.Directories {
+	for _, dir := range detailResp.MediaContainer.Directories {
 		if len(dir.Locations) > 0 && strings.TrimSpace(dir.Locations[0].Path) != "" {
 			return dir.Locations[0].Path, nil
 		}
@@ -627,10 +707,12 @@ func (s *Server) plexSectionLocation(ctx context.Context, plexURL, token, sectio
 }
 
 func (s *Server) addPlexHeaders(req *http.Request, token string) {
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Plex-Product", plexProduct)
 	req.Header.Set("X-Plex-Client-Identifier", s.plexClientID())
 	req.Header.Set("X-Plex-Device-Name", "Audible Plex Downloader Web")
 	req.Header.Set("X-Plex-Platform", plexPlatform)
+	req.Header.Set("X-Plex-Version", "1.0")
 	if strings.TrimSpace(token) != "" {
 		req.Header.Set("X-Plex-Token", token)
 	}
@@ -649,4 +731,63 @@ func buildPlexURL(baseURL, path, token string, extraQuery map[string]string) (st
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// plexGetActivities queries the Plex /activities endpoint to get active operations.
+func (s *Server) plexGetActivities(ctx context.Context, plexURL, token string) ([]plexActivity, error) {
+	u, err := buildPlexURL(plexURL, "/activities", token, nil)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	s.addPlexHeaders(req, token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("activities endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var activitiesResp plexActivitiesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&activitiesResp); err != nil {
+		return nil, fmt.Errorf("failed to parse activities response: %w", err)
+	}
+
+	return activitiesResp.MediaContainer.Activities, nil
+}
+
+// plexGetScanStatus checks Plex activities for any library-related scanning activity.
+func (s *Server) plexGetScanStatus(ctx context.Context, plexURL, token string) (PlexScanStatus, error) {
+	activities, err := s.plexGetActivities(ctx, plexURL, token)
+	if err != nil {
+		return PlexScanStatus{}, err
+	}
+
+	// Look for library scanning activities
+	// Common types: "library.update.section", "library.scan", "library.refresh"
+	for _, act := range activities {
+		actType := strings.ToLower(act.Type)
+		if strings.Contains(actType, "library") ||
+			strings.Contains(actType, "scan") ||
+			strings.Contains(actType, "refresh") {
+			return PlexScanStatus{
+				Scanning:    true,
+				Progress:    act.Progress,
+				Title:       act.Title,
+				Subtitle:    act.Subtitle,
+				Cancellable: act.Cancellable,
+				ActivityID:  act.UUID,
+			}, nil
+		}
+	}
+
+	return PlexScanStatus{Scanning: false}, nil
 }

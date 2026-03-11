@@ -507,6 +507,36 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 }
 .btn-warning:hover { opacity: 0.9; }
 
+/* Plex scan status */
+.plex-scan-status {
+    margin-bottom: 0.5rem;
+}
+.plex-scan-status .info-box {
+    background: linear-gradient(90deg, rgba(56, 142, 60, 0.1), rgba(56, 142, 60, 0.05));
+    border-left: 3px solid var(--success);
+}
+.plex-scan-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+}
+.plex-scan-icon {
+    color: var(--success);
+    animation: pulse 1s ease-in-out infinite;
+    font-size: 0.7rem;
+}
+.plex-scan-detail {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+.plex-scan-percent {
+    color: var(--accent);
+    font-weight: 600;
+    margin-left: auto;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .sync-phases { gap: 0.25rem; }
