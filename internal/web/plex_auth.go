@@ -791,3 +791,84 @@ func (s *Server) plexGetScanStatus(ctx context.Context, plexURL, token string) (
 
 	return PlexScanStatus{Scanning: false}, nil
 }
+
+// PlexItem represents an item in the Plex library.
+type PlexItem struct {
+	RatingKey   string `json:"rating_key"`
+	Title       string `json:"title"`
+	ParentTitle string `json:"parent_title,omitempty"` // Artist/Author name
+	Year        int    `json:"year,omitempty"`
+	AddedAt     int64  `json:"added_at,omitempty"`
+	GUID        string `json:"guid,omitempty"`
+}
+
+// plexAlbumsResponse wraps Plex /library/sections/{id}/albums response with details.
+type plexAlbumsResponse struct {
+	MediaContainer plexAlbumsContainer `json:"MediaContainer"`
+}
+
+type plexAlbumsContainer struct {
+	Size      int            `json:"size"`
+	TotalSize int            `json:"totalSize"`
+	Metadata  []plexAlbumMD  `json:"Metadata"`
+}
+
+type plexAlbumMD struct {
+	RatingKey   string `json:"ratingKey"`
+	Title       string `json:"title"`
+	ParentTitle string `json:"parentTitle"` // Artist/Author
+	Year        int    `json:"year"`
+	AddedAt     int64  `json:"addedAt"`
+	GUID        string `json:"guid"`
+}
+
+// plexListSectionItems fetches all items (albums) in a Plex section with title details.
+func (s *Server) plexListSectionItems(ctx context.Context, plexURL, token, sectionID string, limit int) ([]PlexItem, error) {
+	if limit <= 0 {
+		limit = 10000 // reasonable max for audiobook libraries
+	}
+	
+	u, err := buildPlexURL(plexURL, "/library/sections/"+url.PathEscape(sectionID)+"/albums", token, map[string]string{
+		"X-Plex-Container-Start": "0",
+		"X-Plex-Container-Size":  strconv.Itoa(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	s.addPlexHeaders(req, token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("albums endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var albumsResp plexAlbumsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&albumsResp); err != nil {
+		return nil, fmt.Errorf("failed to parse albums response: %w", err)
+	}
+
+	items := make([]PlexItem, 0, len(albumsResp.MediaContainer.Metadata))
+	for _, album := range albumsResp.MediaContainer.Metadata {
+		items = append(items, PlexItem{
+			RatingKey:   album.RatingKey,
+			Title:       album.Title,
+			ParentTitle: album.ParentTitle,
+			Year:        album.Year,
+			AddedAt:     album.AddedAt,
+			GUID:        album.GUID,
+		})
+	}
+
+	return items, nil
+}

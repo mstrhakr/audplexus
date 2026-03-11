@@ -70,12 +70,21 @@ func main() {
 		log.Debug().Str("path", dir).Msg("directory ready")
 	}
 
-	// Initialize Audible client
-	audibleClient := audible.NewClient(audible.MarketplaceUS)
+	// Initialize Audible client - first try to get marketplace from existing credentials
 	credPath := filepath.Join(cfg.Paths.Config, "credentials.json")
+	marketplace, region := detectMarketplace(credPath)
+	audibleClient := audible.NewClient(marketplace)
 	if err := loadCredentials(audibleClient, credPath); err != nil {
 		log.Warn().Err(err).Msg("no audible credentials loaded — authenticate via the web UI")
 	} else {
+		// Update marketplace from loaded credentials if available
+		if creds := audibleClient.GetCredentials(); creds != nil && creds.Marketplace != "" {
+			if mp, ok := audible.GetMarketplace(creds.Marketplace); ok {
+				audibleClient.SetMarketplace(mp)
+				region = mp.CountryCode
+				log.Info().Str("marketplace", creds.Marketplace).Msg("using marketplace from credentials")
+			}
+		}
 		log.Info().Msg("audible credentials loaded")
 	}
 
@@ -89,7 +98,8 @@ func main() {
 
 	// Initialize services
 	syncSvc := library.NewSyncService(db, audibleClient, cfg.Paths.Audiobooks)
-	anClient := audnexus.NewClient()
+	anClient := audnexus.NewClientWithRegion(region)
+	log.Info().Str("region", region).Msg("audnexus client initialized with region")
 	org := organizer.NewPlexOrganizer(db, ffmpeg, cfg.Paths.Audiobooks, cfg.Output.EmbedCover, cfg.Output.ChapterFile)
 	dlMgr := library.NewDownloadManager(
 		db,
@@ -254,4 +264,28 @@ func resolveIntSetting(ctx context.Context, db database.Database, key string, fa
 
 func trim(s string) string {
 	return strings.TrimSpace(s)
+}
+
+// detectMarketplace reads credentials file to get marketplace before client initialization.
+// Returns US marketplace as default if credentials cannot be read.
+func detectMarketplace(credPath string) (audible.Marketplace, string) {
+	data, err := os.ReadFile(credPath)
+	if err != nil {
+		return audible.MarketplaceUS, "us"
+	}
+
+	var creds struct {
+		Marketplace string `json:"marketplace"`
+	}
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return audible.MarketplaceUS, "us"
+	}
+
+	if creds.Marketplace != "" {
+		if mp, ok := audible.GetMarketplace(creds.Marketplace); ok {
+			return mp, mp.CountryCode
+		}
+	}
+
+	return audible.MarketplaceUS, "us"
 }

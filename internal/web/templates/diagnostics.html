@@ -1,0 +1,291 @@
+{{define "content"}}
+<h1>Library Diagnostics</h1>
+
+<p>Compare your Audible library with what's in Plex to identify missing or problematic books.</p>
+
+<div class="diagnostics-summary" id="diagnostics-summary">
+    <div class="loading">Loading diagnostic data...</div>
+</div>
+
+<div class="actions-bar">
+    <button id="btn-refresh" class="btn btn-primary" onclick="loadDiagnostics()">Refresh</button>
+    <select id="filter-type" onchange="filterResults()">
+        <option value="all">All Issues</option>
+        <option value="missing-plex">Missing from Plex</option>
+        <option value="missing-disk">Missing from Disk</option>
+        <option value="region">Region Mismatch</option>
+    </select>
+    <span id="diag-status"></span>
+</div>
+
+<h2>Problem Books</h2>
+<div id="diagnostics-results">
+    <p class="empty">Click Refresh to load diagnostics</p>
+</div>
+
+<script>
+let diagnosticData = null;
+
+async function loadDiagnostics() {
+    const summary = document.getElementById('diagnostics-summary');
+    const results = document.getElementById('diagnostics-results');
+    
+    summary.innerHTML = '<div class="loading">Loading diagnostic data...</div>';
+    results.innerHTML = '<div class="loading">Analyzing library...</div>';
+    
+    try {
+        const response = await fetch('/api/diagnostics/compare');
+        if (!response.ok) {
+            throw new Error('Failed to load diagnostics: ' + response.statusText);
+        }
+        diagnosticData = await response.json();
+        renderSummary(diagnosticData);
+        renderResults(diagnosticData.items);
+    } catch (error) {
+        summary.innerHTML = '<div class="error">Error: ' + error.message + '</div>';
+        results.innerHTML = '';
+    }
+}
+
+function renderSummary(data) {
+    const summary = document.getElementById('diagnostics-summary');
+    summary.innerHTML = `
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">${data.total_books}</div>
+                <div class="stat-label">Total Books</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${data.complete_books}</div>
+                <div class="stat-label">Complete</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${data.plex_items}</div>
+                <div class="stat-label">In Plex</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${data.files_on_disk}</div>
+                <div class="stat-label">On Disk</div>
+            </div>
+            <div class="stat-card ${data.missing_from_plex > 0 ? 'stat-warning' : ''}">
+                <div class="stat-value">${data.missing_from_plex}</div>
+                <div class="stat-label">Missing from Plex</div>
+            </div>
+            <div class="stat-card ${data.missing_from_disk > 0 ? 'stat-error' : ''}">
+                <div class="stat-value">${data.missing_from_disk}</div>
+                <div class="stat-label">Missing from Disk</div>
+            </div>
+            <div class="stat-card ${data.region_issues > 0 ? 'stat-warning' : ''}">
+                <div class="stat-value">${data.region_issues}</div>
+                <div class="stat-label">Region Issues</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${data.user_marketplace.toUpperCase()}</div>
+                <div class="stat-label">Your Region</div>
+            </div>
+        </div>
+    `;
+}
+
+function renderResults(items) {
+    const results = document.getElementById('diagnostics-results');
+    
+    if (!items || items.length === 0) {
+        results.innerHTML = '<p class="success">No issues found! All complete books are properly synced.</p>';
+        return;
+    }
+    
+    let html = `
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Title</th>
+                    <th>Author</th>
+                    <th>Region</th>
+                    <th>Status</th>
+                    <th>Issue</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+    
+    for (const item of items) {
+        const statusBadges = [];
+        if (item.on_disk) statusBadges.push('<span class="badge badge-success">On Disk</span>');
+        else statusBadges.push('<span class="badge badge-error">Missing File</span>');
+        
+        if (item.in_plex) statusBadges.push('<span class="badge badge-success">In Plex</span>');
+        else statusBadges.push('<span class="badge badge-warning">Not in Plex</span>');
+        
+        const regionClass = item.region ? '' : 'text-muted';
+        const regionDisplay = item.region ? `[${item.region}]` : 'N/A';
+        
+        html += `
+            <tr id="diag-${item.asin}" 
+                data-missing-plex="${!item.in_plex}" 
+                data-missing-disk="${!item.on_disk}" 
+                data-region-issue="${item.issue && item.issue.includes('Region')}">
+                <td>
+                    <a href="/library/${item.asin}">${escapeHtml(item.title)}</a>
+                    <br><small class="text-muted">${item.asin}</small>
+                </td>
+                <td>${escapeHtml(item.author || '')}</td>
+                <td class="${regionClass}">${regionDisplay}</td>
+                <td>${statusBadges.join(' ')}</td>
+                <td class="issue-text">${escapeHtml(item.issue || '')}</td>
+                <td>
+                    ${item.can_redownload ? `
+                        <button 
+                            class="btn btn-small btn-warning"
+                            onclick="redownloadBook('${item.asin}', '${escapeHtml(item.title)}')"
+                            title="Delete old file and re-download">
+                            Redownload
+                        </button>
+                    ` : ''}
+                </td>
+            </tr>
+        `;
+    }
+    
+    html += '</tbody></table>';
+    results.innerHTML = html;
+}
+
+function filterResults() {
+    const filter = document.getElementById('filter-type').value;
+    const rows = document.querySelectorAll('#diagnostics-results tbody tr');
+    
+    rows.forEach(row => {
+        let show = true;
+        switch (filter) {
+            case 'missing-plex':
+                show = row.dataset.missingPlex === 'true';
+                break;
+            case 'missing-disk':
+                show = row.dataset.missingDisk === 'true';
+                break;
+            case 'region':
+                show = row.dataset.regionIssue === 'true';
+                break;
+        }
+        row.style.display = show ? '' : 'none';
+    });
+}
+
+async function redownloadBook(asin, title) {
+    if (!confirm(`Are you sure you want to redownload "${title}"?\n\nThis will delete the existing file and folder, then queue a fresh download.`)) {
+        return;
+    }
+    
+    const status = document.getElementById('diag-status');
+    status.innerHTML = '<span class="loading">Redownloading...</span>';
+    
+    try {
+        const response = await fetch(`/api/downloads/redownload/${asin}`, {
+            method: 'POST'
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            status.innerHTML = '<span class="success">' + data.message + '</span>';
+            // Remove the row from the table
+            const row = document.getElementById('diag-' + asin);
+            if (row) row.remove();
+        } else {
+            status.innerHTML = '<span class="error">Error: ' + (data.error || 'Unknown error') + '</span>';
+        }
+    } catch (error) {
+        status.innerHTML = '<span class="error">Error: ' + error.message + '</span>';
+    }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Auto-load on page load
+document.addEventListener('DOMContentLoaded', loadDiagnostics);
+</script>
+
+<style>
+.diagnostics-summary {
+    margin-bottom: 2rem;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.stat-card {
+    background: var(--surface-color, #1e1e1e);
+    border: 1px solid var(--border-color, #333);
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+}
+
+.stat-card.stat-warning {
+    border-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.1);
+}
+
+.stat-card.stat-error {
+    border-color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.stat-value {
+    font-size: 2rem;
+    font-weight: bold;
+    color: var(--primary-color, #60a5fa);
+}
+
+.stat-label {
+    font-size: 0.875rem;
+    color: var(--text-secondary, #888);
+    margin-top: 0.25rem;
+}
+
+.issue-text {
+    font-size: 0.875rem;
+    color: #f59e0b;
+    max-width: 300px;
+}
+
+.loading {
+    color: var(--text-secondary, #888);
+    font-style: italic;
+}
+
+.success {
+    color: #10b981;
+    padding: 1rem;
+    background: rgba(16, 185, 129, 0.1);
+    border-radius: 8px;
+}
+
+.error {
+    color: #ef4444;
+}
+
+.text-muted {
+    color: var(--text-secondary, #888);
+}
+
+#filter-type {
+    padding: 0.5rem;
+    background: var(--surface-color, #1e1e1e);
+    border: 1px solid var(--border-color, #333);
+    border-radius: 4px;
+    color: var(--text-color, #fff);
+}
+</style>
+{{end}}

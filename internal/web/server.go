@@ -226,6 +226,7 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/library/:id", s.handleBookDetail)
 	s.router.GET("/downloads", s.handleDownloads)
 	s.router.GET("/settings", s.handleSettings)
+	s.router.GET("/diagnostics", s.handleDiagnostics)
 
 	// Auth
 	s.router.POST("/auth/start", s.handleAuthStart)
@@ -262,6 +263,11 @@ func (s *Server) setupRoutes() {
 		api.POST("/settings", s.handleSaveSettings)
 		api.GET("/settings/db-backup", s.handleDBBackup)
 		api.POST("/settings/factory-reset", s.handleFactoryReset)
+
+		// Diagnostics
+		api.GET("/diagnostics/compare", s.handleDiagnosticsCompare)
+		api.GET("/diagnostics/plex-items", s.handleDiagnosticsPlexItems)
+		api.POST("/downloads/redownload/:asin", s.handleRedownload)
 	}
 }
 
@@ -1384,4 +1390,322 @@ func (s *Server) handleAuthStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"authenticated": s.audible.IsAuthenticated(),
 	})
+}
+
+// DiagnosticItem represents a book with its status across database, disk, and Plex.
+type DiagnosticItem struct {
+	ASIN         string `json:"asin"`
+	Title        string `json:"title"`
+	Author       string `json:"author"`
+	Region       string `json:"region,omitempty"`
+	Status       string `json:"status"`
+	InDatabase   bool   `json:"in_database"`
+	OnDisk       bool   `json:"on_disk"`
+	InPlex       bool   `json:"in_plex"`
+	FilePath     string `json:"file_path,omitempty"`
+	FileExists   bool   `json:"file_exists"`
+	PlexTitle    string `json:"plex_title,omitempty"` // Matching title found in Plex
+	Issue        string `json:"issue,omitempty"`      // Description of what's wrong
+	CanRedownload bool  `json:"can_redownload"`
+}
+
+// DiagnosticsResponse contains the full comparison data.
+type DiagnosticsResponse struct {
+	TotalBooks       int              `json:"total_books"`
+	CompleteBooks    int              `json:"complete_books"`
+	PlexItems        int              `json:"plex_items"`
+	FilesOnDisk      int              `json:"files_on_disk"`
+	MissingFromPlex  int              `json:"missing_from_plex"`
+	MissingFromDisk  int              `json:"missing_from_disk"`
+	RegionIssues     int              `json:"region_issues"`
+	UserMarketplace  string           `json:"user_marketplace"`
+	Items            []DiagnosticItem `json:"items"`
+}
+
+// handleDiagnostics renders the diagnostics page.
+func (s *Server) handleDiagnostics(c *gin.Context) {
+	// Get user's marketplace/region from audible client credentials
+	marketplace := "us"
+	if creds := s.audible.GetCredentials(); creds != nil && creds.Marketplace != "" {
+		marketplace = creds.Marketplace
+	}
+
+	c.HTML(http.StatusOK, "diagnostics.html", gin.H{
+		"Page":            "diagnostics",
+		"UserMarketplace": marketplace,
+	})
+}
+
+// handleDiagnosticsCompare returns comparison data between database, disk, and Plex.
+func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// Get user's marketplace/region
+	marketplace := "us"
+	if creds := s.audible.GetCredentials(); creds != nil && creds.Marketplace != "" {
+		marketplace = creds.Marketplace
+	}
+
+	// Get all books from database
+	books, totalCount, err := s.db.ListBooks(ctx, database.BookFilter{Limit: 10000, Offset: 0})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load books: " + err.Error()})
+		return
+	}
+
+	// Get complete books count
+	completeStatus := database.BookStatusComplete
+	_, completeCount, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
+
+	// Get Plex items if configured
+	plexURL, plexToken := s.getPlexSettings(ctx)
+	sectionID, _ := s.db.GetSetting(ctx, "plex_section_id")
+	sectionID = strings.TrimSpace(sectionID)
+
+	var plexItems []PlexItem
+	if plexURL != "" && plexToken != "" && sectionID != "" {
+		items, err := s.plexListSectionItems(ctx, plexURL, plexToken, sectionID, 10000)
+		if err != nil {
+			webLog.Warn().Err(err).Msg("failed to get Plex items for diagnostics")
+		} else {
+			plexItems = items
+		}
+	}
+
+	// Build index of Plex items by title (normalized for comparison)
+	plexTitleIndex := make(map[string]PlexItem)
+	for _, item := range plexItems {
+		normalizedTitle := normalizeTitle(item.Title)
+		plexTitleIndex[normalizedTitle] = item
+	}
+
+	// Process each book to determine its status
+	items := make([]DiagnosticItem, 0, len(books))
+	missingFromPlex := 0
+	missingFromDisk := 0
+	regionIssues := 0
+	filesOnDisk := 0
+
+	for _, book := range books {
+		// Only process complete books for diagnostics
+		if book.Status != database.BookStatusComplete {
+			continue
+		}
+
+		item := DiagnosticItem{
+			ASIN:        book.ASIN,
+			Title:       book.Title,
+			Author:      book.Author,
+			Status:      string(book.Status),
+			InDatabase:  true,
+			FilePath:    book.FilePath,
+			CanRedownload: true, // All complete books can be redownloaded
+		}
+
+		// Check if file exists on disk
+		if book.FilePath != "" {
+			if _, err := os.Stat(book.FilePath); err == nil {
+				item.OnDisk = true
+				item.FileExists = true
+				filesOnDisk++
+
+				// Extract region from file path if present
+				extractedRegion := extractRegionFromPath(book.FilePath)
+				item.Region = extractedRegion
+
+				// Check for region mismatch
+				if extractedRegion != "" && extractedRegion != marketplace {
+					item.Issue = fmt.Sprintf("Region mismatch: file has [%s] but account is [%s]", extractedRegion, marketplace)
+					regionIssues++
+				}
+			} else {
+				item.OnDisk = false
+				item.FileExists = false
+				item.Issue = "File missing from disk: " + book.FilePath
+				missingFromDisk++
+			}
+		} else {
+			item.Issue = "No file path recorded"
+			missingFromDisk++
+		}
+
+		// Check if in Plex by title matching
+		normalizedTitle := normalizeTitle(book.Title)
+		if plexItem, found := plexTitleIndex[normalizedTitle]; found {
+			item.InPlex = true
+			item.PlexTitle = plexItem.Title
+		} else {
+			// Try fuzzy match - check if our title is contained in any Plex title or vice versa
+			authorTitleKey := normalizeTitle(book.Author + " " + book.Title)
+			for plexNormTitle, plexItem := range plexTitleIndex {
+				if strings.Contains(plexNormTitle, normalizedTitle) ||
+					strings.Contains(normalizedTitle, plexNormTitle) ||
+					strings.Contains(plexNormTitle, authorTitleKey) {
+					item.InPlex = true
+					item.PlexTitle = plexItem.Title
+					break
+				}
+			}
+		}
+
+		if !item.InPlex && item.OnDisk {
+			if item.Issue != "" {
+				item.Issue += "; "
+			}
+			item.Issue += "Not found in Plex library"
+			missingFromPlex++
+		}
+
+		// Only include items with issues
+		if item.Issue != "" || !item.InPlex || !item.OnDisk {
+			items = append(items, item)
+		}
+	}
+
+	response := DiagnosticsResponse{
+		TotalBooks:       totalCount,
+		CompleteBooks:    completeCount,
+		PlexItems:        len(plexItems),
+		FilesOnDisk:      filesOnDisk,
+		MissingFromPlex:  missingFromPlex,
+		MissingFromDisk:  missingFromDisk,
+		RegionIssues:     regionIssues,
+		UserMarketplace:  marketplace,
+		Items:            items,
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// handleDiagnosticsPlexItems returns all Plex library items.
+func (s *Server) handleDiagnosticsPlexItems(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	plexURL, plexToken := s.getPlexSettings(ctx)
+	sectionID, _ := s.db.GetSetting(ctx, "plex_section_id")
+	sectionID = strings.TrimSpace(sectionID)
+
+	if plexURL == "" || plexToken == "" || sectionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Plex is not configured"})
+		return
+	}
+
+	items, err := s.plexListSectionItems(ctx, plexURL, plexToken, sectionID, 10000)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list Plex items: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"items": items, "count": len(items)})
+}
+
+// handleRedownload deletes the old file/folder and re-queues the book for download.
+func (s *Server) handleRedownload(c *gin.Context) {
+	ctx := c.Request.Context()
+	asin := strings.TrimSpace(c.Param("asin"))
+	if asin == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing ASIN"})
+		return
+	}
+
+	// Get the book from database
+	book, err := s.db.GetBookByASIN(ctx, asin)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "book not found: " + err.Error()})
+		return
+	}
+
+	// Delete the old file and folder if they exist
+	if book.FilePath != "" {
+		// First remove the file itself
+		if err := os.Remove(book.FilePath); err != nil && !os.IsNotExist(err) {
+			webLog.Warn().Err(err).Str("path", book.FilePath).Msg("failed to remove old file")
+		}
+
+		// Then check if the parent folder is empty and remove it
+		parentDir := filepath.Dir(book.FilePath)
+		if parentDir != "" && parentDir != s.audiobooksPath {
+			entries, err := os.ReadDir(parentDir)
+			if err == nil && len(entries) == 0 {
+				// Directory is empty, remove it
+				if err := os.Remove(parentDir); err != nil {
+					webLog.Warn().Err(err).Str("path", parentDir).Msg("failed to remove empty directory")
+				} else {
+					webLog.Info().Str("path", parentDir).Msg("removed empty book directory")
+				}
+			}
+		}
+	}
+
+	// Reset book status to "new" so it can be re-downloaded
+	book.Status = database.BookStatusNew
+	book.FilePath = ""
+	book.FileSize = 0
+	if err := s.db.UpsertBook(ctx, book); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to reset book: " + err.Error()})
+		return
+	}
+
+	// Queue the book for download (high priority for redownloads)
+	if _, err := s.downloads.QueueBook(ctx, book.ID, book.ASIN, 100); err != nil {
+		webLog.Warn().Err(err).Str("asin", asin).Msg("failed to queue book for redownload")
+		// Don't fail - the book is reset and can be queued manually
+	}
+
+	webLog.Info().Str("asin", asin).Str("title", book.Title).Msg("book reset for redownload")
+
+	if c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{
+			"Message": fmt.Sprintf("Book '%s' has been queued for redownload", book.Title),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("Book '%s' has been queued for redownload", book.Title),
+	})
+}
+
+// normalizeTitle normalizes a title for comparison (removes special chars, lowercase).
+func normalizeTitle(title string) string {
+	// Convert to lowercase
+	title = strings.ToLower(title)
+
+	// Remove common punctuation and normalize whitespace
+	replacer := strings.NewReplacer(
+		":", "",
+		"-", " ",
+		"_", " ",
+		".", "",
+		",", "",
+		"'", "",
+		"\"", "",
+		"(", "",
+		")", "",
+		"[", "",
+		"]", "",
+	)
+	title = replacer.Replace(title)
+
+	// Collapse multiple spaces to single space
+	title = strings.Join(strings.Fields(title), " ")
+
+	return title
+}
+
+// extractRegionFromPath extracts the region code from a file path like "[us]" or "[uk]".
+func extractRegionFromPath(path string) string {
+	// Look for [region] pattern in the path
+	start := strings.LastIndex(path, "[")
+	end := strings.LastIndex(path, "]")
+	if start != -1 && end != -1 && end > start && end-start <= 4 {
+		region := path[start+1 : end]
+		// Validate it looks like a region code (2-3 lowercase letters)
+		region = strings.ToLower(region)
+		if len(region) >= 2 && len(region) <= 3 {
+			return region
+		}
+	}
+	return ""
 }

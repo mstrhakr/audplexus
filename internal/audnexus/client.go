@@ -21,16 +21,44 @@ const defaultBaseURL = "https://api.audnex.us"
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	region     string // default region code (e.g., "us", "uk", "de")
 }
 
-// NewClient creates a new Audnexus client.
+// NewClient creates a new Audnexus client with default US region.
 func NewClient() *Client {
 	return &Client{
 		baseURL: defaultBaseURL,
+		region:  "us",
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// NewClientWithRegion creates a new Audnexus client with specified region.
+func NewClientWithRegion(region string) *Client {
+	if region == "" {
+		region = "us"
+	}
+	return &Client{
+		baseURL: defaultBaseURL,
+		region:  region,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+// SetRegion updates the default region for subsequent API calls.
+func (c *Client) SetRegion(region string) {
+	if region != "" {
+		c.region = region
+	}
+}
+
+// Region returns the current default region.
+func (c *Client) Region() string {
+	return c.region
 }
 
 // BookResponse is the Audnexus book metadata response.
@@ -208,9 +236,21 @@ func (c *Client) GetChapters(ctx context.Context, asin string) (*ChapterResponse
 }
 
 func (c *Client) get(ctx context.Context, path string, result any) error {
-	url := c.baseURL + path
+	return c.getWithRegion(ctx, path, c.region, result)
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (c *Client) getWithRegion(ctx context.Context, path, region string, result any) error {
+	reqURL := c.baseURL + path
+	// Add region query parameter if specified
+	if region != "" {
+		if strings.Contains(path, "?") {
+			reqURL += "&region=" + region
+		} else {
+			reqURL += "?region=" + region
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -223,7 +263,7 @@ func (c *Client) get(ctx context.Context, path string, result any) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		anLog.Debug().Str("path", path).Msg("resource not found on audnexus")
+		anLog.Debug().Str("path", path).Str("region", region).Msg("resource not found on audnexus")
 		return fmt.Errorf("not found: %s", path)
 	}
 	if resp.StatusCode != http.StatusOK {
