@@ -3,23 +3,19 @@
 
 <div class="actions-bar">
     <div class="btn-group">
-        <button hx-post="/api/sync/quick" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-secondary" title="Update Audible library only — fast check for new books">
+        <button hx-post="/api/sync/quick" hx-swap="none" class="btn btn-secondary" title="Update Audible library only — fast check for new books">
             Quick Sync
         </button>
-        <button hx-post="/api/sync/full" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-primary" title="Full sync: Audible + filesystem scan + Plex library check">
+        <button hx-post="/api/sync/full" hx-swap="none" class="btn btn-primary" title="Full sync: Audible + filesystem scan + Plex library check">
             Full Sync
         </button>
     </div>
     <button hx-post="/api/downloads/queue-all" hx-swap="none" class="btn btn-secondary">
         Queue All New
     </button>
-    <button hx-post="/api/downloads/retry-all" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-danger">
+    <button hx-post="/api/downloads/retry-all" hx-swap="none" class="btn btn-danger">
         Retry All Failed
     </button>
-</div>
-
-<div class="sync-status-row">
-    <span id="sync-status" hx-get="/api/sync/status" hx-trigger="load" hx-swap="innerHTML"></span>
 </div>
 
 

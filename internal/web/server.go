@@ -169,7 +169,7 @@ func (s *Server) setupTemplates() {
 	base := template.Must(template.New("base").Funcs(funcMap).ParseFS(templateFS, "templates/base.html"))
 
 	// Parse all partial/fragment templates that may be referenced by page templates
-	partials := []string{"templates/library_table.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html"}
+	partials := []string{"templates/library_table.html", "templates/settings_saved.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html"}
 	baseWithPartials := template.Must(template.Must(base.Clone()).ParseFS(templateFS, partials...))
 
 	r := &multiRender{templates: make(map[string]*template.Template)}
@@ -246,7 +246,6 @@ func (s *Server) setupRoutes() {
 		api.POST("/sync/quick", s.handleQuickSyncTrigger)
 		api.POST("/sync/full", s.handleFullSyncTrigger)
 		api.POST("/sync/retry", s.handleSyncRetry)
-		api.GET("/sync/status", s.handleSyncStatus)
 		api.GET("/dashboard/summary", s.handleDashboardSummary)
 		api.GET("/dashboard/downloads", s.handleDashboardDownloads)
 		api.POST("/downloads/queue-all", s.handleQueueAll)
@@ -793,24 +792,12 @@ func (s *Server) handleSyncRetry(c *gin.Context) {
 func (s *Server) triggerSync(c *gin.Context, mode library.SyncMode) {
 	if !s.audible.IsAuthenticated() {
 		msg := "Not authenticated — please sign in on the Settings page first."
-		if c.GetHeader("HX-Request") == "true" {
-			c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(library.SyncProgress{
-				Status:  "failed",
-				Message: msg,
-				Error:   msg,
-			}))
-			return
-		}
 		c.JSON(http.StatusUnauthorized, gin.H{"error": msg})
 		return
 	}
 
 	progress := s.sync.GetProgress()
 	if progress.Running {
-		if c.GetHeader("HX-Request") == "true" {
-			c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(progress))
-			return
-		}
 		c.JSON(http.StatusConflict, gin.H{"error": "sync already running"})
 		return
 	}
@@ -834,39 +821,7 @@ func (s *Server) triggerSync(c *gin.Context, mode library.SyncMode) {
 		webLog.Info().Int("added", added).Str("mode", string(mode)).Msg("manual sync complete")
 	}()
 
-	if c.GetHeader("HX-Request") == "true" {
-		started := s.sync.GetProgress()
-		c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(started))
-		return
-	}
 	c.JSON(http.StatusAccepted, gin.H{"status": "started", "mode": string(mode)})
-}
-
-// syncStatusData converts a SyncProgress into template data.
-func (s *Server) syncStatusData(progress library.SyncProgress) gin.H {
-	data := gin.H{
-		"Running":      progress.Running,
-		"Mode":         string(progress.Mode),
-		"Status":       progress.Status,
-		"Message":      progress.Message,
-		"Error":        progress.Error,
-		"BooksFound":   progress.BooksFound,
-		"BooksScanned": progress.BooksScanned,
-		"BooksAdded":   progress.BooksAdded,
-		"FilesFound":   progress.FilesFound,
-		"PlexItems":    progress.PlexItems,
-		"PlexScanned":  progress.PlexScanned,
-		"Percent":      progress.Percent(),
-		"Phases":       progress.Phases,
-		"CurrentPhase": string(progress.CurrentPhase),
-	}
-	return data
-}
-
-// handleSyncStatus renders sync progress for HTMX polling.
-func (s *Server) handleSyncStatus(c *gin.Context) {
-	progress := s.sync.GetProgress()
-	c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(progress))
 }
 
 // plexQueryForSync is the callback used by SyncService to query Plex item count.
@@ -979,19 +934,10 @@ func (s *Server) handleRetryAllDownloads(c *gin.Context) {
 	count, err := s.db.RetryAllDownloads(ctx)
 	if err != nil {
 		webLog.Error().Err(err).Msg("failed to retry all downloads")
-		if c.GetHeader("HX-Request") == "true" {
-			c.HTML(http.StatusOK, "sync_status.html", gin.H{"Message": "Retry failed: " + err.Error()})
-			return
-		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	msg := fmt.Sprintf("%d failed downloads re-queued.", count)
-	if c.GetHeader("HX-Request") == "true" {
-		c.HTML(http.StatusOK, "sync_status.html", gin.H{"Message": msg})
-		return
-	}
 	c.JSON(http.StatusOK, gin.H{"retried": count})
 }
 
