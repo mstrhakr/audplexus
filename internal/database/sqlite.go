@@ -71,7 +71,8 @@ func (s *SQLiteDB) GetBook(ctx context.Context, id int64) (*Book, error) {
 	return s.scanBook(s.db.QueryRowContext(ctx,
 		`SELECT id, asin, title, author, author_asin, narrator, publisher, description,
 		        duration, series, series_position, cover_url, purchase_date, release_date,
-		        drm_type, status, file_path, file_size, created_at, updated_at
+		        drm_type, status, file_path, file_size, plex_rating_key, plex_title,
+		        created_at, updated_at
 		 FROM books WHERE id = ?`, id))
 }
 
@@ -79,7 +80,8 @@ func (s *SQLiteDB) GetBookByASIN(ctx context.Context, asin string) (*Book, error
 	return s.scanBook(s.db.QueryRowContext(ctx,
 		`SELECT id, asin, title, author, author_asin, narrator, publisher, description,
 		        duration, series, series_position, cover_url, purchase_date, release_date,
-		        drm_type, status, file_path, file_size, created_at, updated_at
+		        drm_type, status, file_path, file_size, plex_rating_key, plex_title,
+		        created_at, updated_at
 		 FROM books WHERE asin = ?`, asin))
 }
 
@@ -115,7 +117,8 @@ func (s *SQLiteDB) ListBooks(ctx context.Context, filter BookFilter) ([]Book, in
 
 	query := `SELECT id, asin, title, author, author_asin, narrator, publisher, description,
 	                 duration, series, series_position, cover_url, purchase_date, release_date,
-	                 drm_type, status, file_path, file_size, created_at, updated_at
+	                 drm_type, status, file_path, file_size, plex_rating_key, plex_title,
+	                 created_at, updated_at
 	          FROM books` + where + orderBy + limit + offset
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -173,6 +176,13 @@ func (s *SQLiteDB) UpdateBookStatus(ctx context.Context, id int64, status BookSt
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE books SET status = ?, updated_at = ? WHERE id = ?`,
 		status, time.Now(), id)
+	return err
+}
+
+func (s *SQLiteDB) UpdateBookPlexInfo(ctx context.Context, id int64, plexRatingKey, plexTitle string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE books SET plex_rating_key = ?, plex_title = ?, updated_at = ? WHERE id = ?`,
+		plexRatingKey, plexTitle, time.Now(), id)
 	return err
 }
 
@@ -446,7 +456,8 @@ func (s *SQLiteDB) scanBook(row *sql.Row) (*Book, error) {
 	err := row.Scan(&b.ID, &b.ASIN, &b.Title, &b.Author, &b.AuthorASIN, &b.Narrator,
 		&b.Publisher, &b.Description, &b.Duration, &b.Series, &b.SeriesPosition,
 		&b.CoverURL, &b.PurchaseDate, &b.ReleaseDate, &b.DRMType, &b.Status,
-		&b.FilePath, &b.FileSize, &b.CreatedAt, &b.UpdatedAt)
+		&b.FilePath, &b.FileSize, &b.PlexRatingKey, &b.PlexTitle,
+		&b.CreatedAt, &b.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -461,7 +472,8 @@ func (s *SQLiteDB) scanBookRow(rows *sql.Rows) (*Book, error) {
 	err := rows.Scan(&b.ID, &b.ASIN, &b.Title, &b.Author, &b.AuthorASIN, &b.Narrator,
 		&b.Publisher, &b.Description, &b.Duration, &b.Series, &b.SeriesPosition,
 		&b.CoverURL, &b.PurchaseDate, &b.ReleaseDate, &b.DRMType, &b.Status,
-		&b.FilePath, &b.FileSize, &b.CreatedAt, &b.UpdatedAt)
+		&b.FilePath, &b.FileSize, &b.PlexRatingKey, &b.PlexTitle,
+		&b.CreatedAt, &b.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("scan book row: %w", err)
 	}

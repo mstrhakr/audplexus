@@ -31,11 +31,12 @@ const (
 type SyncPhase string
 
 const (
-	PhaseAudibleSync   SyncPhase = "audible_sync"
-	PhaseFileScan      SyncPhase = "file_scan"
-	PhasePlexQuery     SyncPhase = "plex_query"
-	PhasePlexScan      SyncPhase = "plex_scan"
-	PhaseDownloadQueue SyncPhase = "download_queue"
+	PhaseAudibleSync    SyncPhase = "audible_sync"
+	PhaseFileScan       SyncPhase = "file_scan"
+	PhasePlexQuery      SyncPhase = "plex_query"
+	PhasePlexScan       SyncPhase = "plex_scan"
+	PhaseCollectionSync SyncPhase = "collection_sync"
+	PhaseDownloadQueue  SyncPhase = "download_queue"
 )
 
 // PhaseStatus tracks the state of a single sync phase.
@@ -99,6 +100,7 @@ func (p SyncProgress) Percent() float64 {
 // This avoids importing web-layer Plex code into the library package.
 type PlexScanFunc func(ctx context.Context) (plexItemCount int, err error)
 type PlexTriggerScanFunc func(ctx context.Context) error
+type PlexReconcileFunc func(ctx context.Context, progressFn func(current, total int)) error
 
 // SyncEvent is emitted via SSE whenever sync progress changes.
 type SyncEvent struct {
@@ -126,8 +128,9 @@ type SyncService struct {
 	libraryDir string
 
 	// Plex callbacks (set by web layer after construction)
-	plexQueryFunc PlexScanFunc
-	plexScanFunc  PlexTriggerScanFunc
+	plexQueryFunc     PlexScanFunc
+	plexScanFunc      PlexTriggerScanFunc
+	plexReconcileFunc PlexReconcileFunc
 
 	mu       sync.RWMutex
 	progress SyncProgress
@@ -155,6 +158,11 @@ func NewSyncService(db database.Database, client *audible.Client, libraryDir str
 func (s *SyncService) SetPlexCallbacks(queryFn PlexScanFunc, scanFn PlexTriggerScanFunc) {
 	s.plexQueryFunc = queryFn
 	s.plexScanFunc = scanFn
+}
+
+// SetPlexReconcileCallback registers the Plex reconciliation function.
+func (s *SyncService) SetPlexReconcileCallback(fn PlexReconcileFunc) {
+	s.plexReconcileFunc = fn
 }
 
 // Subscribe returns a channel that receives sync progress events and an ID to unsubscribe.
@@ -366,6 +374,21 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 		}
 	}
 
+	// --- Phase 5: Collection Sync (full sync only) ---
+	if mode == SyncModeFull && s.plexReconcileFunc != nil {
+		s.setPhase(PhaseCollectionSync, "running", "Reconciling Plex collections...")
+		reconcileErr := s.plexReconcileFunc(ctx, func(current, total int) {
+			s.updatePhaseProgress(PhaseCollectionSync, current, total, false)
+		})
+		if reconcileErr != nil {
+			s.setPhase(PhaseCollectionSync, "failed", reconcileErr.Error())
+			syncLog.Warn().Err(reconcileErr).Msg("collection sync phase failed")
+		} else {
+			s.setPhase(PhaseCollectionSync, "complete", "Collections verified")
+			syncLog.Info().Msg("plex collection sync complete")
+		}
+	}
+
 	// --- Finalize ---
 	finished := time.Now()
 	syncRecord.CompletedAt = &finished
@@ -417,6 +440,7 @@ func (s *SyncService) buildPhases(mode SyncMode, prev []PhaseStatus) []PhaseStat
 			defaultPhase(PhaseFileScan, "File System Scan"),
 			defaultPhase(PhasePlexQuery, "Plex Library Query"),
 			defaultPhase(PhasePlexScan, "Plex Scan"),
+			defaultPhase(PhaseCollectionSync, "Collection Sync"),
 		}
 	}
 
@@ -428,6 +452,7 @@ func (s *SyncService) buildPhases(mode SyncMode, prev []PhaseStatus) []PhaseStat
 		{name: PhaseFileScan, label: "File System Scan"},
 		{name: PhasePlexQuery, label: "Plex Library Query"},
 		{name: PhasePlexScan, label: "Plex Scan"},
+		{name: PhaseCollectionSync, label: "Collection Sync"},
 	} {
 		if prevPhase, ok := findPrev(phase.name); ok {
 			phases = append(phases, prevPhase)

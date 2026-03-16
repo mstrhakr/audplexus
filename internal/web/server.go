@@ -97,6 +97,9 @@ func NewServer(
 
 	// Wire up Plex callbacks so sync can query/trigger Plex without importing web.
 	syncSvc.SetPlexCallbacks(s.plexQueryForSync, s.plexTriggerScanForSync)
+	syncSvc.SetPlexReconcileCallback(func(ctx context.Context, progressFn func(current, total int)) error {
+		return dlMgr.ReconcilePlexLibrary(ctx, progressFn)
+	})
 
 	s.setupTemplates()
 	s.setupRoutes()

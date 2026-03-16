@@ -23,6 +23,8 @@ type Book struct {
 	Status         BookStatus `json:"status"`
 	FilePath       string     `json:"file_path"`
 	FileSize       int64      `json:"file_size"`
+	PlexRatingKey  string     `json:"plex_rating_key"`
+	PlexTitle      string     `json:"plex_title"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
