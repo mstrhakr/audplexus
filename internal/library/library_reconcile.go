@@ -92,7 +92,7 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 	matchedFiles := make(map[string]struct{}) // files that were matched to a book
 	updated := 0
 
-	totalWork := len(books) + 1 // books to reconcile + final cleanup
+	totalWork := len(books) // progress counters should represent books only
 	processed := 0
 
 	// For each book, find its best matching file on disk
@@ -149,11 +149,6 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 		// 3. Create database entries for truly orphaned files
 		// For now, just track that they exist
 		syncLog.Info().Int("count", unmatchedCount).Msg("found unmatched audio files in library (not matched to any database book)")
-	}
-
-	processed++
-	if onProgress != nil {
-		onProgress(processed, totalWork)
 	}
 
 	return updated, nil

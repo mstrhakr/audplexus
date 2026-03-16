@@ -29,8 +29,12 @@
 				{{if .Message}}
 				<span class="phase-detail{{if eq .Status "failed"}} error{{end}}">{{.Message}}</span>
 				{{end}}
-				{{if gt .Total 0}}
-				<span class="phase-count">{{.Current}} / {{.Total}}</span>
+				{{if gt .DisplayTotal 0}}
+				<span class="phase-count">{{.DisplayCurrent}} / {{.DisplayTotal}}</span>
+				{{else}}
+					{{if gt .Total 0}}
+					<span class="phase-count">{{.Current}} / {{.Total}}</span>
+					{{end}}
 				{{end}}
 				{{if not $.Running}}
 				<button class="phase-run-btn" hx-post="/api/sync/phase/{{.Name}}" hx-target="closest .sync-status-wrap" hx-swap="innerHTML" title="Run {{.Label}}">&#9654;</button>

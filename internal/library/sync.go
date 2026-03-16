@@ -61,17 +61,19 @@ func phaseLabel(phase SyncPhase) string {
 
 // PhaseStatus tracks the state of a single sync phase.
 type PhaseStatus struct {
-	Name          SyncPhase `json:"name"`
-	Label         string    `json:"label"`
-	Status        string    `json:"status"` // "pending", "running", "complete", "failed", "skipped"
-	Message       string    `json:"message,omitempty"`
-	Error         string    `json:"error,omitempty"`
-	Current       int       `json:"current,omitempty"`
-	Total         int       `json:"total,omitempty"`
-	Percent       float64   `json:"percent,omitempty"`
-	Indeterminate bool      `json:"indeterminate,omitempty"`
-	StartedAt     time.Time `json:"started_at,omitempty"`
-	EndedAt       time.Time `json:"ended_at,omitempty"`
+	Name           SyncPhase `json:"name"`
+	Label          string    `json:"label"`
+	Status         string    `json:"status"` // "pending", "running", "complete", "failed", "skipped"
+	Message        string    `json:"message,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	Current        int       `json:"current,omitempty"`
+	Total          int       `json:"total,omitempty"`
+	DisplayCurrent int       `json:"display_current,omitempty"`
+	DisplayTotal   int       `json:"display_total,omitempty"`
+	Percent        float64   `json:"percent,omitempty"`
+	Indeterminate  bool      `json:"indeterminate,omitempty"`
+	StartedAt      time.Time `json:"started_at,omitempty"`
+	EndedAt        time.Time `json:"ended_at,omitempty"`
 }
 
 // SyncProgress tracks the current state of a library sync.
@@ -381,8 +383,11 @@ func (s *SyncService) RunPhase(ctx context.Context, phase SyncPhase) error {
 		if s.plexReconcileFunc == nil {
 			phaseErr = fmt.Errorf("Plex not configured")
 		} else {
+			completeStatus := database.BookStatusComplete
+			_, completeCount, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
 			err := s.plexReconcileFunc(ctx, func(current, total int) {
-				s.updatePhaseProgress(PhaseCollectionSync, current, total, false)
+				displayCurrent := scaleProgress(current, total, completeCount)
+				s.updatePhaseProgressWithDisplay(PhaseCollectionSync, current, total, false, displayCurrent, completeCount)
 			})
 			if err != nil {
 				phaseErr = err
@@ -546,8 +551,11 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 	// --- Phase 5: Collection Sync (full sync only) ---
 	if mode == SyncModeFull && s.plexReconcileFunc != nil {
 		s.setPhase(PhaseCollectionSync, "running", "Reconciling Plex collections...")
+		completeStatus := database.BookStatusComplete
+		_, completeCount, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
 		reconcileErr := s.plexReconcileFunc(ctx, func(current, total int) {
-			s.updatePhaseProgress(PhaseCollectionSync, current, total, false)
+			displayCurrent := scaleProgress(current, total, completeCount)
+			s.updatePhaseProgressWithDisplay(PhaseCollectionSync, current, total, false, displayCurrent, completeCount)
 		})
 		if reconcileErr != nil {
 			s.setPhase(PhaseCollectionSync, "failed", reconcileErr.Error())
@@ -705,15 +713,59 @@ func (s *SyncService) setPhase(phase SyncPhase, status, message string) {
 }
 
 func (s *SyncService) updatePhaseProgress(phase SyncPhase, current, total int, indeterminate bool) {
+	s.updatePhaseProgressWithDisplay(phase, current, total, indeterminate, current, total)
+}
+
+func (s *SyncService) updatePhaseProgressWithDisplay(phase SyncPhase, current, total int, indeterminate bool, displayCurrent, displayTotal int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.progress.Phases {
 		if s.progress.Phases[i].Name == phase {
 			setPhaseProgress(&s.progress.Phases[i], current, total, indeterminate, s.progress.Phases[i].Status)
+			setPhaseDisplayProgress(&s.progress.Phases[i], displayCurrent, displayTotal)
 			break
 		}
 	}
 	s.emitLocked()
+}
+
+func setPhaseDisplayProgress(phase *PhaseStatus, current, total int) {
+	if current < 0 {
+		current = 0
+	}
+	if total < 0 {
+		total = 0
+	}
+	if total > 0 && current > total {
+		current = total
+	}
+
+	phase.DisplayCurrent = current
+	phase.DisplayTotal = total
+}
+
+func scaleProgress(current, total, targetTotal int) int {
+	if targetTotal <= 0 {
+		return 0
+	}
+	if total <= 0 {
+		return 0
+	}
+	if current <= 0 {
+		return 0
+	}
+	if current >= total {
+		return targetTotal
+	}
+
+	scaled := int((float64(current) / float64(total)) * float64(targetTotal))
+	if scaled < 0 {
+		return 0
+	}
+	if scaled > targetTotal {
+		return targetTotal
+	}
+	return scaled
 }
 
 func setPhaseProgress(phase *PhaseStatus, current, total int, indeterminate bool, status string) {
