@@ -249,6 +249,7 @@ func (s *Server) setupRoutes() {
 		api.POST("/sync/quick", s.handleQuickSyncTrigger)
 		api.POST("/sync/full", s.handleFullSyncTrigger)
 		api.POST("/sync/retry", s.handleSyncRetry)
+		api.POST("/sync/phase/:phase", s.handleRunPhase)
 		api.GET("/sync/status", s.handleSyncStatus)
 		api.GET("/dashboard/summary", s.handleDashboardSummary)
 		api.GET("/dashboard/downloads", s.handleDashboardDownloads)
@@ -849,6 +850,10 @@ func (s *Server) triggerSync(c *gin.Context, mode library.SyncMode) {
 
 // syncStatusData converts a SyncProgress into template data.
 func (s *Server) syncStatusData(progress library.SyncProgress) gin.H {
+	phases := progress.Phases
+	if len(phases) == 0 {
+		phases = library.DefaultFullPhases()
+	}
 	data := gin.H{
 		"Running":      progress.Running,
 		"Mode":         string(progress.Mode),
@@ -862,10 +867,77 @@ func (s *Server) syncStatusData(progress library.SyncProgress) gin.H {
 		"PlexItems":    progress.PlexItems,
 		"PlexScanned":  progress.PlexScanned,
 		"Percent":      progress.Percent(),
-		"Phases":       progress.Phases,
+		"Phases":       phases,
 		"CurrentPhase": string(progress.CurrentPhase),
 	}
 	return data
+}
+
+// handleRunPhase triggers a single sync phase.
+func (s *Server) handleRunPhase(c *gin.Context) {
+	phaseName := c.Param("phase")
+	phase := library.SyncPhase(phaseName)
+
+	// Validate phase name
+	valid := false
+	for _, p := range library.DefaultFullPhases() {
+		if p.Name == phase {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		if c.GetHeader("HX-Request") == "true" {
+			c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(library.SyncProgress{
+				Status: "failed", Message: "Unknown phase", Error: "Unknown phase: " + phaseName,
+			}))
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid phase"})
+		return
+	}
+
+	// Audible sync requires authentication
+	if phase == library.PhaseAudibleSync && !s.audible.IsAuthenticated() {
+		msg := "Not authenticated \u2014 please sign in on the Settings page first."
+		if c.GetHeader("HX-Request") == "true" {
+			c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(library.SyncProgress{
+				Status: "failed", Message: msg, Error: msg,
+			}))
+			return
+		}
+		c.JSON(http.StatusUnauthorized, gin.H{"error": msg})
+		return
+	}
+
+	progress := s.sync.GetProgress()
+	if progress.Running {
+		if c.GetHeader("HX-Request") == "true" {
+			c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(progress))
+			return
+		}
+		c.JSON(http.StatusConflict, gin.H{"error": "sync already running"})
+		return
+	}
+
+	go func() {
+		err := s.sync.RunPhase(context.Background(), phase)
+		if err != nil {
+			if errors.Is(err, library.ErrSyncInProgress) {
+				return
+			}
+			webLog.Error().Err(err).Str("phase", phaseName).Msg("single phase run failed")
+			return
+		}
+		webLog.Info().Str("phase", phaseName).Msg("single phase run complete")
+	}()
+
+	if c.GetHeader("HX-Request") == "true" {
+		started := s.sync.GetProgress()
+		c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(started))
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"status": "started", "phase": phaseName})
 }
 
 // handleSyncStatus renders sync progress for HTMX polling.

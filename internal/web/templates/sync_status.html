@@ -1,9 +1,22 @@
 {{define "sync_status.html"}}
-{{if .Running}}
 <div class="sync-status-container">
+	{{if .Running}}
 	<div class="sync-header">
 		<span class="status-msg sync-running">{{if eq .Mode "quick"}}Quick{{else}}Full{{end}} sync in progress</span>
 	</div>
+	{{else if eq .Status "failed"}}
+	<div class="sync-header">
+		<span class="status-msg error">Sync failed{{if .Error}}: {{.Error}}{{end}}</span>
+	</div>
+	{{else if eq .Status "partial"}}
+	<div class="sync-header">
+		<span class="status-msg warning">Sync finished with errors</span>
+	</div>
+	{{else if eq .Status "complete"}}
+	<div class="sync-header">
+		<span class="status-msg success">{{if .Message}}{{.Message}}{{else}}Sync complete{{end}}</span>
+	</div>
+	{{end}}
 	{{if .Phases}}
 	<div class="sync-phases">
 		{{range .Phases}}
@@ -19,6 +32,9 @@
 				{{if gt .Total 0}}
 				<span class="phase-count">{{.Current}} / {{.Total}}</span>
 				{{end}}
+				{{if not $.Running}}
+				<button class="phase-run-btn" hx-post="/api/sync/phase/{{.Name}}" hx-target="closest .sync-status-wrap" hx-swap="innerHTML" title="Run {{.Label}}">&#9654;</button>
+				{{end}}
 			</div>
 			{{if and .Indeterminate (eq .Status "running")}}
 			<div class="phase-progress-track indeterminate"><div class="phase-progress-fill"></div></div>
@@ -30,78 +46,4 @@
 	</div>
 	{{end}}
 </div>
-{{else if eq .Status "failed"}}
-<div class="sync-status-container">
-	<span class="status-msg error">Sync failed: {{.Error}}</span>
-	{{if .Phases}}
-	<div class="sync-phases">
-		{{range .Phases}}
-		<div id="phase-{{.Name}}" class="sync-phase {{.Status}}">
-			<div class="phase-main">
-				<span class="phase-icon">
-					{{if eq .Status "complete"}}&#10003;{{else if eq .Status "failed"}}&#10007;{{else if eq .Status "running"}}&#9679;{{else if eq .Status "skipped"}}&#8212;{{else}}&#9675;{{end}}
-				</span>
-				<span class="phase-label">{{.Label}}</span>
-				{{if .Message}}
-				<span class="phase-detail{{if eq .Status "failed"}} error{{end}}">{{.Message}}</span>
-				{{end}}
-			</div>
-		</div>
-		{{end}}
-	</div>
-	{{end}}
-	<button hx-post="/api/sync/retry" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-sm btn-danger" style="margin-left:0.5rem">Retry</button>
-</div>
-{{else if eq .Status "partial"}}
-<div class="sync-status-container">
-	<span class="status-msg warning">Sync finished with errors</span>
-	{{if .Phases}}
-	<div class="sync-phases">
-		{{range .Phases}}
-		{{if or (eq .Status "failed") (eq .Status "complete")}}
-		<div id="phase-{{.Name}}" class="sync-phase {{.Status}}">
-			<div class="phase-main">
-				<span class="phase-icon">
-					{{if eq .Status "complete"}}&#10003;{{else if eq .Status "failed"}}&#10007;{{else}}&#9675;{{end}}
-				</span>
-				<span class="phase-label">{{.Label}}</span>
-				{{if .Message}}
-				<span class="phase-detail{{if eq .Status "failed"}} error{{end}}">{{.Message}}</span>
-				{{end}}
-			</div>
-		</div>
-		{{end}}
-		{{end}}
-	</div>
-	{{end}}
-	<button hx-post="/api/sync/retry" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-sm btn-warning" style="margin-left:0.5rem">Retry</button>
-</div>
-{{else if eq .Status "complete"}}
-<div class="sync-status-container">
-	<div class="sync-header">
-		<span class="status-msg success">{{if .Message}}{{.Message}}{{else}}Sync complete{{end}}</span>
-	</div>
-	{{if .Phases}}
-	<div class="sync-phases">
-		{{range .Phases}}
-		{{if or (eq .Status "complete") (eq .Status "skipped")}}
-		<div id="phase-{{.Name}}" class="sync-phase {{.Status}}">
-			<div class="phase-main">
-				<span class="phase-icon">
-					{{if eq .Status "complete"}}&#10003;{{else if eq .Status "skipped"}}&#8212;{{else}}&#9675;{{end}}
-				</span>
-				<span class="phase-label">{{.Label}}</span>
-				{{if .Message}}
-				<span class="phase-detail">{{.Message}}</span>
-				{{end}}
-			</div>
-		</div>
-		{{end}}
-		{{end}}
-	</div>
-	{{end}}
-</div>
-{{else if .Message}}
-<span class="status-msg">{{.Message}}</span>
-{{end}}
 {{end}}

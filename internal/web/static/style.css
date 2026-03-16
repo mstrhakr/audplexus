@@ -406,7 +406,7 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 /* Sync phase indicators */
 .sync-phases {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0.4rem;
     margin: 0.35rem 0;
 }
@@ -461,6 +461,26 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     font-size: 0.65rem;
     white-space: nowrap;
     flex-shrink: 0;
+}
+.phase-run-btn {
+    margin-left: auto;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 0.3rem;
+    font-size: 0.6rem;
+    line-height: 1.4;
+    flex-shrink: 0;
+    transition: color 0.15s, border-color 0.15s;
+}
+.phase-run-btn:hover {
+    color: var(--primary);
+    border-color: var(--primary);
+}
+.phase-count + .phase-run-btn {
+    margin-left: 0.25rem;
 }
 
 .phase-progress-track {

@@ -39,6 +39,26 @@ const (
 	PhaseDownloadQueue  SyncPhase = "download_queue"
 )
 
+// DefaultFullPhases returns the standard set of sync phases in idle state.
+func DefaultFullPhases() []PhaseStatus {
+	return []PhaseStatus{
+		{Name: PhaseAudibleSync, Label: "Audible Library", Status: "idle"},
+		{Name: PhaseFileScan, Label: "File System Scan", Status: "idle"},
+		{Name: PhasePlexQuery, Label: "Plex Library Query", Status: "idle"},
+		{Name: PhasePlexScan, Label: "Plex Scan", Status: "idle"},
+		{Name: PhaseCollectionSync, Label: "Collection Sync", Status: "idle"},
+	}
+}
+
+func phaseLabel(phase SyncPhase) string {
+	for _, p := range DefaultFullPhases() {
+		if p.Name == phase {
+			return p.Label
+		}
+	}
+	return string(phase)
+}
+
 // PhaseStatus tracks the state of a single sync phase.
 type PhaseStatus struct {
 	Name          SyncPhase `json:"name"`
@@ -245,6 +265,155 @@ func (s *SyncService) FullSync(ctx context.Context) (int, error) {
 // Sync is the legacy entry point — runs a full sync to maintain backward compatibility.
 func (s *SyncService) Sync(ctx context.Context) (int, error) {
 	return s.runSync(ctx, SyncModeFull)
+}
+
+// RunPhase runs a single sync phase independently with progress tracking.
+func (s *SyncService) RunPhase(ctx context.Context, phase SyncPhase) error {
+	s.mu.Lock()
+	if s.progress.Running {
+		s.mu.Unlock()
+		return ErrSyncInProgress
+	}
+
+	now := time.Now()
+	// Preserve existing phase states, or use defaults
+	var phases []PhaseStatus
+	if len(s.progress.Phases) > 0 {
+		phases = append([]PhaseStatus(nil), s.progress.Phases...)
+	} else {
+		phases = DefaultFullPhases()
+	}
+	// Reset target phase to pending
+	for i := range phases {
+		if phases[i].Name == phase {
+			phases[i] = PhaseStatus{Name: phase, Label: phases[i].Label, Status: "pending"}
+		}
+	}
+
+	s.progress = SyncProgress{
+		Running:      true,
+		Mode:         SyncModeFull,
+		Status:       "running",
+		Message:      "Running " + phaseLabel(phase) + "...",
+		StartedAt:    now,
+		CurrentPhase: phase,
+		Phases:       phases,
+	}
+	s.emitLocked()
+	s.mu.Unlock()
+
+	s.setPhase(phase, "running", "Running...")
+
+	var phaseErr error
+	switch phase {
+	case PhaseAudibleSync:
+		syncRecord := &database.SyncHistory{StartedAt: now, Status: "running"}
+		_ = s.db.CreateSync(ctx, syncRecord)
+		added, err := s.doAudibleSync(ctx, syncRecord)
+		if err != nil {
+			phaseErr = err
+		} else {
+			s.setPhase(phase, "complete", fmt.Sprintf("%d new books found", added))
+		}
+		finished := time.Now()
+		syncRecord.CompletedAt = &finished
+		syncRecord.BooksAdded = added
+		if phaseErr != nil {
+			syncRecord.Status = "failed"
+			syncRecord.Error = phaseErr.Error()
+		} else {
+			syncRecord.Status = "complete"
+		}
+		_ = s.db.UpdateSync(ctx, syncRecord)
+
+	case PhaseFileScan:
+		lastEmit := 0
+		reconciled, err := reconcileExistingAudiobookFilesWithProgress(ctx, s.db, s.libraryDir, func(processed, total int) {
+			if processed != total && processed-lastEmit < 20 {
+				return
+			}
+			lastEmit = processed
+			s.updatePhaseProgress(PhaseFileScan, processed, total, false)
+		})
+		if err != nil {
+			phaseErr = err
+		} else {
+			s.mu.Lock()
+			s.progress.FilesFound = reconciled
+			s.emitLocked()
+			s.mu.Unlock()
+			s.setPhase(phase, "complete", fmt.Sprintf("%d files reconciled", reconciled))
+		}
+
+	case PhasePlexQuery:
+		if s.plexQueryFunc == nil {
+			phaseErr = fmt.Errorf("Plex not configured")
+		} else {
+			items, err := s.plexQueryFunc(ctx)
+			if err != nil {
+				phaseErr = err
+			} else {
+				s.mu.Lock()
+				s.progress.PlexItems = items
+				s.emitLocked()
+				s.mu.Unlock()
+				s.setPhase(phase, "complete", fmt.Sprintf("%d items in Plex", items))
+			}
+		}
+
+	case PhasePlexScan:
+		if s.plexScanFunc == nil {
+			phaseErr = fmt.Errorf("Plex not configured")
+		} else {
+			err := s.plexScanFunc(ctx)
+			if err != nil {
+				phaseErr = err
+			} else {
+				s.mu.Lock()
+				s.progress.PlexScanned = true
+				s.emitLocked()
+				s.mu.Unlock()
+				s.setPhase(phase, "complete", "Plex scan triggered")
+			}
+		}
+
+	case PhaseCollectionSync:
+		if s.plexReconcileFunc == nil {
+			phaseErr = fmt.Errorf("Plex not configured")
+		} else {
+			err := s.plexReconcileFunc(ctx, func(current, total int) {
+				s.updatePhaseProgress(PhaseCollectionSync, current, total, false)
+			})
+			if err != nil {
+				phaseErr = err
+			} else {
+				s.setPhase(phase, "complete", "Collections verified")
+			}
+		}
+
+	default:
+		phaseErr = fmt.Errorf("unknown phase: %s", phase)
+	}
+
+	if phaseErr != nil {
+		s.setPhase(phase, "failed", phaseErr.Error())
+	}
+
+	s.mu.Lock()
+	s.progress.Running = false
+	s.progress.CompletedAt = time.Now()
+	if phaseErr != nil {
+		s.progress.Status = "partial"
+		s.progress.Message = phaseLabel(phase) + " failed"
+		s.progress.Error = phaseErr.Error()
+	} else {
+		s.progress.Status = "complete"
+		s.progress.Message = phaseLabel(phase) + " complete"
+	}
+	s.emitLocked()
+	s.mu.Unlock()
+
+	return phaseErr
 }
 
 func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {

@@ -153,6 +153,9 @@
                 html += '<span class="phase-detail' + detailClass + '">' + p.message + '</span>';
             }
             if ((p.total || 0) > 0) html += '<span class="phase-count">' + (p.current || 0) + ' / ' + p.total + '</span>';
+            if (opts.showRunBtn) {
+                html += '<button class="phase-run-btn" hx-post="/api/sync/phase/' + p.name + '" hx-target="closest .sync-status-wrap" hx-swap="innerHTML" title="Run ' + (p.label || '') + '">&#9654;</button>';
+            }
             html += '</div>';
 
             if (p.indeterminate && p.status === 'running') {
@@ -166,35 +169,71 @@
             return html;
         }
 
+        function buildSyncHTML(d, showRunBtn) {
+            var headerMsg = '';
+            var headerClass = '';
+            if (d.running) {
+                var modeLabel = d.mode === 'quick' ? 'Quick' : 'Full';
+                headerMsg = modeLabel + ' sync in progress';
+                headerClass = 'sync-running';
+            } else if (d.status === 'failed') {
+                headerMsg = 'Sync failed' + (d.error ? ': ' + d.error : '');
+                headerClass = 'error';
+            } else if (d.status === 'partial') {
+                headerMsg = 'Sync finished with errors';
+                headerClass = 'warning';
+            } else if (d.status === 'complete') {
+                headerMsg = d.message || 'Sync complete';
+                headerClass = 'success';
+            }
+
+            var html = '<div class="sync-status-container">';
+            if (headerMsg) {
+                html += '<div class="sync-header"><span class="status-msg ' + headerClass + '">' + headerMsg + '</span></div>';
+            }
+            if (d.phases && d.phases.length > 0) {
+                html += '<div class="sync-phases">';
+                for (var i = 0; i < d.phases.length; i++) {
+                    html += renderSyncPhase(d.phases[i], { id: 'phase-' + d.phases[i].name, showRunBtn: showRunBtn });
+                }
+                html += '</div>';
+            }
+            html += '</div>';
+            return html;
+        }
+
         function onSyncEvent(e) {
             var d = JSON.parse(e.data);
             var el = document.getElementById('sync-status');
             if (!el) return;
 
             if (d.running) {
-                var modeLabel = d.mode === 'quick' ? 'Quick' : 'Full';
+                // During running state: update individual phases for smooth progress
                 var phasesEl = el.querySelector('.sync-phases');
-                
-                // Initialize container and phases div if not present
                 if (!phasesEl) {
-                    var html = '<div class="sync-status-container">';
-                    html += '<div class="sync-header"><span class="status-msg sync-running">' + modeLabel + ' sync in progress</span></div>';
-                    html += '<div class="sync-phases"></div></div>';
-                    el.innerHTML = html;
-                    phasesEl = el.querySelector('.sync-phases');
+                    el.innerHTML = buildSyncHTML(d, false);
+                    return;
                 }
-                
-                // Update header mode label
-                var header = el.querySelector('.status-msg.sync-running');
-                if (header) header.textContent = modeLabel + ' sync in progress';
-                
+
+                // Update header
+                var header = el.querySelector('.status-msg');
+                if (header) {
+                    var modeLabel = d.mode === 'quick' ? 'Quick' : 'Full';
+                    header.className = 'status-msg sync-running';
+                    header.textContent = modeLabel + ' sync in progress';
+                }
+
+                // Remove any run buttons during active sync
+                var btns = el.querySelectorAll('.phase-run-btn');
+                for (var b = 0; b < btns.length; b++) btns[b].remove();
+
                 // Update or add each phase
                 if (d.phases && d.phases.length > 0) {
                     for (var i = 0; i < d.phases.length; i++) {
                         var p = d.phases[i];
                         var phaseId = 'phase-' + p.name;
                         var phaseEl = phasesEl.querySelector('[id="' + phaseId + '"]');
-                        var phaseHTML = renderSyncPhase(p, { id: phaseId });
+                        var phaseHTML = renderSyncPhase(p, { id: phaseId, showRunBtn: false });
 
                         if (phaseEl) {
                             phaseEl.outerHTML = phaseHTML;
@@ -203,87 +242,10 @@
                         }
                     }
                 }
-            } else if (d.status === 'failed') {
-                var html = '<div class="sync-status-container"><span class="status-msg error">Sync failed: ' + (d.error || '') + '</span>';
-                if (d.phases && d.phases.length > 0) {
-                    html += '<div class="sync-phases">';
-                    for (var i = 0; i < d.phases.length; i++) {
-                        var p = d.phases[i];
-                        html += renderSyncPhase(p, { id: 'phase-' + p.name });
-                    }
-                    html += '</div>';
-                }
-                html += '<button hx-post="/api/sync/retry" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-sm btn-danger" style="margin-left:0.5rem">Retry</button></div>';
-                el.innerHTML = html;
+            } else {
+                // Not running: rebuild full view with run buttons
+                el.innerHTML = buildSyncHTML(d, true);
                 if (window.htmx) htmx.process(el);
-            } else if (d.status === 'partial') {
-                var html = '<div class="sync-status-container"><span class="status-msg warning">Sync finished with errors</span>';
-                if (d.phases && d.phases.length > 0) {
-                    html += '<div class="sync-phases">';
-                    for (var i = 0; i < d.phases.length; i++) {
-                        var p = d.phases[i];
-                        if (p.status === 'failed') {
-                            p.message = p.error || p.message;
-                            html += renderSyncPhase(p, { detailClass: 'error', id: 'phase-' + p.name });
-                        } else if (p.status === 'complete') {
-                            html += renderSyncPhase(p, { id: 'phase-' + p.name });
-                        }
-                    }
-                    html += '</div>';
-                }
-                html += '<button hx-post="/api/sync/retry" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-sm btn-warning" style="margin-left:0.5rem">Retry</button></div>';
-                el.innerHTML = html;
-                if (window.htmx) htmx.process(el);
-            } else if (d.status === 'complete') {
-                var isQuickComplete = d.mode === 'quick';
-                if (isQuickComplete) {
-                    var phasesEl = el.querySelector('.sync-phases');
-                    if (phasesEl) {
-                        var successMsg = d.message || 'Quick sync complete';
-                        var header = el.querySelector('.sync-header .status-msg');
-                        if (!header) {
-                            var statusContainer = el.querySelector('.sync-status-container') || el;
-                            var headerWrap = document.createElement('div');
-                            headerWrap.className = 'sync-header';
-                            headerWrap.innerHTML = '<span class="status-msg success"></span>';
-                            statusContainer.insertBefore(headerWrap, statusContainer.firstChild);
-                            header = headerWrap.querySelector('.status-msg');
-                        }
-                        header.className = 'status-msg success';
-                        header.textContent = successMsg;
-
-                        if (d.phases && d.phases.length > 0) {
-                            for (var i = 0; i < d.phases.length; i++) {
-                                var p = d.phases[i];
-                                var phaseId = 'phase-' + p.name;
-                                var phaseEl = phasesEl.querySelector('[id="' + phaseId + '"]');
-                                var phaseHTML = renderSyncPhase(p, { id: phaseId });
-                                if (phaseEl) {
-                                    phaseEl.outerHTML = phaseHTML;
-                                } else {
-                                    phasesEl.insertAdjacentHTML('beforeend', phaseHTML);
-                                }
-                            }
-                        }
-                        return;
-                    }
-                }
-
-                var html = '<div class="sync-status-container"><div class="sync-header"><span class="status-msg success">' + (d.message || 'Sync complete') + '</span></div>';
-                if (d.phases && d.phases.length > 0) {
-                    html += '<div class="sync-phases">';
-                    for (var i = 0; i < d.phases.length; i++) {
-                        var p = d.phases[i];
-                        if (p.status === 'complete') {
-                            html += renderSyncPhase(p, { id: 'phase-' + p.name });
-                        } else if (p.status === 'skipped') {
-                            html += renderSyncPhase(p, { id: 'phase-' + p.name });
-                        }
-                    }
-                    html += '</div>';
-                }
-                html += '</div>';
-                el.innerHTML = html;
             }
         }
 

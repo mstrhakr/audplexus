@@ -19,7 +19,7 @@
 </div>
 
 <div class="sync-status-row">
-    <span id="sync-status" hx-get="/api/sync/status" hx-trigger="load" hx-swap="innerHTML"></span>
+    <span id="sync-status" class="sync-status-wrap" hx-get="/api/sync/status" hx-trigger="load" hx-swap="innerHTML"></span>
 </div>
 
 <div id="dashboard-summary" hx-get="/api/dashboard/summary" hx-trigger="load, every 12s queue:last" hx-swap="innerHTML">

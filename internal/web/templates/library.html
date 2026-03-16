@@ -5,7 +5,7 @@
     <button hx-post="/api/sync" hx-target="#library-sync-status" hx-swap="innerHTML" class="btn btn-primary">
         Sync Library
     </button>
-    <span id="library-sync-status" hx-get="/api/sync/status" hx-trigger="load, every 5s" hx-swap="innerHTML"></span>
+    <span id="library-sync-status" class="sync-status-wrap" hx-get="/api/sync/status" hx-trigger="load, every 5s" hx-swap="innerHTML"></span>
 </div>
 
 <div class="search-bar">
