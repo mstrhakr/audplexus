@@ -69,7 +69,7 @@ func (dm *DownloadManager) addBookToSeriesCollection(series, bookTitle string) {
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
 		plexURL, plexToken, sectionID := dm.getPlexScanSettings(ctx)
@@ -77,10 +77,17 @@ func (dm *DownloadManager) addBookToSeriesCollection(series, bookTitle string) {
 			return
 		}
 
-		// Wait briefly for Plex to index the newly scanned book.
-		time.Sleep(5 * time.Second)
+		// Poll Plex until the album appears (Plex needs time to index after scan).
+		albumKey, err := dm.waitForPlexAlbum(ctx, plexURL, plexToken, sectionID, bookTitle)
+		if err != nil {
+			dlLog.Warn().Err(err).
+				Str("series", series).
+				Str("book", bookTitle).
+				Msg("failed to add book to plex series collection")
+			return
+		}
 
-		if err := dm.ensureBookInCollection(ctx, plexURL, plexToken, sectionID, series, bookTitle); err != nil {
+		if err := dm.ensureBookInCollectionWithKey(ctx, plexURL, plexToken, sectionID, series, albumKey); err != nil {
 			dlLog.Warn().Err(err).
 				Str("series", series).
 				Str("book", bookTitle).
@@ -92,6 +99,39 @@ func (dm *DownloadManager) addBookToSeriesCollection(series, bookTitle string) {
 				Msg("book added to plex series collection")
 		}
 	}()
+}
+
+// waitForPlexAlbum polls Plex until the album appears in the library, returning its ratingKey.
+func (dm *DownloadManager) waitForPlexAlbum(ctx context.Context, plexURL, plexToken, sectionID, bookTitle string) (string, error) {
+	// Initial delay to give Plex a head start on indexing.
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-time.After(5 * time.Second):
+	}
+
+	intervals := []time.Duration{3 * time.Second, 5 * time.Second, 10 * time.Second, 15 * time.Second, 20 * time.Second, 30 * time.Second}
+	var lastErr error
+	for _, wait := range intervals {
+		albumKey, err := dm.plexFindAlbum(ctx, plexURL, plexToken, sectionID, bookTitle)
+		if err == nil {
+			return albumKey, nil
+		}
+		lastErr = err
+		dlLog.Debug().Str("book", bookTitle).Dur("retry_in", wait).Msg("album not yet in Plex, retrying...")
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+
+	// One final attempt.
+	albumKey, err := dm.plexFindAlbum(ctx, plexURL, plexToken, sectionID, bookTitle)
+	if err == nil {
+		return albumKey, nil
+	}
+	return "", fmt.Errorf("album %q not found in Plex after retries: %w", bookTitle, lastErr)
 }
 
 func (dm *DownloadManager) ensureBookInCollection(ctx context.Context, plexURL, plexToken, sectionID, series, bookTitle string) error {
@@ -114,6 +154,27 @@ func (dm *DownloadManager) ensureBookInCollection(ctx context.Context, plexURL, 
 	}
 
 	// 4. Add the album to the collection.
+	itemURI := fmt.Sprintf("server://%s/com.plexapp.plugins.library/library/metadata/%s", machineID, albumKey)
+	if err := dm.plexAddToCollection(ctx, plexURL, plexToken, collectionID, itemURI); err != nil {
+		return fmt.Errorf("add to collection: %w", err)
+	}
+
+	return nil
+}
+
+// ensureBookInCollectionWithKey is like ensureBookInCollection but uses a pre-resolved albumKey
+// (used when the caller already waited for the album to appear in Plex).
+func (dm *DownloadManager) ensureBookInCollectionWithKey(ctx context.Context, plexURL, plexToken, sectionID, series, albumKey string) error {
+	machineID, err := dm.plexMachineIdentifier(ctx, plexURL, plexToken)
+	if err != nil {
+		return fmt.Errorf("get machine identifier: %w", err)
+	}
+
+	collectionID, err := dm.plexFindOrCreateCollection(ctx, plexURL, plexToken, sectionID, series, machineID)
+	if err != nil {
+		return fmt.Errorf("find/create collection %q: %w", series, err)
+	}
+
 	itemURI := fmt.Sprintf("server://%s/com.plexapp.plugins.library/library/metadata/%s", machineID, albumKey)
 	if err := dm.plexAddToCollection(ctx, plexURL, plexToken, collectionID, itemURI); err != nil {
 		return fmt.Errorf("add to collection: %w", err)
