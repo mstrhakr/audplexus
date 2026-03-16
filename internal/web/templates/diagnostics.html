@@ -209,7 +209,12 @@ async function redownloadBook(asin, title) {
 }
 
 async function redownloadAll() {
-    if (!confirm('Are you sure you want to redownload ALL complete books?\n\nThis will delete existing files and queue fresh downloads for every complete book in your library.')) {
+    if (!diagnosticData || !diagnosticData.items || diagnosticData.items.length === 0) return;
+
+    const asins = diagnosticData.items.filter(i => i.can_redownload).map(i => i.asin);
+    if (asins.length === 0) return;
+
+    if (!confirm('Redownload ' + asins.length + ' book(s) with problems?\n\nThis will delete their existing files and queue fresh downloads.')) {
         return;
     }
     
@@ -218,7 +223,9 @@ async function redownloadAll() {
     
     try {
         const response = await fetch('/api/diagnostics/redownload-all', {
-            method: 'POST'
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ asins: asins })
         });
         
         const data = await response.json();

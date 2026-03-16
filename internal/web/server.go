@@ -1682,21 +1682,32 @@ func (s *Server) handleRedownload(c *gin.Context) {
 	})
 }
 
-// handleDiagnosticsRedownloadAll redownloads all problem books shown on the diagnostics page.
+// handleDiagnosticsRedownloadAll redownloads only the problem books shown on the diagnostics page.
 func (s *Server) handleDiagnosticsRedownloadAll(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	// Get all complete books
-	completeStatus := database.BookStatusComplete
-	books, _, err := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 10000})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load books: " + err.Error()})
+	var req struct {
+		ASINs []string `json:"asins"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.ASINs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no ASINs provided"})
 		return
 	}
 
 	queued := 0
 	var errors []string
-	for _, book := range books {
+	for _, asin := range req.ASINs {
+		asin = strings.TrimSpace(asin)
+		if asin == "" {
+			continue
+		}
+
+		book, err := s.db.GetBookByASIN(ctx, asin)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("%s: not found", asin))
+			continue
+		}
+
 		// Delete old file if it exists
 		if book.FilePath != "" {
 			if err := os.Remove(book.FilePath); err != nil && !os.IsNotExist(err) {
@@ -1715,7 +1726,7 @@ func (s *Server) handleDiagnosticsRedownloadAll(c *gin.Context) {
 		book.Status = database.BookStatusNew
 		book.FilePath = ""
 		book.FileSize = 0
-		if err := s.db.UpsertBook(ctx, &book); err != nil {
+		if err := s.db.UpsertBook(ctx, book); err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", book.ASIN, err))
 			continue
 		}
@@ -1726,7 +1737,7 @@ func (s *Server) handleDiagnosticsRedownloadAll(c *gin.Context) {
 		queued++
 	}
 
-	msg := fmt.Sprintf("Queued %d books for redownload", queued)
+	msg := fmt.Sprintf("Queued %d of %d problem books for redownload", queued, len(req.ASINs))
 	if len(errors) > 0 {
 		msg += fmt.Sprintf(" (%d errors)", len(errors))
 	}
