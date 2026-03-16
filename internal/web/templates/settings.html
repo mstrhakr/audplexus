@@ -357,6 +357,20 @@
     </div>
 </div>
 
+<!-- Restart confirmation modal -->
+<div id="restart-modal" class="modal-overlay restart-modal" style="display:none">
+    <div class="modal-box">
+        <h3>Restart Required</h3>
+        <p>One or more saved settings only apply after a restart.</p>
+        <p class="modal-warn">The service will be briefly unavailable while it restarts.</p>
+        <div class="modal-buttons">
+            <button class="btn btn-outline" type="button" onclick="closeRestartModal()">Later</button>
+            <button class="btn btn-primary" type="button" id="restart-confirm-btn" onclick="confirmRestart()">Restart Now</button>
+        </div>
+        <p id="restart-modal-status" class="modal-note"></p>
+    </div>
+</div>
+
 <!-- Factory Reset confirmation modal -->
 <div id="reset-modal" class="modal-overlay" style="display:none">
     <div class="modal-box">
@@ -408,6 +422,83 @@ function executeReset() {
         headers: { 'HX-Request': 'true' }
     }).then(function() {
         window.location.href = '/settings';
+    });
+}
+
+function openRestartModal() {
+    var modal = document.getElementById('restart-modal');
+    var status = document.getElementById('restart-modal-status');
+    var btn = document.getElementById('restart-confirm-btn');
+    if (status) {
+        status.textContent = '';
+    }
+    if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Restart Now';
+    }
+    if (modal) {
+        modal.style.display = 'flex';
+    }
+}
+
+function closeRestartModal() {
+    var modal = document.getElementById('restart-modal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+function waitForRestartAndReload(attemptsLeft) {
+    if (attemptsLeft <= 0) {
+        window.location.reload();
+        return;
+    }
+
+    fetch('/auth/status', { cache: 'no-store' })
+        .then(function(resp) {
+            if (resp.ok) {
+                window.location.reload();
+                return;
+            }
+            setTimeout(function() {
+                waitForRestartAndReload(attemptsLeft - 1);
+            }, 1200);
+        })
+        .catch(function() {
+            setTimeout(function() {
+                waitForRestartAndReload(attemptsLeft - 1);
+            }, 1200);
+        });
+}
+
+function confirmRestart() {
+    var status = document.getElementById('restart-modal-status');
+    var btn = document.getElementById('restart-confirm-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Restarting...';
+    }
+    if (status) {
+        status.textContent = 'Requesting restart...';
+    }
+
+    fetch('/api/restart', {
+        method: 'POST'
+    }).then(function() {
+        if (status) {
+            status.textContent = 'Restart requested. Waiting for service to come back...';
+        }
+        setTimeout(function() {
+            waitForRestartAndReload(25);
+        }, 1500);
+    }).catch(function() {
+        if (status) {
+            status.textContent = 'Restart request failed. Please try again.';
+        }
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Restart Now';
+        }
     });
 }
 
@@ -859,6 +950,26 @@ function executeReset() {
         display: flex;
         gap: 1rem;
         margin-top: 1rem;
+    }
+
+    .restart-modal .modal-box {
+        border-color: rgba(0, 217, 255, 0.4);
+    }
+
+    .restart-modal .modal-box h3 {
+        color: #00d9ff;
+    }
+
+    .modal-note {
+        min-height: 1.25rem;
+        margin-top: 0.75rem;
+        color: #b7bcc6;
+    }
+
+    .btn-inline {
+        margin-left: 0.75rem;
+        padding: 0.45rem 0.85rem;
+        font-size: 0.9rem;
     }
 
     .reset-input {

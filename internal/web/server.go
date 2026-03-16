@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -265,6 +266,7 @@ func (s *Server) setupRoutes() {
 
 		api.GET("/events", s.handleSSE)
 		api.POST("/settings", s.handleSaveSettings)
+		api.POST("/restart", s.handleRestart)
 		api.GET("/settings/db-backup", s.handleDBBackup)
 		api.POST("/settings/factory-reset", s.handleFactoryReset)
 
@@ -1141,60 +1143,110 @@ func (s *Server) handleSSE(c *gin.Context) {
 // handleSaveSettings saves settings from the settings form.
 func (s *Server) handleSaveSettings(c *gin.Context) {
 	ctx := c.Request.Context()
+	restartRequired := false
+
+	setSetting := func(key, value string) bool {
+		current, _ := s.db.GetSetting(ctx, key)
+		if strings.TrimSpace(current) == value {
+			return false
+		}
+		_ = s.db.SetSetting(ctx, key, value)
+		return true
+	}
 
 	if _, ok := c.GetPostForm("sync_schedule_sent"); ok {
 		schedule := strings.TrimSpace(c.PostForm("sync_schedule"))
-		_ = s.db.SetSetting(ctx, "sync_schedule", schedule)
+		if setSetting("sync_schedule", schedule) {
+			restartRequired = true
+		}
 	}
 	if _, ok := c.GetPostForm("sync_enabled_sent"); ok {
 		enabled := c.PostForm("sync_enabled") == "true"
-		_ = s.db.SetSetting(ctx, "sync_enabled", strconv.FormatBool(enabled))
+		if setSetting("sync_enabled", strconv.FormatBool(enabled)) {
+			restartRequired = true
+		}
 	}
 	if mode := strings.TrimSpace(c.PostForm("sync_mode")); mode != "" {
-		_ = s.db.SetSetting(ctx, "sync_mode", mode)
+		if setSetting("sync_mode", mode) {
+			restartRequired = true
+		}
 	}
 	if format := c.PostForm("output_format"); format != "" {
-		_ = s.db.SetSetting(ctx, "output_format", format)
+		if setSetting("output_format", format) {
+			restartRequired = true
+		}
 	}
 	if _, ok := c.GetPostForm("download_concurrency"); ok {
-		_ = s.db.SetSetting(ctx, "download_concurrency", strings.TrimSpace(c.PostForm("download_concurrency")))
+		if setSetting("download_concurrency", strings.TrimSpace(c.PostForm("download_concurrency"))) {
+			restartRequired = true
+		}
 	}
 	if _, ok := c.GetPostForm("decrypt_concurrency"); ok {
-		_ = s.db.SetSetting(ctx, "decrypt_concurrency", strings.TrimSpace(c.PostForm("decrypt_concurrency")))
+		if setSetting("decrypt_concurrency", strings.TrimSpace(c.PostForm("decrypt_concurrency"))) {
+			restartRequired = true
+		}
 	}
 	if _, ok := c.GetPostForm("process_concurrency"); ok {
-		_ = s.db.SetSetting(ctx, "process_concurrency", strings.TrimSpace(c.PostForm("process_concurrency")))
+		if setSetting("process_concurrency", strings.TrimSpace(c.PostForm("process_concurrency"))) {
+			restartRequired = true
+		}
 	}
 
 	// Boolean toggles: the hidden *_sent field tells us the field was present
 	// in the form, so unchecked = false rather than absent.
 	if _, ok := c.GetPostForm("embed_cover_sent"); ok {
 		v := c.PostForm("embed_cover") == "true"
-		_ = s.db.SetSetting(ctx, "embed_cover", fmt.Sprintf("%t", v))
+		_ = setSetting("embed_cover", fmt.Sprintf("%t", v))
 		s.downloads.SetEmbedCover(v)
 		s.organizer.SetEmbedCover(v)
 	}
 	if _, ok := c.GetPostForm("chapter_file_sent"); ok {
 		v := c.PostForm("chapter_file") == "true"
-		_ = s.db.SetSetting(ctx, "chapter_file", fmt.Sprintf("%t", v))
+		_ = setSetting("chapter_file", fmt.Sprintf("%t", v))
 		s.organizer.SetChapterFile(v)
 	}
 	if _, ok := c.GetPostForm("plexmatch_file_sent"); ok {
 		v := c.PostForm("plexmatch_file") == "true"
-		_ = s.db.SetSetting(ctx, "plexmatch_file", fmt.Sprintf("%t", v))
+		_ = setSetting("plexmatch_file", fmt.Sprintf("%t", v))
 		s.organizer.SetPlexMatchFile(v)
 	}
 
 	if level := c.PostForm("log_level"); level != "" {
-		_ = s.db.SetSetting(ctx, "log_level", level)
+		_ = setSetting("log_level", level)
 		logging.SetLevel(level)
 	}
 
 	if c.GetHeader("HX-Request") == "true" {
-		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": "Settings saved"})
+		msg := "Settings saved"
+		if restartRequired {
+			msg = "Settings saved. Restart required to apply one or more changes."
+		}
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": msg, "RestartRequired": restartRequired})
 		return
 	}
 	c.Redirect(http.StatusSeeOther, "/settings")
+}
+
+// handleRestart requests process shutdown so the container/service can restart it.
+func (s *Server) handleRestart(c *gin.Context) {
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		proc, err := os.FindProcess(os.Getpid())
+		if err != nil {
+			webLog.Error().Err(err).Msg("restart failed: could not find current process")
+			return
+		}
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			webLog.Warn().Err(err).Msg("restart SIGTERM failed, attempting interrupt")
+			_ = proc.Signal(os.Interrupt)
+		}
+	}()
+
+	if c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": "Restarting service..."})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Restarting service"})
 }
 
 // handleDBBackup streams a SQLite database backup as a downloadable file.

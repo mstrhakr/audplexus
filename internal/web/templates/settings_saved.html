@@ -1,3 +1,6 @@
 {{define "settings_saved.html"}}
 <span class="status-msg success">{{.Message}}</span>
+{{if .RestartRequired}}
+<button type="button" class="btn btn-outline btn-inline" onclick="openRestartModal()">Restart now</button>
+{{end}}
 {{end}}
