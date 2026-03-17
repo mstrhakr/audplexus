@@ -1029,7 +1029,7 @@ func convertBook(b audible.Book) database.Book {
 	}
 
 	return database.Book{
-		ASIN:           b.ASIN,
+		ASIN:           b.BestID(),
 		Title:          b.Title,
 		Author:         strings.Join(authors, ", "),
 		AuthorASIN:     authorASIN,
