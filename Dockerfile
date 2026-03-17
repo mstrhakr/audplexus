@@ -4,6 +4,9 @@ FROM golang:alpine AS builder
 # Allow Go to download the required toolchain version
 ENV GOTOOLCHAIN=auto
 
+# Required for direct VCS module resolution fallback.
+RUN apk add --no-cache git
+
 WORKDIR /build
 
 # Copy go module files
