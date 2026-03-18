@@ -43,7 +43,8 @@ func isAudioFile(filename string) bool {
 // audiobook file exists and marks previously complete books as new when the file
 // is missing so they can be re-downloaded.
 func reconcileExistingAudiobookFiles(ctx context.Context, db database.Database, libraryRoot string) (int, error) {
-	return reconcileExistingAudiobookFilesWithProgress(ctx, db, libraryRoot, nil)
+	reconciled, _, err := reconcileExistingAudiobookFilesWithProgress(ctx, db, libraryRoot, nil)
+	return reconciled, err
 }
 
 // reconcileExistingAudiobookFilesWithProgress scans the library directory for all audio files,

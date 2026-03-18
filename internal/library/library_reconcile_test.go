@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -196,6 +197,52 @@ func TestFindBestFileForBookMatchesISBN10WithX(t *testing.T) {
 	}
 }
 
+func TestReconcileExistingAudiobookFilesReturnsFilesWithoutASIN(t *testing.T) {
+	tmp := t.TempDir()
+
+	// Create one valid ASIN path and one file with no identifier.
+	asinPath := filepath.Join(tmp, "Author", "Some Book B0ASIN0001 [us]", "Some Book.m4b")
+	noAsinPath := filepath.Join(tmp, "Author", "Other Book", "Other Book.m4b")
+	if err := os.MkdirAll(filepath.Dir(asinPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(noAsinPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(asinPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(noAsinPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	db := &reconcileMockDB{
+		books: []database.Book{{
+			ASIN:   "B0ASIN0001",
+			Title:  "Some Book",
+			Author: "Author",
+			Status: database.BookStatusNew,
+		}},
+	}
+
+	reconciled, withoutASIN, err := reconcileExistingAudiobookFilesWithProgress(context.Background(), db, tmp, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if withoutASIN != 1 {
+		t.Fatalf("files without ASIN = %d, want %d", withoutASIN, 1)
+	}
+	if reconciled != 1 {
+		t.Fatalf("reconciled = %d, want %d", reconciled, 1)
+	}
+	if db.upserted == nil {
+		t.Fatalf("expected book to be upserted")
+	}
+	if db.upserted.ASIN != "B0ASIN0001" {
+		t.Fatalf("upserted ASIN = %q, want %q", db.upserted.ASIN, "B0ASIN0001")
+	}
+}
+
 func containsPath(paths []string, want string) bool {
 	for _, p := range paths {
 		if p == want {
@@ -207,6 +254,14 @@ func containsPath(paths []string, want string) bool {
 
 type reconcileMockDB struct {
 	upserted *database.Book
+	books    []database.Book
+}
+
+func (m *reconcileMockDB) ListBooks(ctx context.Context, filter database.BookFilter) ([]database.Book, int, error) {
+	if m.books == nil {
+		return nil, 0, nil
+	}
+	return m.books, len(m.books), nil
 }
 
 func (m *reconcileMockDB) Close() error                    { return nil }
