@@ -532,6 +532,11 @@ func (s *Server) plexTriggerSectionScan(ctx context.Context, plexURL, token, sec
 	}
 	defer resp.Body.Close()
 
+	webLog.Debug().
+		Int("status_code", resp.StatusCode).
+		Str("section_id", sectionID).
+		Msg("plex scan trigger response")
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return fmt.Errorf("scan endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))

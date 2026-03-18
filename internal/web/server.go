@@ -991,21 +991,37 @@ func (s *Server) plexSyncForSync(ctx context.Context) (int, error) {
 	}
 
 	// Trigger scan (full section scan)
+	webLog.Debug().Str("section_id", sectionID).Msg("triggering Plex library scan")
 	if err := s.plexTriggerSectionScan(ctx, plexURL, plexToken, sectionID, "", false); err != nil {
 		return 0, fmt.Errorf("failed to trigger Plex scan: %w", err)
 	}
 
-	// Wait for scan completion, then query the library.
+	// Wait for scan to complete (or timeout) before querying library.
+	webLog.Debug().Str("section_id", sectionID).Msg("waiting for Plex scan to complete")
 	if err := s.waitForPlexScanCompletion(ctx, plexURL, plexToken, sectionID, 10*time.Minute); err != nil {
 		return 0, fmt.Errorf("failed waiting for Plex scan to complete: %w", err)
 	}
 
+	webLog.Debug().Str("section_id", sectionID).Msg("Plex scan complete; querying library")
 	return s.plexSectionItemCount(ctx, plexURL, plexToken, sectionID)
 }
 
 func (s *Server) waitForPlexScanCompletion(ctx context.Context, plexURL, token, sectionID string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
+	// Try to find additional identifiers (title/location) for the section.
+	identifiers := []string{strings.TrimSpace(sectionID)}
+	if secTitle, secLoc, err := s.plexSectionIdentifiers(ctx, plexURL, token, sectionID); err == nil {
+		if secTitle != "" {
+			identifiers = append(identifiers, strings.ToLower(secTitle))
+		}
+		if secLoc != "" {
+			identifiers = append(identifiers, strings.ToLower(secLoc))
+		}
+	} else {
+		webLog.Debug().Err(err).Str("section_id", sectionID).Msg("failed to resolve Plex section identifiers")
+	}
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -1016,9 +1032,11 @@ func (s *Server) waitForPlexScanCompletion(ctx context.Context, plexURL, token, 
 		if err != nil {
 			return err
 		}
-		if !isPlexScanActive(activities, sectionID) {
+		if !isPlexScanActive(activities, identifiers) {
 			return nil
 		}
+
+		webLog.Debug().Str("section_id", sectionID).Msg("Plex scan still in progress")
 
 		select {
 		case <-ctx.Done():
@@ -1029,20 +1047,49 @@ func (s *Server) waitForPlexScanCompletion(ctx context.Context, plexURL, token, 
 	}
 }
 
-func isPlexScanActive(activities []plexActivity, sectionID string) bool {
-	sectionID = strings.TrimSpace(sectionID)
+func (s *Server) plexSectionIdentifiers(ctx context.Context, plexURL, token, sectionID string) (title string, location string, err error) {
+	sections, err := s.plexListSections(ctx, plexURL, token)
+	if err != nil {
+		return "", "", err
+	}
+	for _, sec := range sections {
+		if strings.TrimSpace(sec.ID) != strings.TrimSpace(sectionID) {
+			continue
+		}
+		if sec.Title != "" {
+			title = sec.Title
+		}
+		if len(sec.Locations) > 0 {
+			location = sec.Locations[0].Path
+		}
+		break
+	}
+	return title, location, nil
+}
+
+func isPlexScanActive(activities []plexActivity, identifiers []string) bool {
+	// Normalize identifiers for searching
+	norm := make([]string, 0, len(identifiers))
+	for _, id := range identifiers {
+		id = strings.TrimSpace(strings.ToLower(id))
+		if id != "" {
+			norm = append(norm, id)
+		}
+	}
+
 	for _, act := range activities {
 		ltype := strings.ToLower(act.Type)
 		title := strings.ToLower(act.Title)
 		sub := strings.ToLower(act.Subtitle)
 
 		if strings.Contains(ltype, "scan") || strings.Contains(ltype, "refresh") || strings.Contains(title, "scan") || strings.Contains(title, "refresh") || strings.Contains(sub, "scan") || strings.Contains(sub, "refresh") {
-			// If we know the target section, prefer matching it. Otherwise, treat as active.
-			if sectionID != "" && (strings.Contains(title, sectionID) || strings.Contains(sub, sectionID)) {
+			if len(norm) == 0 {
 				return true
 			}
-			if sectionID == "" {
-				return true
+			for _, id := range norm {
+				if strings.Contains(title, id) || strings.Contains(sub, id) {
+					return true
+				}
 			}
 		}
 	}
