@@ -170,6 +170,32 @@ func TestFindBestFileForBookPrefersASINMatch(t *testing.T) {
 	}
 }
 
+func TestFindBestFileForBookMatchesISBN10WithX(t *testing.T) {
+	root := filepath.Join("root")
+	isbnXFile := filepath.Join(root, "Author", "Great Book 103940474X [us]", "Great Book.m4b")
+	discovered := map[string]int64{
+		isbnXFile: 12345,
+	}
+
+	book := &database.Book{
+		ASIN:   "103940474X",
+		Title:  "Great Book",
+		Author: "Author",
+		Status: database.BookStatusNew,
+	}
+
+	matchedPath, matchedSize, matchMethod := findBestFileForBook(context.Background(), book, root, discovered, buildASINFileIndex(discovered))
+	if matchedPath != isbnXFile {
+		t.Fatalf("findBestFileForBook() path = %q, want %q", matchedPath, isbnXFile)
+	}
+	if matchedSize != 12345 {
+		t.Fatalf("findBestFileForBook() size = %d, want %d", matchedSize, 12345)
+	}
+	if matchMethod != "asin_path" {
+		t.Fatalf("findBestFileForBook() matchMethod = %q, want %q", matchMethod, "asin_path")
+	}
+}
+
 func containsPath(paths []string, want string) bool {
 	for _, p := range paths {
 		if p == want {
