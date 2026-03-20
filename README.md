@@ -191,7 +191,7 @@ These scripts will set up the proper build context with both repositories and cr
 
 Files are organized for Plex audiobook libraries:
 
-```
+```text
 /audiobooks/
   Author Name/
     Book Title/
