@@ -836,9 +836,50 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		book := convertBook(item)
 		syncLog.Trace().Str("asin", book.ASIN).Str("title", book.Title).Msg("processing book")
 
-		// Skip items not eligible for local download (e.g. ebook-only or non-owned).
+		existing, err := s.db.GetBookByASIN(ctx, book.ASIN)
+		if err != nil {
+			syncLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to check existing book")
+			scanned++
+			s.mu.Lock()
+			s.progress.BooksScanned = scanned
+			s.progress.BooksAdded = added
+			for i := range s.progress.Phases {
+				if s.progress.Phases[i].Name == PhaseAudibleSync {
+					setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
+					break
+				}
+			}
+			if scanned%10 == 0 {
+				s.emitLocked()
+			}
+			s.mu.Unlock()
+			continue
+		}
+
+		// Keep fully-completed existing records even if API currently says non-downloadable.
 		if !item.IsDownloadable {
-			syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Str("content_type", item.ContentType).Bool("is_downloadable", item.IsDownloadable).Msg("skipping non-downloadable item")
+			if existing != nil && existing.Status == database.BookStatusComplete && existing.FilePath != "" {
+				keepASIN[book.ASIN] = struct{}{}
+				syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Msg("keeping existing complete book not currently downloadable")
+				// Do not update existing record; just preserve.
+				scanned++
+				s.mu.Lock()
+				s.progress.BooksScanned = scanned
+				s.progress.BooksAdded = added
+				for i := range s.progress.Phases {
+					if s.progress.Phases[i].Name == PhaseAudibleSync {
+						setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
+						break
+					}
+				}
+				if scanned%10 == 0 {
+					s.emitLocked()
+				}
+				s.mu.Unlock()
+				continue
+			}
+			// Skip items missing download permission and not already complete
+			syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Msg("skipping non-downloadable item")
 			scanned++
 			s.mu.Lock()
 			s.progress.BooksScanned = scanned
@@ -876,8 +917,6 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		}
 
 		keepASIN[book.ASIN] = struct{}{}
-
-		existing, err := s.db.GetBookByASIN(ctx, book.ASIN)
 		if err != nil {
 			syncLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to check existing book")
 			scanned++
