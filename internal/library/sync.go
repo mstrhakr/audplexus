@@ -836,69 +836,9 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		book := convertBook(item)
 		syncLog.Trace().Str("asin", book.ASIN).Str("title", book.Title).Msg("processing book")
 
-		existing, err := s.db.GetBookByASIN(ctx, book.ASIN)
-		if err != nil {
-			syncLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to check existing book")
-			scanned++
-			s.mu.Lock()
-			s.progress.BooksScanned = scanned
-			s.progress.BooksAdded = added
-			for i := range s.progress.Phases {
-				if s.progress.Phases[i].Name == PhaseAudibleSync {
-					setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
-					break
-				}
-			}
-			if scanned%10 == 0 {
-				s.emitLocked()
-			}
-			s.mu.Unlock()
-			continue
-		}
-
-		// Keep fully-completed existing records even if API currently says non-downloadable.
-		if !item.IsDownloadable {
-			if existing != nil && existing.Status == database.BookStatusComplete && existing.FilePath != "" {
-				keepASIN[book.ASIN] = struct{}{}
-				syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Msg("keeping existing complete book not currently downloadable")
-				// Do not update existing record; just preserve.
-				scanned++
-				s.mu.Lock()
-				s.progress.BooksScanned = scanned
-				s.progress.BooksAdded = added
-				for i := range s.progress.Phases {
-					if s.progress.Phases[i].Name == PhaseAudibleSync {
-						setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
-						break
-					}
-				}
-				if scanned%10 == 0 {
-					s.emitLocked()
-				}
-				s.mu.Unlock()
-				continue
-			}
-			// Skip items missing download permission and not already complete
-			syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Msg("skipping non-downloadable item")
-			scanned++
-			s.mu.Lock()
-			s.progress.BooksScanned = scanned
-			s.progress.BooksAdded = added
-			for i := range s.progress.Phases {
-				if s.progress.Phases[i].Name == PhaseAudibleSync {
-					setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
-					break
-				}
-			}
-			if scanned%10 == 0 {
-				s.emitLocked()
-			}
-			s.mu.Unlock()
-			continue
-		}
-
-		if item.ContentType != "" && !strings.Contains(strings.ToLower(item.ContentType), "audio") {
-			syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Str("content_type", item.ContentType).Msg("skipping non-audio content type")
+		// Skip items not eligible for local download (e.g. ebook-only or non-owned).
+		if !item.IsDownloadable || (item.ContentType != "" && !strings.EqualFold(item.ContentType, "audiobook")) {
+			syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Str("content_type", item.ContentType).Bool("is_downloadable", item.IsDownloadable).Msg("skipping non-downloadable or non-audiobook item")
 			scanned++
 			s.mu.Lock()
 			s.progress.BooksScanned = scanned
@@ -917,6 +857,8 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		}
 
 		keepASIN[book.ASIN] = struct{}{}
+
+		existing, err := s.db.GetBookByASIN(ctx, book.ASIN)
 		if err != nil {
 			syncLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to check existing book")
 			scanned++
@@ -993,24 +935,20 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 
 	// Remove stale books that are no longer in Audible library or no longer downloadable.
 	removed := 0
-	if len(keepASIN) == 0 {
-		syncLog.Warn().Msg("audible library sync has zero eligible items; skipping stale prune to avoid accidental mass deletion")
-	} else {
-		allBooks, _, err := s.db.ListBooks(ctx, database.BookFilter{Limit: 100000})
-		if err == nil {
-			for _, dbBook := range allBooks {
-				if _, keep := keepASIN[dbBook.ASIN]; !keep {
-					if err := s.db.DeleteBook(ctx, dbBook.ID); err != nil {
-						syncLog.Warn().Err(err).Str("asin", dbBook.ASIN).Msg("failed deleting stale book")
-						continue
-					}
-					removed++
+	allBooks, _, err := s.db.ListBooks(ctx, database.BookFilter{Limit: 100000})
+	if err == nil {
+		for _, dbBook := range allBooks {
+			if _, keep := keepASIN[dbBook.ASIN]; !keep {
+				if err := s.db.DeleteBook(ctx, dbBook.ID); err != nil {
+					syncLog.Warn().Err(err).Str("asin", dbBook.ASIN).Msg("failed deleting stale book")
+					continue
 				}
+				removed++
 			}
-			syncLog.Info().Int("removed_books", removed).Msg("audible library sync pruned stale entries")
-		} else {
-			syncLog.Warn().Err(err).Msg("audible library sync failed to list books for stale pruning")
 		}
+		syncLog.Info().Int("removed_books", removed).Msg("audible library sync pruned stale entries")
+	} else {
+		syncLog.Warn().Err(err).Msg("audible library sync failed to list books for stale pruning")
 	}
 
 	// Adjust progress/book counts to reflect kept items only.
