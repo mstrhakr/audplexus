@@ -837,7 +837,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		syncLog.Trace().Str("asin", book.ASIN).Str("title", book.Title).Msg("processing book")
 
 		// Skip items not eligible for local download (e.g. ebook-only or non-owned).
-		if !item.IsDownloadable || (item.ContentType != "" && !strings.EqualFold(item.ContentType, "audiobook")) {
+		if !item.Downloadable() || (item.ContentType != "" && !strings.EqualFold(item.ContentType, "audiobook")) {
 			syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Str("content_type", item.ContentType).Bool("is_downloadable", item.IsDownloadable).Msg("skipping non-downloadable or non-audiobook item")
 			scanned++
 			s.mu.Lock()
