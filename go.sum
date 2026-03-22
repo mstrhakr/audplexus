@@ -99,8 +99,8 @@ github.com/modern-go/reflect2 v1.0.2 h1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9G
 github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
 github.com/morikuni/aec v1.0.0 h1:nP9CBfwrvYnBRgY6qfDQkygYDmYwOilePFkwzv4dU8A=
 github.com/morikuni/aec v1.0.0/go.mod h1:BbKIizmSmc5MMPqRYbxO4ZU0S0+P200+tUnFx7PXmsc=
-github.com/mstrhakr/go-audible v0.2.2 h1:SveiQzXHVUg/SZduFDgrjP4NqUdjgUpJwACZEOAmJUU=
-github.com/mstrhakr/go-audible v0.2.2/go.mod h1:oi+IDdWPODwMH5LeeF7Yz+daSeWCUKm8dVOJeqDS4Xk=
+github.com/mstrhakr/go-audible v0.2.3 h1:haoKjcgI/qJjHT/3nw7JaV1lXmDp+Jm8uapcUJnR484=
+github.com/mstrhakr/go-audible v0.2.3/go.mod h1:oi+IDdWPODwMH5LeeF7Yz+daSeWCUKm8dVOJeqDS4Xk=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8Oi/yOhh5U=
