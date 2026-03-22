@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="240"
+   height="240"
+   viewBox="0 0 240 240"
+   version="1.1"
+   id="svg12"
+   sodipodi:docname="audplexus-plex-logo.svg"
+   inkscape:version="1.4.2 (f4327f4, 2025-05-13)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview12"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="3.0049956"
+     inkscape:cx="103.49433"
+     inkscape:cy="139.26809"
+     inkscape:window-width="1920"
+     inkscape:window-height="1009"
+     inkscape:window-x="-8"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg12" />
+  <defs
+     id="defs6">
+    <linearGradient
+       id="linearGradient67"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#000000;stop-opacity:1;"
+         offset="0"
+         id="stop66" />
+      <stop
+         style="stop-color:#eb5f17;stop-opacity:1;"
+         offset="1"
+         id="stop67" />
+    </linearGradient>
+    <linearGradient
+       id="linearGradient65"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#000000;stop-opacity:1;"
+         offset="0"
+         id="stop64" />
+      <stop
+         style="stop-color:#e13223;stop-opacity:1;"
+         offset="1"
+         id="stop65" />
+    </linearGradient>
+    <linearGradient
+       id="linearGradient58"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#000000;stop-opacity:1;"
+         offset="0"
+         id="stop58" />
+      <stop
+         style="stop-color:#ea5719;stop-opacity:1;"
+         offset="1"
+         id="stop59" />
+    </linearGradient>
+    <linearGradient
+       id="linearGradient33"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#000000;stop-opacity:1;"
+         offset="0"
+         id="stop34" />
+      <stop
+         style="stop-color:#000000;stop-opacity:0;"
+         offset="1"
+         id="stop35" />
+    </linearGradient>
+    <linearGradient
+       id="audibleBG"
+       x1="44.262959"
+       y1="50.585762"
+       x2="159.46411"
+       y2="149.48073"
+       gradientUnits="userSpaceOnUse">
+      <stop
+         offset="0%"
+         stop-color="#0F6191"
+         id="stop1" />
+      <stop
+         offset="100%"
+         stop-color="#67C4B1"
+         id="stop2" />
+    </linearGradient>
+    <linearGradient
+       id="plexX1"
+       x1="0"
+       y1="0"
+       x2="1"
+       y2="1">
+      <stop
+         offset="0%"
+         stop-color="#15A4C1"
+         id="stop3" />
+      <stop
+         offset="100%"
+         stop-color="#1DDBE9"
+         id="stop4" />
+    </linearGradient>
+    <linearGradient
+       id="plexX2"
+       x1="0"
+       y1="1"
+       x2="1"
+       y2="0">
+      <stop
+         offset="0%"
+         stop-color="#114E88"
+         id="stop5" />
+      <stop
+         offset="100%"
+         stop-color="#33B6CC"
+         id="stop6" />
+    </linearGradient>
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient33"
+       id="linearGradient35"
+       x1="154.40717"
+       y1="168.7249"
+       x2="104.6802"
+       y2="130.65799"
+       gradientUnits="userSpaceOnUse" />
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient67"
+       id="linearGradient59"
+       x1="79.615135"
+       y1="86.694862"
+       x2="161.34782"
+       y2="51.08749"
+       gradientUnits="userSpaceOnUse" />
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient58"
+       id="linearGradient60"
+       x1="78.756699"
+       y1="87.031273"
+       x2="161.17253"
+       y2="50.758343"
+       gradientUnits="userSpaceOnUse" />
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient65"
+       id="linearGradient61"
+       x1="80.213379"
+       y1="86.614021"
+       x2="162.27196"
+       y2="51.339428"
+       gradientUnits="userSpaceOnUse" />
+  </defs>
+  <!-- Audible-style base -->
+  <circle
+     cx="120"
+     cy="120"
+     r="116"
+     fill="url(#audibleBG)"
+     stroke="#3A3A3A"
+     stroke-width="4"
+     id="circle6"
+     inkscape:label="Background Circle"
+     style="fill:url(#audibleBG)" />
+  <g
+     stroke="#000000"
+     stroke-width="3"
+     stroke-linejoin="miter"
+     id="g27"
+     style="stroke-linejoin:round;stroke-linecap:round;stroke-width:1;stroke-dasharray:1,2;fill:url(#linearGradient35);fill-opacity:1;display:inline;stroke-dashoffset:0"
+     inkscape:label="Guidelines">
+    <path
+       style="fill:#000000;stroke-width:1;stroke-linejoin:miter;stroke-dasharray:1,2;stroke-dashoffset:0"
+       d="M 7.1375469,1.7843866 C 69.690215,81.387858 132.24288,160.99133 194.79555,240.5948 M 44.011153,0.89591101 C 106.56382,80.49938 169.11648,160.10285 231.66915,239.70632"
+       id="path24" />
+    <path
+       style="fill:#000000;stroke-width:1;stroke-linejoin:miter;stroke-dasharray:1,2;stroke-dashoffset:0"
+       d="M 7.434944,239.70261 C 69.789343,159.80174 132.14374,79.90087 194.49814,0 M 47.118962,240.2565 C 109.47336,160.35564 171.82775,80.45477 234.18215,0.55390556"
+       id="path26" />
+    <path
+       style="fill:#000000;stroke-width:1;stroke-linejoin:miter;stroke-dasharray:1,2;stroke-dashoffset:0"
+       d="M -22.007435,192.71375 C 78.90954,192.61462 179.82651,192.51549 280.74349,192.41636"
+       id="path28" />
+    <path
+       style="fill:#000000;stroke-width:1;stroke-linejoin:miter;stroke-dasharray:1,2;stroke-dashoffset:0"
+       d="M -0.89219335,50.557621 C 78.810408,50.359356 158.51301,50.16109 238.21561,49.962825"
+       id="path27" />
+  </g>
+  <!-- Plex X (final shape w/ crisp overlap and black outline) -->
+  <g
+     stroke="#000"
+     stroke-width="3"
+     stroke-linejoin="miter"
+     id="g9"
+     style="stroke-linejoin:round;stroke-linecap:round;stroke-width:2;stroke-dasharray:none;fill:url(#linearGradient35);fill-opacity:1"
+     inkscape:label="X">
+    <path
+       d="m 83.29368,50.490707 -36.788105,0.594795 53.765795,69.460968 -56.685869,72.3513 41.455395,0.38105 54.631974,-71.37548 -56.37919,-71.412633 56.37919,71.412633"
+       fill="url(#plexX1)"
+       id="path6"
+       sodipodi:nodetypes="cccccccc"
+       style="fill:url(#plexX1);fill-opacity:1;stroke:#000000;stroke-width:3;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1" />
+    <path
+       d="m 195.87361,50.193308 -40.95168,0.297398 -30.59068,39.973592 20.13383,24.613252 z"
+       fill="url(#plexX2)"
+       id="path8"
+       sodipodi:nodetypes="ccccc"
+       style="fill:url(#plexX2);fill-opacity:1;stroke-width:3;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none" />
+    <path
+       d="m 193.52416,192.02231 -37.6803,0.29739 -30.25789,-39.30803 19.20625,-24.35124 z"
+       fill="url(#plexX2)"
+       id="path9"
+       sodipodi:nodetypes="ccccc"
+       style="fill:url(#plexX2);fill-opacity:1;stroke-width:3;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none" />
+  </g>
+  <!-- Audible open-book arcs, higher and smaller in top visual area -->
+  <g
+     fill="none"
+     stroke="#ffffff"
+     stroke-linecap="round"
+     id="g12"
+     style="display:inline"
+     inkscape:label="Triple Arc Accent">
+    <path
+       d="M 69.241636,64 C 103.43494,36.133829 136.86245,35.836431 172.24535,64"
+       stroke-width="12"
+       id="path10"
+       sodipodi:nodetypes="cc"
+       style="stroke:#ffffff;" />
+    <path
+       d="M 82.758364,83.702602 C 108.12247,61.705852 129.3368,61.382223 157.83643,84"
+       stroke-width="10"
+       id="path11"
+       sodipodi:nodetypes="cc"
+       style="stroke:#ffffff;" />
+    <path
+       d="M 93.598513,99.918216 C 111.81412,84.594796 126.69888,84 146.69888,99.32342"
+       stroke-width="8"
+       id="path12"
+       sodipodi:nodetypes="cc"
+       style="stroke:#ffffff;stroke-linecap:round;stroke-linejoin:miter;stroke-opacity:1" />
+  </g>
+  <!-- Soft circle outline -->
+  <circle
+     cx="120"
+     cy="120"
+     r="104"
+     fill="none"
+     stroke="#FFF"
+     stroke-width="2"
+     opacity="0.28"
+     id="circle12"
+     inkscape:label="Light Inner Circle" />
+</svg>
