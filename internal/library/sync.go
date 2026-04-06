@@ -856,12 +856,12 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			continue
 		}
 
-		// Additional runtime check: ensure we can actually obtain download info before adding.
+		// Additional runtime check: ensure entitlement resolves before adding.
 		canDownload, err := s.client.CanDownload(ctx, item)
 		if err != nil || !canDownload {
-			logMsg := "skipping item after download probe"
+			logMsg := "skipping item after entitlement check"
 			if err != nil {
-				logMsg = fmt.Sprintf("skipping item after download probe: %v", err)
+				logMsg = fmt.Sprintf("skipping item after entitlement check: %v", err)
 			}
 			syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Msg(logMsg)
 			scanned++
