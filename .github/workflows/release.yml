@@ -1,5 +1,8 @@
 name: Build and Release
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     tags:
@@ -53,6 +56,7 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.25.4'
+          cache-dependency-path: audplexus/go.sum
 
       - name: Build binary
         env:
@@ -146,8 +150,9 @@ jobs:
           } >> $GITHUB_OUTPUT
 
       - name: Create Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: release/*
           body: ${{ steps.extract-notes.outputs.notes }}
           draft: false
