@@ -362,6 +362,7 @@ func normalizeClientIPForLog(ip string) string {
 // handleDashboard renders the main dashboard page.
 func (s *Server) handleDashboard(c *gin.Context) {
 	ctx := c.Request.Context()
+	_, _ = s.clearStaleFailedDownloads(ctx)
 	c.HTML(http.StatusOK, "dashboard.html", s.getDashboardData(ctx))
 }
 
@@ -510,12 +511,14 @@ func (s *Server) getDownloadTitles(ctx context.Context, rows []database.Download
 // handleDashboardSummary renders only the dashboard summary block for HTMX polling.
 func (s *Server) handleDashboardSummary(c *gin.Context) {
 	ctx := c.Request.Context()
+	_, _ = s.clearStaleFailedDownloads(ctx)
 	c.HTML(http.StatusOK, "dashboard_summary.html", s.getDashboardSummaryData(ctx))
 }
 
 // handleDashboardDownloads renders dashboard done/failed download tables for HTMX polling.
 func (s *Server) handleDashboardDownloads(c *gin.Context) {
 	ctx := c.Request.Context()
+	_, _ = s.clearStaleFailedDownloads(ctx)
 	c.HTML(http.StatusOK, "dashboard_downloads.html", s.getDashboardDownloadsData(ctx))
 }
 
@@ -582,6 +585,7 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 // handleDownloads renders the download queue page.
 func (s *Server) handleDownloads(c *gin.Context) {
 	ctx := c.Request.Context()
+	_, _ = s.clearStaleFailedDownloads(ctx)
 
 	activeStatus := database.DownloadStatusActive
 	active, _ := s.db.ListDownloads(ctx, &activeStatus)
@@ -603,6 +607,47 @@ func (s *Server) handleDownloads(c *gin.Context) {
 		"QueuePausedAt":    queueState.PausedAt,
 		"Page":             "pipeline",
 	})
+}
+
+// clearStaleFailedDownloads reconciles failed download rows for books that are already complete on disk.
+func (s *Server) clearStaleFailedDownloads(ctx context.Context) (int, error) {
+	failedStatus := database.DownloadStatusFailed
+	failed, err := s.db.ListDownloads(ctx, &failedStatus)
+	if err != nil {
+		return 0, err
+	}
+
+	cleared := 0
+	for _, row := range failed {
+		book, err := s.db.GetBookByASIN(ctx, row.ASIN)
+		if err != nil || book == nil {
+			continue
+		}
+		if book.Status != database.BookStatusComplete || strings.TrimSpace(book.FilePath) == "" {
+			continue
+		}
+		if _, err := os.Stat(book.FilePath); err != nil {
+			continue
+		}
+
+		row.Status = database.DownloadStatusCancelled
+		row.Error = ""
+		row.Progress = 1
+		now := time.Now()
+		row.CompletedAt = &now
+
+		if err := s.db.UpdateDownload(ctx, &row); err != nil {
+			webLog.Warn().Err(err).Int64("download_id", row.ID).Str("asin", row.ASIN).Msg("failed to clear stale failed download")
+			continue
+		}
+		cleared++
+	}
+
+	if cleared > 0 {
+		webLog.Info().Int("count", cleared).Msg("cleared stale failed downloads")
+	}
+
+	return cleared, nil
 }
 
 // handleSettings renders the settings page.
@@ -1616,6 +1661,7 @@ func (s *Server) handleDiagnostics(c *gin.Context) {
 // handleDiagnosticsCompare returns comparison data between database, disk, and Plex.
 func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 	ctx := c.Request.Context()
+	_, _ = s.clearStaleFailedDownloads(ctx)
 
 	// Get user's marketplace/region
 	marketplace := "us"
