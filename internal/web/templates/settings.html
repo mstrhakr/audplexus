@@ -92,22 +92,24 @@
 
                     {{if .PlexAuthURL}}
                     <div class="info-box" style="margin-bottom: 1rem;">
-                        <strong>Step 1:</strong> Click "Open Plex Login" and approve access.
-                        <br>
-                        <strong>Step 2:</strong> Return here and click "Check Plex Login".
+                        <strong>Plex login in progress.</strong> Complete approval in the Plex window and this page will finish automatically.
                     </div>
                     <p>
-                        <a href="{{.PlexAuthURL}}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">Open Plex Login</a>
+                        <a href="{{.PlexAuthURL}}" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">Open Plex Login Again</a>
                     </p>
-                    <form method="POST" action="/auth/plex/complete" style="margin-bottom: 1rem;">
-                        <input type="hidden" name="pin_id" value="{{.PlexPendingPinID}}">
-                        <input type="hidden" name="pin_code" value="{{.PlexPendingPinCode}}">
-                        <button type="submit" class="btn btn-secondary">Check Plex Login</button>
-                    </form>
+                    <div id="plex-auth-state"
+                        data-plex-auth-url="{{.PlexAuthURL}}"
+                        data-pin-id="{{.PlexPendingPinID}}"
+                        data-pin-code="{{.PlexPendingPinCode}}"
+                        style="margin-bottom: 1rem;"></div>
                     {{else if not .PlexTokenSet}}
-                    <form method="POST" action="/auth/plex/start" style="margin-bottom: 1rem;">
-                        <button type="submit" class="btn btn-primary">Sign In With Plex.tv</button>
-                    </form>
+                    <div id="plex-auth-state" style="margin-bottom: 1rem;"></div>
+                    <button type="button" class="btn btn-primary" id="plex-start-btn" style="margin-bottom: 1rem;">Sign In With Plex.tv</button>
+                    <noscript>
+                        <form method="POST" action="/auth/plex/start" style="margin-bottom: 1rem;">
+                            <button type="submit" class="btn btn-primary">Sign In With Plex.tv</button>
+                        </form>
+                    </noscript>
                     {{end}}
 
                     {{if .PlexServers}}
@@ -503,6 +505,125 @@ function confirmRestart() {
 }
 
 (function() {
+    var plexStateEl = document.getElementById('plex-auth-state');
+    var plexStartBtn = document.getElementById('plex-start-btn');
+    var plexPollTimer = null;
+    var plexPopup = null;
+
+    function setPlexAuthMessage(message, isError) {
+        if (!plexStateEl) return;
+        if (!message) {
+            plexStateEl.innerHTML = '';
+            return;
+        }
+        var color = isError ? 'var(--error)' : 'var(--border)';
+        plexStateEl.innerHTML = '<div class="info-box" style="border-color: ' + color + '; margin-bottom: 0.75rem;">' + message + '</div>';
+    }
+
+    function stopPlexPolling() {
+        if (plexPollTimer) {
+            clearInterval(plexPollTimer);
+            plexPollTimer = null;
+        }
+    }
+
+    function closePlexPopup() {
+        if (plexPopup && !plexPopup.closed) {
+            plexPopup.close();
+        }
+    }
+
+    function startPlexPolling(pinID, pinCode) {
+        stopPlexPolling();
+        if (!pinID || !pinCode) return;
+
+        var poll = function() {
+            fetch('/auth/plex/poll', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    'Accept': 'application/json'
+                },
+                body: 'pin_id=' + encodeURIComponent(pinID) + '&pin_code=' + encodeURIComponent(pinCode)
+            })
+                .then(function(resp) { return resp.json(); })
+                .then(function(data) {
+                    if (!data || data.status === 'pending') return;
+
+                    if (data.status === 'complete') {
+                        stopPlexPolling();
+                        closePlexPopup();
+                        var msg = data.message || 'Plex login complete. Loading updated settings...';
+                        setPlexAuthMessage(msg, false);
+                        window.location.href = '/settings';
+                        return;
+                    }
+
+                    stopPlexPolling();
+                    setPlexAuthMessage(data.error || 'Plex login failed. Please try again.', true);
+                    if (plexStartBtn) plexStartBtn.disabled = false;
+                })
+                .catch(function() {
+                    // Keep polling through transient network/server restart blips.
+                });
+        };
+
+        poll();
+        plexPollTimer = setInterval(poll, 2000);
+    }
+
+    function openPlexPopup(url) {
+        if (!url) return null;
+        return window.open(url, 'plexAuthWindow', 'popup=yes,width=540,height=760,resizable=yes,scrollbars=yes');
+    }
+
+    function beginPlexAuth(authURL, pinID, pinCode, fromUserClick) {
+        if (!authURL || !pinID || !pinCode) return;
+        var popupOpenedKey = 'plexAuthPopupOpened:' + pinID;
+
+        if (fromUserClick || sessionStorage.getItem(popupOpenedKey) !== '1') {
+            plexPopup = openPlexPopup(authURL);
+            if (plexPopup) {
+                sessionStorage.setItem(popupOpenedKey, '1');
+            }
+        }
+
+        setPlexAuthMessage('Plex sign-in started. Approve access in the Plex window; this page will complete automatically.', false);
+        startPlexPolling(pinID, pinCode);
+    }
+
+    if (plexStateEl) {
+        var pendingURL = plexStateEl.getAttribute('data-plex-auth-url') || '';
+        var pendingPinID = plexStateEl.getAttribute('data-pin-id') || '';
+        var pendingPinCode = plexStateEl.getAttribute('data-pin-code') || '';
+        if (pendingURL && pendingPinID && pendingPinCode) {
+            beginPlexAuth(pendingURL, pendingPinID, pendingPinCode, false);
+        }
+    }
+
+    if (plexStartBtn) {
+        plexStartBtn.addEventListener('click', function() {
+            plexStartBtn.disabled = true;
+            setPlexAuthMessage('Starting Plex sign-in...', false);
+
+            fetch('/auth/plex/start', {
+                method: 'POST',
+                headers: { 'Accept': 'application/json' }
+            })
+                .then(function(resp) { return resp.json(); })
+                .then(function(data) {
+                    if (!data || data.status !== 'started') {
+                        throw new Error((data && data.error) || 'Could not start Plex sign-in.');
+                    }
+                    beginPlexAuth(data.auth_url, String(data.pin_id || ''), String(data.pin_code || ''), true);
+                })
+                .catch(function(err) {
+                    setPlexAuthMessage(err.message || 'Could not start Plex sign-in.', true);
+                    plexStartBtn.disabled = false;
+                });
+        });
+    }
+
     var sectionSelect = document.getElementById('plex_section_id');
     var titleInput = document.getElementById('plex_section_title');
     if (sectionSelect && titleInput) {
@@ -548,12 +669,13 @@ function confirmRestart() {
         validateRedirect();
     }
 
-    {{if .FocusSection}}
-    var focusEl = document.getElementById('{{.FocusSection}}-settings');
-    if (focusEl) {
-        focusEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    var focusSection = '{{.FocusSection}}';
+    if (focusSection) {
+        var focusEl = document.getElementById(focusSection + '-settings');
+        if (focusEl) {
+            focusEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
     }
-    {{end}}
 })();
 </script>
 

@@ -149,16 +149,83 @@ func (s *Server) plexAuthURL(pinCode string) string {
 func (s *Server) handlePlexStart(c *gin.Context) {
 	pin, err := s.plexCreatePin(c.Request.Context())
 	if err != nil {
+		if wantsJSON(c) {
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "Failed to start Plex auth: " + err.Error()})
+			return
+		}
 		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to start Plex auth: " + err.Error()})
+		return
+	}
+	authURL := s.plexAuthURL(pin.Code)
+
+	if wantsJSON(c) {
+		c.JSON(http.StatusOK, gin.H{
+			"status":   "started",
+			"pin_id":   pin.ID,
+			"pin_code": pin.Code,
+			"auth_url": authURL,
+		})
 		return
 	}
 
 	s.renderAuthPage(c, http.StatusOK, gin.H{
 		"PlexPendingPinID":   pin.ID,
 		"PlexPendingPinCode": pin.Code,
-		"PlexAuthURL":        s.plexAuthURL(pin.Code),
-		"Success":            "Plex sign-in started. Complete login in plex.tv, then click 'Check Plex Login'.",
+		"PlexAuthURL":        authURL,
+		"Success":            "Plex sign-in started. Complete login in plex.tv and this page will finish automatically.",
 	})
+}
+
+func (s *Server) completePlexLogin(ctx context.Context, pinID int64, pinCode string) (bool, []plexServerOption, string, error) {
+	pin, err := s.plexGetPin(ctx, pinID, pinCode)
+	if err != nil {
+		return false, nil, "", err
+	}
+
+	if strings.TrimSpace(pin.AuthToken) == "" {
+		return false, nil, "", nil
+	}
+
+	if err := s.db.SetSetting(ctx, "plex_token", pin.AuthToken); err != nil {
+		return false, nil, "", err
+	}
+
+	servers, err := s.plexListServerOptions(ctx, pin.AuthToken)
+	if err != nil {
+		return true, nil, "Plex login complete and token saved. Could not list servers yet: " + err.Error(), nil
+	}
+
+	return true, servers, "", nil
+}
+
+func (s *Server) handlePlexPoll(c *gin.Context) {
+	pinID, err := strconv.ParseInt(strings.TrimSpace(c.PostForm("pin_id")), 10, 64)
+	if err != nil || pinID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "Invalid Plex PIN ID. Start Plex auth again."})
+		return
+	}
+	pinCode := strings.TrimSpace(c.PostForm("pin_code"))
+	if pinCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "Missing Plex PIN code. Start Plex auth again."})
+		return
+	}
+
+	complete, _, warning, err := s.completePlexLogin(c.Request.Context(), pinID, pinCode)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "Failed to verify Plex login: " + err.Error()})
+		return
+	}
+
+	if !complete {
+		c.JSON(http.StatusOK, gin.H{"status": "pending"})
+		return
+	}
+
+	resp := gin.H{"status": "complete"}
+	if warning != "" {
+		resp["message"] = warning
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (s *Server) handlePlexComplete(c *gin.Context) {
@@ -173,15 +240,15 @@ func (s *Server) handlePlexComplete(c *gin.Context) {
 		return
 	}
 
-	pin, err := s.plexGetPin(c.Request.Context(), pinID, pinCode)
+	complete, servers, warning, err := s.completePlexLogin(c.Request.Context(), pinID, pinCode)
 	if err != nil {
 		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to verify Plex login: " + err.Error()})
 		return
 	}
 
-	if strings.TrimSpace(pin.AuthToken) == "" {
+	if !complete {
 		s.renderAuthPage(c, http.StatusOK, gin.H{
-			"Error":              "Plex login is not complete yet. Finish login in plex.tv, then click Check Plex Login again.",
+			"Error":              "Plex login is not complete yet. Finish login in plex.tv and keep this page open.",
 			"PlexPendingPinID":   pinID,
 			"PlexPendingPinCode": pinCode,
 			"PlexAuthURL":        s.plexAuthURL(pinCode),
@@ -189,15 +256,9 @@ func (s *Server) handlePlexComplete(c *gin.Context) {
 		return
 	}
 
-	if err := s.db.SetSetting(c.Request.Context(), "plex_token", pin.AuthToken); err != nil {
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to save Plex token: " + err.Error()})
-		return
-	}
-
-	servers, err := s.plexListServerOptions(c.Request.Context(), pin.AuthToken)
-	if err != nil {
+	if warning != "" {
 		s.renderAuthPage(c, http.StatusOK, gin.H{
-			"Success": "Plex login complete and token saved. Could not list servers yet: " + err.Error(),
+			"Success": warning,
 		})
 		return
 	}
@@ -206,6 +267,11 @@ func (s *Server) handlePlexComplete(c *gin.Context) {
 		"Success":     "Plex login complete. Select the server URL to use.",
 		"PlexServers": servers,
 	})
+}
+
+func wantsJSON(c *gin.Context) bool {
+	accept := strings.ToLower(c.GetHeader("Accept"))
+	return strings.Contains(accept, "application/json")
 }
 
 func (s *Server) handlePlexSelect(c *gin.Context) {

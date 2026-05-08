@@ -236,6 +236,7 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/auth/start", s.handleAuthStart)
 	s.router.POST("/auth/callback", s.handleAuthCallback)
 	s.router.POST("/auth/plex/start", s.handlePlexStart)
+	s.router.POST("/auth/plex/poll", s.handlePlexPoll)
 	s.router.POST("/auth/plex/complete", s.handlePlexComplete)
 	s.router.POST("/auth/plex/select", s.handlePlexSelect)
 	s.router.POST("/auth/plex/section", s.handlePlexSectionSelect)

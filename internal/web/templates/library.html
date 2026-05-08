@@ -1,13 +1,6 @@
 {{define "content"}}
 <h1>Library</h1>
 
-<div class="actions-bar">
-    <button hx-post="/api/sync" hx-target="#library-sync-status" hx-swap="innerHTML" class="btn btn-primary">
-        Sync Library
-    </button>
-    <span id="library-sync-status" class="sync-status-wrap" hx-get="/api/sync/status" hx-trigger="load, every 5s" hx-swap="innerHTML"></span>
-</div>
-
 <div class="search-bar">
     <input type="text" name="search" placeholder="Search books..."
            hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
