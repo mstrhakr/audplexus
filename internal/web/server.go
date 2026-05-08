@@ -235,7 +235,6 @@ func (s *Server) setupRoutes() {
 	// Auth
 	s.router.POST("/auth/start", s.handleAuthStart)
 	s.router.POST("/auth/callback", s.handleAuthCallback)
-	s.router.GET("/auth/status", s.handleAuthStatus)
 	s.router.POST("/auth/plex/start", s.handlePlexStart)
 	s.router.POST("/auth/plex/complete", s.handlePlexComplete)
 	s.router.POST("/auth/plex/select", s.handlePlexSelect)
@@ -1567,13 +1566,6 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 	s.renderAuthPage(c, http.StatusOK, gin.H{
 		"Authenticated": true,
 		"Success":       "Successfully authenticated with Audible!",
-	})
-}
-
-// handleAuthStatus returns the current auth state (for HTMX polling).
-func (s *Server) handleAuthStatus(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"authenticated": s.audible.IsAuthenticated(),
 	})
 }
 
