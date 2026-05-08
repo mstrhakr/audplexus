@@ -26,7 +26,7 @@ jobs:
           path: audplexus
 
       - name: Checkout go-audible
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: mstrhakr/go-audible
           path: go-audible
