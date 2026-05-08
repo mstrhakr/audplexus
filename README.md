@@ -2,20 +2,44 @@
 
 ![Audplexus Logo](logo.svg)
 
-A pure Go Docker application that authenticates with Audible, downloads audiobooks, removes DRM via FFmpeg, fetches enriched metadata from Audnexus, and organizes files in Plex-compatible `Author/Title/Title.m4b` structure.
+A self-hosted web app that syncs your Audible library, downloads and processes audiobooks, and organizes output for Plex audiobook libraries.
+
+## What It Does
+
+- Connects to Audible and syncs your library metadata.
+- Downloads books and processes them into Plex-friendly output.
+- Adds metadata and optional companion files (cover, chapters, Plex match hints).
+- Supports queue controls, retries, diagnostics, and scheduled sync.
 
 ## Quick Start
 
-### Using Pre-built Docker Image
+### Docker Compose (recommended)
+
+1. Create folders:
 
 ```bash
-# Pull the latest image
+mkdir -p config audiobooks downloads
+```
+
+1. Start Audplexus:
+
+```bash
+docker compose up -d
+```
+
+1. Open the web UI:
+
+`http://localhost:8080`
+
+1. In Settings, connect Audible and (optionally) Plex.
+
+### Docker Run
+
+```bash
 docker pull ghcr.io/mstrhakr/audplexus:latest
 
-# Create directories
 mkdir -p config audiobooks downloads
 
-# Run with Docker
 docker run -d \
   --name audible-plex \
   -p 8080:8080 \
@@ -24,39 +48,19 @@ docker run -d \
   -v $(pwd)/audiobooks:/audiobooks \
   -v $(pwd)/downloads:/downloads \
   ghcr.io/mstrhakr/audplexus:latest
-
-# Or use Docker Compose
-docker compose up -d
 ```
-
-### Building from Source
-
-```bash
-# Clone the repo
-git clone https://github.com/mstrhakr/audplexus.git
-cd audplexus
-
-# Copy and edit config
-cp config.example.yaml config/config.yaml
-
-# Build and run
-go build ./cmd/server
-./audplexus
-```
-
-Then visit `http://localhost:8080` to authenticate and manage your library.
 
 ## Configuration
 
-Configuration can be provided via `config.yaml` or environment variables:
+You can configure Audplexus with:
 
-Precedence is:
+- Settings saved in the web UI (highest priority)
+- Environment variables
+- `config.yaml` defaults
 
-1. DB-backed settings saved from the web UI (for runtime/user preferences)
-2. Environment variables
-3. `config.yaml` defaults
+Key environment variables:
 
-| Env Variable | Default | Description |
+| Variable | Default | Description |
 | --- | --- | --- |
 | `DATABASE_TYPE` | `sqlite` | Database backend (`sqlite` or `postgres`) |
 | `DATABASE_PATH` | `/config/audible.db` | SQLite database path |
@@ -76,19 +80,32 @@ Precedence is:
 | `PGID` | | Unraid-style runtime GID override (used when container starts as root) |
 | `TAKE_OWNERSHIP` | `false` | If `true`, recursively `chown`s mounted dirs on startup before dropping privileges |
 
-## Permission Handling
+For full examples, see `config.example.yaml`.
 
-When the pipeline hits a filesystem permission error (for example writing to `/downloads` or moving files into `/audiobooks`), it now automatically pauses the queue to avoid repeatedly failing every remaining item.
+## Storage Layout
 
-- Current item is marked failed with the original error.
-- Queue workers stop claiming new pending jobs.
-- Resume from the Downloads page after fixing permissions.
+Expected output structure:
 
-### Running as a Different User
+```text
+/audiobooks/
+  Author Name/
+    Book Title/
+      Book Title.m4b
+      Book Title.chapters.txt
+      cover.jpg
+```
+
+## Permissions Notes
+
+When a filesystem permission error occurs (for example writing to `/downloads` or moving into `/audiobooks`), queue workers are paused automatically to prevent repeated failures.
+
+After fixing permissions, resume queue processing from the Pipeline page.
+
+### User/Group Mapping
 
 Use either standard Docker user mapping or Unraid-style `PUID`/`PGID`.
 
-Standard Docker/Compose style:
+Standard Docker style:
 
 ```bash
 docker run -d \
@@ -101,7 +118,7 @@ docker run -d \
   ghcr.io/mstrhakr/audplexus:latest
 ```
 
-Unraid-style environment variables:
+Unraid-style variables:
 
 ```bash
 docker run -d \
@@ -121,9 +138,9 @@ Notes:
 - If you use `PUID`/`PGID`, the entrypoint drops privileges to that UID/GID.
 - `TAKE_OWNERSHIP=true` can help when bind-mounted directories were created by another user.
 
-## Docker Compose
+## Docker Compose Example
 
-The `compose.yaml` is configured to use the pre-built image from GitHub Container Registry:
+The included `compose.yaml` uses the published image from GitHub Container Registry.
 
 ```yaml
 services:
@@ -140,101 +157,16 @@ services:
     restart: unless-stopped
 ```
 
-For PostgreSQL with proper health checks, use `compose.postgres.yaml`:
+For PostgreSQL + health checks, use:
 
 ```bash
 docker compose -f compose.postgres.yaml up -d
 ```
 
-### Available Docker Tags
+## Looking For Development Docs?
 
-When you tag a release like `v0.1.4`, the following images are automatically published:
-
-- **Exact version:** `v0.1.4`, `0.1.4`
-- **Floating minor:** `v0.1`, `0.1` (tracks latest patch in 0.1.x)
-- **Floating major:** `v0`, `0` (tracks latest in 0.x.x)
-- **Latest:** `latest` (latest release from main/master)
-- **Branch:** `master`, `main` (latest commit on that branch)
-- **Commit-specific:** `master-sha-abc123`
-
-Example usage:
-
-```bash
-# Use latest stable release
-docker pull ghcr.io/mstrhakr/audplexus:latest
-
-# Pin to major version (auto-updates to latest 0.x.x)
-docker pull ghcr.io/mstrhakr/audplexus:v0
-
-# Pin to minor version (auto-updates to latest 0.1.x)
-docker pull ghcr.io/mstrhakr/audplexus:v0.1
-
-# Pin to exact version (never changes)
-docker pull ghcr.io/mstrhakr/audplexus:v0.1.4
-```
-
-Images are automatically built and published via GitHub Actions on every push to main/master and on tagged releases.
-
-### Building Docker Image Locally
-
-Because this project depends on a local `go-audible` module, use the provided build scripts:
-
-```bash
-# Linux/macOS
-./build-docker.sh
-
-# Windows PowerShell
-./build-docker.ps1
-```
-
-These scripts will set up the proper build context with both repositories and create an image tagged as `audplexus:local`.
-
-## Output Structure
-
-Files are organized for Plex audiobook libraries:
-
-```text
-/audiobooks/
-  Author Name/
-    Book Title/
-      Book Title.m4b
-      Book Title.chapters.txt
-      cover.jpg
-```
-
-## Development
-
-```bash
-# Build locally
-go build -o audplexus ./cmd/server
-
-# Run
-./audplexus
-```
-
-Requires Go 1.22+. Uses pure Go SQLite implementation (modernc.org/sqlite), so no CGO required.
-
-## Releasing
-
-To create a new release with automated binary builds and Docker images:
-
-1. **Tag the release:**
-
-  ```bash
-  git commit --allow-empty -m "chore: release v0.1.4"
-  git tag v0.1.4
-  git push origin v0.1.4
-  ```
-
-1. **Automated actions:**
-
-- GitHub Actions builds binaries for Linux, macOS, and Windows (amd64 + arm64)
-- Creates a GitHub Release with downloadable archives
-- Builds and publishes Docker images with floating tags: `latest`, `v0`, `v0.1`, `v0.1.4`, `0`, `0.1`, `0.1.4`
-
-All releases are available at: <https://github.com/mstrhakr/audplexus/releases>
+Developer and maintainer details were moved to `DEVELOPMENT.md`.
 
 ## License
 
 MIT
-
