@@ -428,7 +428,7 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     padding: 0.2rem 0.35rem;
     border-radius: var(--radius);
     font-size: 0.75rem;
-    background: var(--card-bg);
+    background: var(--surface);
     border: 1px solid var(--border);
     overflow: hidden;
 }
@@ -443,8 +443,8 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 .sync-phase.complete .phase-icon { color: var(--success); }
 .sync-phase.failed { border-color: var(--error); }
 .sync-phase.failed .phase-icon { color: var(--error); }
-.sync-phase.running { border-color: var(--primary); }
-.sync-phase.running .phase-icon { color: var(--primary); animation: pulse 1s ease-in-out infinite; }
+.sync-phase.running { border-color: var(--accent); }
+.sync-phase.running .phase-icon { color: var(--accent); animation: pulse 1s ease-in-out infinite; }
 .sync-phase.skipped { opacity: 0.5; }
 .phase-icon {
     font-size: 0.8rem;
@@ -487,8 +487,8 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     transition: color 0.15s, border-color 0.15s;
 }
 .phase-run-btn:hover {
-    color: var(--primary);
-    border-color: var(--primary);
+    color: var(--accent);
+    border-color: var(--accent);
 }
 .phase-count + .phase-run-btn {
     margin-left: 0.25rem;
@@ -537,36 +537,6 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     cursor: pointer;
 }
 .btn-warning:hover { opacity: 0.9; }
-
-/* Plex scan status */
-.plex-scan-status {
-    margin-bottom: 0.5rem;
-}
-.plex-scan-status .info-box {
-    background: linear-gradient(90deg, rgba(56, 142, 60, 0.1), rgba(56, 142, 60, 0.05));
-    border-left: 3px solid var(--success);
-}
-.plex-scan-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
-    flex-wrap: wrap;
-}
-.plex-scan-icon {
-    color: var(--success);
-    animation: pulse 1s ease-in-out infinite;
-    font-size: 0.7rem;
-}
-.plex-scan-detail {
-    color: var(--text-muted);
-    font-size: 0.85rem;
-}
-.plex-scan-percent {
-    color: var(--accent);
-    font-weight: 600;
-    margin-left: auto;
-}
 
 /* Responsive */
 @media (max-width: 768px) {
