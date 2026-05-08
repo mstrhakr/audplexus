@@ -1,35 +1,4 @@
 {{define "content"}}
 <h1>Book Detail</h1>
-
-<div class="book-detail">
-    <div class="book-cover">
-        {{if .Book.CoverURL}}<img src="{{.Book.CoverURL}}" alt="Cover">{{end}}
-    </div>
-    <div class="book-info">
-        <h2>{{.Book.Title}}</h2>
-        {{if .Book.Series}}<p class="series">{{.Book.Series}} #{{.Book.SeriesPosition}}</p>{{end}}
-        <p><strong>Author:</strong> {{.Book.Author}}</p>
-        <p><strong>Narrator:</strong> {{.Book.Narrator}}</p>
-        <p><strong>Publisher:</strong> {{.Book.Publisher}}</p>
-        <p><strong>Duration:</strong> {{formatDuration .Book.Duration}}</p>
-        <p><strong>Purchased:</strong> {{formatDate .Book.PurchaseDate}}</p>
-        <p><strong>Released:</strong> {{formatDate .Book.ReleaseDate}}</p>
-        <p><strong>Status:</strong> <span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span></p>
-        <p><strong>ASIN:</strong> {{.Book.ASIN}}</p>
-        {{if .Book.FilePath}}<p><strong>File:</strong> {{.Book.FilePath}}</p>{{end}}
-
-        <div class="book-actions">
-            {{if eq (printf "%s" .Book.Status) "new"}}
-            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" class="btn btn-primary">Queue Download</button>
-            {{end}}
-        </div>
-
-        {{if .Book.Description}}
-        <div class="description">
-            <h3>Description</h3>
-            <p>{{.Book.Description}}</p>
-        </div>
-        {{end}}
-    </div>
-</div>
+{{template "book_detail_panel.html" .}}
 {{end}}

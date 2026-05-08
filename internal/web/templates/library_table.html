@@ -18,7 +18,7 @@
                 {{if .CoverURL}}<img src="{{.CoverURL}}" alt="" class="cover-thumb">{{end}}
             </td>
             <td>
-                <a href="/library/{{.ID}}">{{.Title}}</a>
+                <a href="/library/{{.ID}}" class="book-detail-link" data-book-id="{{.ID}}">{{.Title}}</a>
                 {{if .Series}}<br><small>{{.Series}} #{{.SeriesPosition}}</small>{{end}}
             </td>
             <td>{{.Author}}</td>

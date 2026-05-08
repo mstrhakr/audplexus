@@ -20,4 +20,199 @@
 <div class="table-container" id="book-table">
     {{template "library_table.html" .}}
 </div>
+
+<div id="book-detail-modal" class="library-modal" aria-hidden="true" style="display:none;">
+    <div class="library-modal-backdrop" data-close-book-modal></div>
+    <div class="library-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="book-detail-modal-title">
+        <button type="button" class="library-modal-close" data-close-book-modal aria-label="Close details">&times;</button>
+        <div id="book-detail-modal-content" class="library-modal-content">
+            <p class="muted">Loading book details...</p>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    var modal = document.getElementById('book-detail-modal');
+    var modalContent = document.getElementById('book-detail-modal-content');
+    var previousOverflow = '';
+    var activeBookURL = '';
+    var listURL = new URL(window.location.href);
+    listURL.searchParams.delete('book');
+    listURL.hash = '';
+    var baseListURL = listURL.pathname + (listURL.search ? listURL.search : '');
+
+    if (!modal || !modalContent) {
+        return;
+    }
+
+    function closeBookModal() {
+        modal.style.display = 'none';
+        modal.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('library-modal-open');
+        document.body.style.overflow = previousOverflow;
+        activeBookURL = '';
+        if (window.location.search.indexOf('book=') !== -1 || window.location.hash === '#book-detail') {
+            history.replaceState({}, '', baseListURL);
+        }
+    }
+
+    function openBookModal() {
+        previousOverflow = document.body.style.overflow || '';
+        modal.style.display = 'block';
+        modal.setAttribute('aria-hidden', 'false');
+        document.body.classList.add('library-modal-open');
+        document.body.style.overflow = 'hidden';
+    }
+
+    function setLoadingState() {
+        modalContent.innerHTML = '<p class="muted">Loading book details...</p>';
+    }
+
+    function setErrorState(message) {
+        modalContent.innerHTML = '<div class="info-box" style="border-color: var(--error);"><strong>Error:</strong> ' + message + '</div>';
+    }
+
+    function loadBookDetails(url, pushHistory) {
+        activeBookURL = url;
+        openBookModal();
+        setLoadingState();
+
+        fetch(url + (url.indexOf('?') === -1 ? '?' : '&') + 'view=modal', {
+            headers: { 'HX-Request': 'true' }
+        })
+            .then(function(resp) {
+                if (!resp.ok) {
+                    throw new Error('Failed to load details.');
+                }
+                return resp.text();
+            })
+            .then(function(html) {
+                if (activeBookURL !== url) {
+                    return;
+                }
+                modalContent.innerHTML = html;
+                var heading = modalContent.querySelector('h2');
+                if (heading) {
+                    heading.id = 'book-detail-modal-title';
+                }
+                if (window.htmx) {
+                    htmx.process(modalContent);
+                }
+                if (pushHistory) {
+                    var id = url.split('/').pop();
+                    var modalURL = new URL(baseListURL, window.location.origin);
+                    modalURL.searchParams.set('book', id);
+                    modalURL.hash = 'book-detail';
+                    history.replaceState({ bookId: id }, '', modalURL.pathname + modalURL.search + modalURL.hash);
+                }
+            })
+            .catch(function(err) {
+                if (activeBookURL !== url) {
+                    return;
+                }
+                setErrorState(err.message || 'Could not load book details.');
+            });
+    }
+
+    document.addEventListener('click', function(e) {
+        var closeTarget = e.target.closest('[data-close-book-modal]');
+        if (closeTarget) {
+            e.preventDefault();
+            closeBookModal();
+            return;
+        }
+
+        var link = e.target.closest('.book-detail-link');
+        if (!link) {
+            return;
+        }
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+            return;
+        }
+        e.preventDefault();
+        var href = link.getAttribute('href');
+        if (!href) {
+            return;
+        }
+        loadBookDetails(href, true);
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && modal.getAttribute('aria-hidden') === 'false') {
+            closeBookModal();
+        }
+    });
+
+    var params = new URLSearchParams(window.location.search);
+    var bookID = params.get('book');
+    if (bookID) {
+        loadBookDetails('/library/' + encodeURIComponent(bookID), false);
+    }
+})();
+</script>
+
+<style>
+.library-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+}
+
+.library-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(7, 10, 18, 0.72);
+    backdrop-filter: blur(1px);
+}
+
+.library-modal-dialog {
+    position: relative;
+    width: min(960px, calc(100vw - 2rem));
+    max-height: calc(100vh - 2rem);
+    margin: 1rem auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 22px 48px rgba(0, 0, 0, 0.45);
+    overflow: auto;
+}
+
+.library-modal-close {
+    position: sticky;
+    top: 0.5rem;
+    float: right;
+    margin: 0.5rem;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    width: 2rem;
+    height: 2rem;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 1.2rem;
+    line-height: 1;
+    z-index: 1;
+}
+
+.library-modal-content {
+    padding: 1rem 1.5rem 1.5rem;
+}
+
+.library-modal-content .book-detail {
+    margin-top: 0.5rem;
+}
+
+@media (max-width: 860px) {
+    .library-modal-dialog {
+        width: calc(100vw - 1rem);
+        margin: 0.5rem auto;
+        max-height: calc(100vh - 1rem);
+    }
+
+    .library-modal-content {
+        padding: 0.75rem;
+    }
+}
+</style>
 {{end}}

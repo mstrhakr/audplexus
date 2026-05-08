@@ -24,6 +24,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/render"
+	"github.com/microcosm-cc/bluemonday"
 	"github.com/mstrhakr/audplexus/internal/audnexus"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
@@ -129,6 +130,8 @@ func (r *multiRender) Instance(name string, data any) render.Render {
 }
 
 func (s *Server) setupTemplates() {
+	htmlPolicy := bluemonday.UGCPolicy()
+
 	funcMap := template.FuncMap{
 		"formatDuration": func(seconds int64) string {
 			h := seconds / 3600
@@ -167,13 +170,19 @@ func (s *Server) setupTemplates() {
 			}
 			return *t
 		},
+		"safeHTML": func(raw string) template.HTML {
+			if strings.TrimSpace(raw) == "" {
+				return template.HTML("")
+			}
+			return template.HTML(htmlPolicy.Sanitize(raw))
+		},
 	}
 
 	// Parse the base layout once as a clonable template
 	base := template.Must(template.New("base").Funcs(funcMap).ParseFS(templateFS, "templates/base.html"))
 
 	// Parse all partial/fragment templates that may be referenced by page templates
-	partials := []string{"templates/library_table.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html"}
+	partials := []string{"templates/library_table.html", "templates/book_detail_panel.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html"}
 	baseWithPartials := template.Must(template.Must(base.Clone()).ParseFS(templateFS, partials...))
 
 	r := &multiRender{templates: make(map[string]*template.Template)}
@@ -577,10 +586,17 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 		return
 	}
 
-	c.HTML(http.StatusOK, "book_detail.html", gin.H{
+	data := gin.H{
 		"Book": book,
 		"Page": "library",
-	})
+	}
+
+	if c.Query("view") == "modal" || c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "book_detail_panel.html", data)
+		return
+	}
+
+	c.HTML(http.StatusOK, "book_detail.html", data)
 }
 
 // handleDownloads renders the download queue page.
