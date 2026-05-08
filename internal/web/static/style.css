@@ -222,6 +222,25 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     border-radius: var(--radius);
     font-size: 0.9rem;
 }
+    .search-bar select,
+    .form-group select {
+        color-scheme: dark;
+    }
+    .search-bar select option,
+    .form-group select option {
+        background: var(--surface);
+        color: var(--text);
+    }
+.data-table td a {
+    color: #78b7ff;
+    text-decoration: none;
+    font-weight: 500;
+}
+.data-table td a:hover,
+.data-table td a:focus-visible {
+    color: #9cc9ff;
+    text-decoration: underline;
+}
 
 .search-bar input { flex: 1; }
 
