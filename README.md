@@ -30,7 +30,7 @@ Switching backends requires a container restart. The DB keeps backend settings, 
 
 ### Emby Setup
 
-1. Create an API key in Emby (`Settings &rarr; Advanced &rarr; API Keys &rarr; New API Key`).
+1. Create an API key in Emby (Settings &rarr; Advanced &rarr; API Keys &rarr; New API Key).
 2. Find your audiobook library&apos;s ItemId &mdash; either via the UI (Settings &rarr; Media Server &rarr; Emby panel will let you paste it), or via the API:
 
    ```bash
