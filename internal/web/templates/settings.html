@@ -644,7 +644,15 @@ function confirmRestart() {
                         closePlexPopup();
                         var msg = data.message || 'Plex login complete. Loading updated settings...';
                         setPlexAuthMessage(msg, false);
-                        window.location.href = '/settings';
+                        // POST to /auth/plex/complete so the server re-uses the already-fetched
+                        // server list and renders the URL picker without a redundant API call.
+                        var form = document.createElement('form');
+                        form.method = 'POST';
+                        form.action = '/auth/plex/complete';
+                        var fi = document.createElement('input'); fi.type = 'hidden'; fi.name = 'pin_id'; fi.value = pinID; form.appendChild(fi);
+                        var fc = document.createElement('input'); fc.type = 'hidden'; fc.name = 'pin_code'; fc.value = pinCode; form.appendChild(fc);
+                        document.body.appendChild(form);
+                        form.submit();
                         return;
                     }
 

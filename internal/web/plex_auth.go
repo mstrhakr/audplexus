@@ -210,7 +210,7 @@ func (s *Server) handlePlexPoll(c *gin.Context) {
 		return
 	}
 
-	complete, _, warning, err := s.completePlexLogin(c.Request.Context(), pinID, pinCode)
+	complete, servers, warning, err := s.completePlexLogin(c.Request.Context(), pinID, pinCode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "Failed to verify Plex login: " + err.Error()})
 		return
@@ -221,7 +221,7 @@ func (s *Server) handlePlexPoll(c *gin.Context) {
 		return
 	}
 
-	resp := gin.H{"status": "complete"}
+	resp := gin.H{"status": "complete", "servers_found": len(servers) > 0}
 	if warning != "" {
 		resp["message"] = warning
 	}
