@@ -17,6 +17,7 @@ type Database interface {
 	UpsertBook(ctx context.Context, book *Book) error
 	UpdateBookStatus(ctx context.Context, id int64, status BookStatus) error
 	UpdateBookPlexInfo(ctx context.Context, id int64, plexRatingKey, plexTitle string) error
+	UpdateBookMediaServerInfo(ctx context.Context, id int64, serverID, serverTitle string) error
 	DeleteBook(ctx context.Context, id int64) error
 
 	// Download Queue

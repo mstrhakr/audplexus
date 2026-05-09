@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -29,6 +28,7 @@ import (
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
 	"github.com/mstrhakr/audplexus/internal/logging"
+	"github.com/mstrhakr/audplexus/internal/mediaserver"
 	"github.com/mstrhakr/audplexus/internal/organizer"
 	audible "github.com/mstrhakr/go-audible"
 )
@@ -55,13 +55,6 @@ type Server struct {
 	audiobooksPath string
 	downloadsPath  string
 	configPath     string
-	plexCountCache struct {
-		mu        sync.Mutex
-		key       string
-		count     int
-		fetchedAt time.Time
-		ok        bool
-	}
 }
 
 // NewServer creates a new web server with all handlers registered.
@@ -97,10 +90,26 @@ func NewServer(
 		configPath:     configPath,
 	}
 
-	// Wire up new combined Plex sync callback
-	syncSvc.SetPlexSyncCallback(s.plexSyncForSync)
+	// Wire up the media-server sync callbacks. They dispatch on the active
+	// backend so Plex users keep their existing scan-and-wait flow while
+	// Emby (or any future backend) goes through the abstraction.
+	syncSvc.SetPlexSyncCallback(func(ctx context.Context) (int, error) {
+		backend := dlMgr.MediaServer()
+		if backend == nil {
+			return 0, fmt.Errorf("media server not configured")
+		}
+		// Plex has a richer scan-completion polling flow; preserve it.
+		if backend.Name() == "plex" {
+			return s.plexSyncForSync(ctx)
+		}
+		return backend.TriggerLibraryScan(ctx)
+	})
 	syncSvc.SetPlexReconcileCallback(func(ctx context.Context, progressFn func(current, total int)) error {
-		return dlMgr.ReconcilePlexLibrary(ctx, progressFn)
+		backend := dlMgr.MediaServer()
+		if backend == nil {
+			return fmt.Errorf("media server not configured")
+		}
+		return backend.ReconcileLibrary(ctx, progressFn)
 	})
 
 	s.setupTemplates()
@@ -251,6 +260,9 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/auth/plex/section", s.handlePlexSectionSelect)
 	s.router.POST("/auth/plex/scan", s.handlePlexScan)
 	s.router.POST("/auth/plex/check", s.handlePlexCheck)
+	s.router.POST("/auth/emby/configure", s.handleEmbyConfigure)
+	s.router.POST("/auth/emby/scan", s.handleEmbyScan)
+	s.router.POST("/auth/media-server/select", s.handleMediaServerSelect)
 
 	// API / HTMX endpoints
 	api := s.router.Group("/api")
@@ -402,49 +414,97 @@ func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
 
 	lastSync, _ := s.db.GetLastSync(ctx)
 
-	plexURL, plexToken := s.getPlexSettings(ctx)
-	plexSectionID, _ := s.db.GetSetting(ctx, "plex_section_id")
-	plexSectionTitle, _ := s.db.GetSetting(ctx, "plex_section_title")
+	// Resolve the active backend so the dashboard reports the right label
+	// and item count regardless of which media server the user picked.
+	mediaServerType := mediaserver.Resolve(ctx, s.db)
+	backendLabel, backendDisplay := mediaServerLabel(mediaServerType)
 
-	plexConfigured := strings.TrimSpace(plexURL) != "" && strings.TrimSpace(plexToken) != ""
-	plexSectionConfigured := strings.TrimSpace(plexSectionID) != ""
+	mediaServerConfigured := false
+	libraryItems := 0
+	libraryItemsAvailable := false
+	libraryCoverage := 0
+	libraryCoverageAvailable := false
+	libraryDetail := ""
 
-	plexLibraryItems := 0
-	plexLibraryItemsAvailable := false
-	plexCoverage := 0
-	plexCoverageAvailable := false
-	if plexConfigured && plexSectionConfigured {
-		items, err := s.getCachedPlexSectionItemCount(ctx, plexURL, plexToken, strings.TrimSpace(plexSectionID))
+	if backend := s.downloads.MediaServer(); backend != nil && backend.Configured(ctx) {
+		mediaServerConfigured = true
+		// Bound the call so a slow/dead media server can't stall the dashboard.
+		lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		items, err := backend.LibraryItemCount(lookupCtx)
+		cancel()
 		if err != nil {
-			webLog.Debug().Err(err).Msg("failed to fetch Plex section item count for dashboard")
+			webLog.Debug().Err(err).Str("backend", backendLabel).Msg("dashboard: media server item count failed")
 		} else {
-			plexLibraryItems = items
-			plexLibraryItemsAvailable = true
+			libraryItems = items
+			libraryItemsAvailable = true
 			if completeBooks > 0 {
-				coverage := int(math.Round((float64(plexLibraryItems) / float64(completeBooks)) * 100))
+				coverage := int(math.Round((float64(items) / float64(completeBooks)) * 100))
 				if coverage < 0 {
 					coverage = 0
 				}
-				plexCoverage = coverage
-				plexCoverageAvailable = true
+				libraryCoverage = coverage
+				libraryCoverageAvailable = true
 			}
+		}
+
+		// Backend-specific status detail for the inline summary line.
+		switch mediaServerType {
+		case mediaserver.TypePlex:
+			plexSectionTitle, _ := s.db.GetSetting(ctx, "plex_section_title")
+			libraryDetail = strings.TrimSpace(plexSectionTitle)
+		case mediaserver.TypeEmby:
+			path, _ := s.db.GetSetting(ctx, "emby_library_path")
+			libraryDetail = strings.TrimSpace(path)
 		}
 	}
 
+	// Plex-specific dashboard fields kept in place so Plex users see no UI
+	// regression. They are populated only when Plex is the active backend.
+	plexConfigured := false
+	plexSectionTitleVal := ""
+	if mediaServerType == mediaserver.TypePlex {
+		plexConfigured = mediaServerConfigured
+		plexSectionTitleVal = libraryDetail
+	}
+
 	return gin.H{
-		"TotalBooks":      totalBooks,
-		"CompleteBooks":   completeBooks,
-		"NewBooks":        newBooks,
-		"ActiveDL":        len(activeDownloads),
-		"PendingDL":       len(pendingDownloads),
-		"FailedDL":        len(failedDownloads),
-		"LastSync":        lastSync,
+		"TotalBooks":    totalBooks,
+		"CompleteBooks": completeBooks,
+		"NewBooks":      newBooks,
+		"ActiveDL":      len(activeDownloads),
+		"PendingDL":     len(pendingDownloads),
+		"FailedDL":      len(failedDownloads),
+		"LastSync":      lastSync,
+
+		// Backend-agnostic media server status (preferred in templates).
+		"MediaServerType":       string(mediaServerType),
+		"MediaServerLabel":      backendLabel,
+		"MediaServerDisplay":    backendDisplay,
+		"MediaServerConfigured": mediaServerConfigured,
+		"LibraryItems":          libraryItems,
+		"LibraryItemsSet":       libraryItemsAvailable,
+		"LibraryCoverage":       libraryCoverage,
+		"LibraryCoverageSet":    libraryCoverageAvailable,
+		"LibraryDetail":         libraryDetail,
+
+		// Legacy Plex-specific fields (only populated for Plex backend).
 		"PlexConfigured":  plexConfigured,
-		"PlexSection":     strings.TrimSpace(plexSectionTitle),
-		"PlexItems":       plexLibraryItems,
-		"PlexItemsSet":    plexLibraryItemsAvailable,
-		"PlexCoverage":    plexCoverage,
-		"PlexCoverageSet": plexCoverageAvailable,
+		"PlexSection":     plexSectionTitleVal,
+		"PlexItems":       libraryItems,
+		"PlexItemsSet":    libraryItemsAvailable && mediaServerType == mediaserver.TypePlex,
+		"PlexCoverage":    libraryCoverage,
+		"PlexCoverageSet": libraryCoverageAvailable && mediaServerType == mediaserver.TypePlex,
+	}
+}
+
+// mediaServerLabel returns ("plex"|"emby", "Plex"|"Emby"). The first form is
+// used in attribute values, the second in user-visible text.
+func mediaServerLabel(t mediaserver.Type) (string, string) {
+	switch t {
+	case mediaserver.TypeEmby:
+		return "emby", "Emby"
+	default:
+		return "plex", "Plex"
 	}
 }
 
@@ -472,35 +532,6 @@ func (s *Server) getDashboardDownloadsData(ctx context.Context) gin.H {
 		"DoneDownloads":   completeDownloads,
 		"DownloadTitles":  s.getDownloadTitles(ctx, rowsForTitles),
 	}
-}
-
-func (s *Server) getCachedPlexSectionItemCount(ctx context.Context, plexURL, plexToken, sectionID string) (int, error) {
-	key := plexURL + "|" + sectionID
-
-	s.plexCountCache.mu.Lock()
-	if s.plexCountCache.key == key && s.plexCountCache.ok && time.Since(s.plexCountCache.fetchedAt) < 30*time.Second {
-		count := s.plexCountCache.count
-		s.plexCountCache.mu.Unlock()
-		return count, nil
-	}
-	s.plexCountCache.mu.Unlock()
-
-	plexCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	items, err := s.plexSectionItemCount(plexCtx, plexURL, plexToken, sectionID)
-	if err != nil {
-		return 0, err
-	}
-
-	s.plexCountCache.mu.Lock()
-	s.plexCountCache.key = key
-	s.plexCountCache.count = items
-	s.plexCountCache.fetchedAt = time.Now()
-	s.plexCountCache.ok = true
-	s.plexCountCache.mu.Unlock()
-
-	return items, nil
 }
 
 func (s *Server) getDownloadTitles(ctx context.Context, rows []database.DownloadQueue) map[string]string {
@@ -713,6 +744,12 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 
 	devices, _ := s.db.ListDevices(ctx)
 
+	// Active media server backend (for the type-selector and Emby panel).
+	mediaServerType := string(mediaserver.Resolve(ctx, s.db))
+	embyURL, embyAPIKey, embyLibraryID := s.embySettings(ctx)
+	embyLibraryPath, _ := s.db.GetSetting(ctx, "emby_library_path")
+	embyConfigured := embyURL != "" && embyAPIKey != "" && embyLibraryID != ""
+
 	data := gin.H{
 		"SyncSchedule":         syncSchedule,
 		"SyncEnabled":          syncEnabled,
@@ -732,6 +769,14 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 		"AudiobooksPath":       s.audiobooksPath,
 		"DownloadsPath":        s.downloadsPath,
 		"ConfigPath":           s.configPath,
+
+		// Media server selector + Emby panel
+		"MediaServerType": mediaServerType,
+		"EmbyURL":         embyURL,
+		"EmbyAPIKey":      embyAPIKey,
+		"EmbyLibraryID":   embyLibraryID,
+		"EmbyLibraryPath": embyLibraryPath,
+		"EmbyConfigured":  embyConfigured,
 	}
 
 	for k, v := range authData {
@@ -1008,35 +1053,6 @@ func (s *Server) handleRunPhase(c *gin.Context) {
 func (s *Server) handleSyncStatus(c *gin.Context) {
 	progress := s.sync.GetProgress()
 	c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(progress))
-}
-
-// plexQueryForSync is the callback used by SyncService to query Plex item count.
-func (s *Server) plexQueryForSync(ctx context.Context) (int, error) {
-	plexURL, plexToken := s.getPlexSettings(ctx)
-	if plexURL == "" || plexToken == "" {
-		return 0, fmt.Errorf("Plex not configured")
-	}
-	sectionID, _ := s.db.GetSetting(ctx, "plex_section_id")
-	sectionID = strings.TrimSpace(sectionID)
-	if sectionID == "" {
-		return 0, fmt.Errorf("Plex library section not configured")
-	}
-	return s.plexSectionItemCount(ctx, plexURL, plexToken, sectionID)
-}
-
-// plexTriggerScanForSync is the callback used by SyncService to trigger a full Plex scan.
-func (s *Server) plexTriggerScanForSync(ctx context.Context) error {
-	plexURL, plexToken := s.getPlexSettings(ctx)
-	if plexURL == "" || plexToken == "" {
-		return fmt.Errorf("Plex not configured")
-	}
-	sectionID, _ := s.db.GetSetting(ctx, "plex_section_id")
-	sectionID = strings.TrimSpace(sectionID)
-	if sectionID == "" {
-		return fmt.Errorf("Plex library section not configured")
-	}
-	// Empty path triggers a full section scan, force=false for routine syncs
-	return s.plexTriggerSectionScan(ctx, plexURL, plexToken, sectionID, "", false)
 }
 
 // plexSyncForSync is the callback used by SyncService to perform a full Plex scan and then query the library.
@@ -1517,6 +1533,9 @@ func (s *Server) authBaseData(ctx context.Context) gin.H {
 	plexConfigured := plexURL != "" && plexToken != ""
 	plexSectionConfigured := strings.TrimSpace(plexSectionID) != ""
 
+	mediaServerType := mediaserver.Resolve(ctx, s.db)
+	mediaServerLabelKey, mediaServerDisplay := mediaServerLabel(mediaServerType)
+
 	data := gin.H{
 		"Authenticated":         s.audible.IsAuthenticated(),
 		"PlexURL":               plexURL,
@@ -1525,6 +1544,8 @@ func (s *Server) authBaseData(ctx context.Context) gin.H {
 		"PlexSectionID":         plexSectionID,
 		"PlexSectionTitle":      plexSectionTitle,
 		"PlexSectionConfigured": plexSectionConfigured,
+		"MediaServerType":       mediaServerLabelKey,
+		"MediaServerDisplay":    mediaServerDisplay,
 	}
 
 	if plexConfigured {
@@ -1669,9 +1690,14 @@ func (s *Server) handleDiagnostics(c *gin.Context) {
 		marketplace = creds.Marketplace
 	}
 
+	mediaServerType := mediaserver.Resolve(c.Request.Context(), s.db)
+	_, mediaServerDisplay := mediaServerLabel(mediaServerType)
+
 	c.HTML(http.StatusOK, "diagnostics.html", gin.H{
-		"Page":            "diagnostics",
-		"UserMarketplace": marketplace,
+		"Page":               "diagnostics",
+		"UserMarketplace":    marketplace,
+		"MediaServerType":    string(mediaServerType),
+		"MediaServerDisplay": mediaServerDisplay,
 	})
 }
 
@@ -1697,26 +1723,35 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 	completeStatus := database.BookStatusComplete
 	_, completeCount, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
 
-	// Get Plex items if configured
+	// Determine library presence from the per-book MediaServerID column,
+	// which the reconcile pass populates with the active backend's item ID.
+	// This means diagnostics works for any backend (Plex, Emby, ...) without
+	// re-querying the server on every request.
 	plexURL, plexToken := s.getPlexSettings(ctx)
 	sectionID, _ := s.db.GetSetting(ctx, "plex_section_id")
 	sectionID = strings.TrimSpace(sectionID)
 
+	// For Plex backwards compatibility: if Plex is fully configured and the
+	// MediaServerID column hasn't been populated yet (pre-reconcile), fall
+	// back to a live Plex item query so the page is still useful.
+	plexTitleIndex := make(map[string]PlexItem)
+	booksWithMediaID := 0
+	for _, b := range books {
+		if b.MediaServerID != "" {
+			booksWithMediaID++
+		}
+	}
 	var plexItems []PlexItem
-	if plexURL != "" && plexToken != "" && sectionID != "" {
+	if booksWithMediaID == 0 && plexURL != "" && plexToken != "" && sectionID != "" {
 		items, err := s.plexListSectionItems(ctx, plexURL, plexToken, sectionID, 10000)
 		if err != nil {
 			webLog.Warn().Err(err).Msg("failed to get Plex items for diagnostics")
 		} else {
 			plexItems = items
+			for _, item := range items {
+				plexTitleIndex[normalizeTitle(item.Title)] = item
+			}
 		}
-	}
-
-	// Build index of Plex items by title (normalized for comparison)
-	plexTitleIndex := make(map[string]PlexItem)
-	for _, item := range plexItems {
-		normalizedTitle := normalizeTitle(item.Title)
-		plexTitleIndex[normalizedTitle] = item
 	}
 
 	// Process each book to determine its status
@@ -1769,21 +1804,27 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 			missingFromDisk++
 		}
 
-		// Check if in Plex by title matching
-		normalizedTitle := normalizeTitle(book.Title)
-		if plexItem, found := plexTitleIndex[normalizedTitle]; found {
+		// Determine library presence. Prefer the persisted MediaServerID
+		// (set by reconcile against the active backend); fall back to a live
+		// Plex title-index lookup only when reconcile hasn't run yet.
+		if book.MediaServerID != "" {
 			item.InPlex = true
-			item.PlexTitle = plexItem.Title
-		} else {
-			// Try fuzzy match - check if our title is contained in any Plex title or vice versa
-			authorTitleKey := normalizeTitle(book.Author + " " + book.Title)
-			for plexNormTitle, plexItem := range plexTitleIndex {
-				if strings.Contains(plexNormTitle, normalizedTitle) ||
-					strings.Contains(normalizedTitle, plexNormTitle) ||
-					strings.Contains(plexNormTitle, authorTitleKey) {
-					item.InPlex = true
-					item.PlexTitle = plexItem.Title
-					break
+			item.PlexTitle = book.MediaServerTitle
+		} else if len(plexTitleIndex) > 0 {
+			normalizedTitle := normalizeTitle(book.Title)
+			if plexItem, found := plexTitleIndex[normalizedTitle]; found {
+				item.InPlex = true
+				item.PlexTitle = plexItem.Title
+			} else {
+				authorTitleKey := normalizeTitle(book.Author + " " + book.Title)
+				for plexNormTitle, plexItem := range plexTitleIndex {
+					if strings.Contains(plexNormTitle, normalizedTitle) ||
+						strings.Contains(normalizedTitle, plexNormTitle) ||
+						strings.Contains(plexNormTitle, authorTitleKey) {
+						item.InPlex = true
+						item.PlexTitle = plexItem.Title
+						break
+					}
 				}
 			}
 		}
@@ -1792,7 +1833,7 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 			if item.Issue != "" {
 				item.Issue += "; "
 			}
-			item.Issue += "Not found in Plex library"
+			item.Issue += "Not found in media server library"
 			missingFromPlex++
 		}
 
@@ -1802,10 +1843,14 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 		}
 	}
 
+	libraryItems := len(plexItems)
+	if libraryItems == 0 {
+		libraryItems = booksWithMediaID
+	}
 	response := DiagnosticsResponse{
 		TotalBooks:      totalCount,
 		CompleteBooks:   completeCount,
-		PlexItems:       len(plexItems),
+		PlexItems:       libraryItems,
 		FilesOnDisk:     filesOnDisk,
 		MissingFromPlex: missingFromPlex,
 		MissingFromDisk: missingFromDisk,

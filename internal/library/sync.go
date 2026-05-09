@@ -39,11 +39,15 @@ const (
 )
 
 // DefaultFullPhases returns the standard set of sync phases in idle state.
+//
+// Phase identifiers retain their historical names (PhasePlexSync) for URL/JS
+// compatibility, but the user-visible labels are media-server-agnostic so the
+// dashboard reads naturally regardless of which backend is active.
 func DefaultFullPhases() []PhaseStatus {
 	return []PhaseStatus{
 		{Name: PhaseAudibleSync, Label: "Audible Library", Status: "idle"},
 		{Name: PhaseFileScan, Label: "File System Scan", Status: "idle"},
-		{Name: PhasePlexSync, Label: "Plex Sync", Status: "idle"},
+		{Name: PhasePlexSync, Label: "Library Scan", Status: "idle"},
 		{Name: PhaseCollectionSync, Label: "Collection Sync", Status: "idle"},
 	}
 }
@@ -341,7 +345,7 @@ func (s *SyncService) RunPhase(ctx context.Context, phase SyncPhase) error {
 
 	case PhasePlexSync:
 		if s.plexSyncFunc == nil {
-			phaseErr = fmt.Errorf("Plex not configured")
+			phaseErr = fmt.Errorf("media server not configured")
 		} else {
 			items, err := s.plexSyncFunc(ctx)
 			if err != nil {
@@ -358,7 +362,7 @@ func (s *SyncService) RunPhase(ctx context.Context, phase SyncPhase) error {
 
 	case PhaseCollectionSync:
 		if s.plexReconcileFunc == nil {
-			phaseErr = fmt.Errorf("Plex not configured")
+			phaseErr = fmt.Errorf("media server not configured")
 		} else {
 			completeStatus := database.BookStatusComplete
 			_, completeCount, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
@@ -565,7 +569,7 @@ func (s *SyncService) buildPhases(mode SyncMode, prev []PhaseStatus) []PhaseStat
 		return []PhaseStatus{
 			defaultPhase(PhaseAudibleSync, "Audible Library"),
 			defaultPhase(PhaseFileScan, "File System Scan"),
-			defaultPhase(PhasePlexSync, "Plex Sync"),
+			defaultPhase(PhasePlexSync, "Library Scan"),
 			defaultPhase(PhaseCollectionSync, "Collection Sync"),
 		}
 	}
@@ -576,7 +580,7 @@ func (s *SyncService) buildPhases(mode SyncMode, prev []PhaseStatus) []PhaseStat
 		label string
 	}{
 		{name: PhaseFileScan, label: "File System Scan"},
-		{name: PhasePlexSync, label: "Plex Sync"},
+		{name: PhasePlexSync, label: "Library Scan"},
 		{name: PhaseCollectionSync, label: "Collection Sync"},
 	} {
 		if prevPhase, ok := findPrev(phase.name); ok {

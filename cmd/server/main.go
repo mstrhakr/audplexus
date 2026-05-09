@@ -17,6 +17,7 @@ import (
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
 	"github.com/mstrhakr/audplexus/internal/logging"
+	"github.com/mstrhakr/audplexus/internal/mediaserver"
 	"github.com/mstrhakr/audplexus/internal/organizer"
 	"github.com/mstrhakr/audplexus/internal/scheduler"
 	"github.com/mstrhakr/audplexus/internal/web"
@@ -94,6 +95,17 @@ func main() {
 	anClient := audnexus.NewClientWithRegion(region)
 	log.Info().Str("region", region).Msg("audnexus client initialized with region")
 	org := organizer.NewPlexOrganizer(db, ffmpeg, cfg.Paths.Audiobooks, cfg.Output.EmbedCover, cfg.Output.ChapterFile, cfg.Output.PlexMatchFile)
+
+	// Choose the active media-server backend (Plex or Emby) and pass it into
+	// the download pipeline. Selection is via the `media_server_type` setting
+	// or MEDIA_SERVER env var; defaults to Plex for backwards compatibility.
+	mediaServerType := mediaserver.Resolve(context.Background(), db)
+	mediaSvr, err := mediaserver.New(mediaServerType, db, cfg.Paths.Audiobooks)
+	if err != nil {
+		log.Fatal().Err(err).Str("type", string(mediaServerType)).Msg("failed to construct media server backend")
+	}
+	log.Info().Str("backend", string(mediaServerType)).Msg("media server backend selected")
+
 	dlMgr := library.NewDownloadManager(
 		db,
 		audibleClient,
@@ -107,6 +119,7 @@ func main() {
 		cfg.Download.DownloadConcurrency,
 		cfg.Download.DecryptConcurrency,
 		cfg.Download.ProcessConcurrency,
+		mediaSvr,
 	)
 
 	// Start download manager
@@ -213,6 +226,14 @@ func applyDBSettings(db database.Database, cfg *config.Config) {
 	// Seed Plex values from config/env once if DB has not been configured yet.
 	_ = resolveStringSetting(ctx, db, "plex_url", cfg.Plex.URL)
 	_ = resolveStringSetting(ctx, db, "plex_token", cfg.Plex.Token)
+
+	// Seed Emby values from env (no config-file equivalent yet — env-only path
+	// is the simplest way to bootstrap a new install).
+	_ = resolveStringSetting(ctx, db, mediaserver.SettingKeyType, os.Getenv("MEDIA_SERVER"))
+	_ = resolveStringSetting(ctx, db, "emby_url", os.Getenv("EMBY_URL"))
+	_ = resolveStringSetting(ctx, db, "emby_api_key", os.Getenv("EMBY_API_KEY"))
+	_ = resolveStringSetting(ctx, db, "emby_library_id", os.Getenv("EMBY_LIBRARY_ID"))
+	_ = resolveStringSetting(ctx, db, "emby_library_path", os.Getenv("EMBY_LIBRARY_PATH"))
 }
 
 func resolveStringSetting(ctx context.Context, db database.Database, key, fallback string) string {

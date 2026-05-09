@@ -1,0 +1,97 @@
+// Package mediaserver abstracts over a media server (Plex, Emby, ...) that
+// indexes the audiobook library, exposes search/collections, and accepts
+// scan triggers.
+//
+// Backends are selected at startup based on the `media_server_type` setting
+// (or MEDIA_SERVER env var) and wired into the download pipeline. Each
+// backend persists its own settings under backend-specific DB keys, so a user
+// can switch backends without losing the other's configuration.
+package mediaserver
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/logging"
+)
+
+// Type identifies a media-server backend kind.
+type Type string
+
+const (
+	TypePlex Type = "plex"
+	TypeEmby Type = "emby"
+)
+
+// SettingKeyType is the DB setting key that stores the active backend type.
+const SettingKeyType = "media_server_type"
+
+// Backend is the abstraction the download pipeline calls into. All async
+// methods log errors instead of returning them so the calling pipeline stays
+// simple — failure to update the media server should never fail a download.
+type Backend interface {
+	// Name returns a stable identifier ("plex", "emby") used in logs and UI.
+	Name() string
+
+	// Configured reports whether the backend has all required settings (URL,
+	// auth, library selection). Pipeline calls into it are no-ops when false.
+	Configured(ctx context.Context) bool
+
+	// TriggerScanForBook asks the server to re-index the folder containing the
+	// just-organized book file. Fire-and-forget; logs errors.
+	TriggerScanForBook(finalPath string)
+
+	// EnsureBookInSeriesCollection waits for the book to appear in the server's
+	// index, then ensures a collection named `series` exists and contains it.
+	// Fire-and-forget; empty series is a no-op.
+	EnsureBookInSeriesCollection(series, bookTitle string)
+
+	// ReconcileLibrary walks the server's library, records each matched book's
+	// server-side ID on the local row, and ensures all series collections are
+	// populated. Synchronous, returns errors. Reports progress via progressFn.
+	ReconcileLibrary(ctx context.Context, progressFn func(current, total int)) error
+
+	// LibraryItemCount returns how many items the server has indexed in the
+	// configured library. Used for diagnostics. Returns (0, nil) when not
+	// configured.
+	LibraryItemCount(ctx context.Context) (int, error)
+
+	// TriggerLibraryScan kicks off a server-side library refresh and returns
+	// the post-scan item count. Used by the periodic sync flow.
+	TriggerLibraryScan(ctx context.Context) (int, error)
+}
+
+// Resolve picks the active backend from the DB setting (falling back to the
+// MEDIA_SERVER env var, then to Plex for backwards compatibility).
+func Resolve(ctx context.Context, db database.Database) Type {
+	v, _ := db.GetSetting(ctx, SettingKeyType)
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		v = strings.ToLower(strings.TrimSpace(os.Getenv("MEDIA_SERVER")))
+	}
+	switch Type(v) {
+	case TypeEmby:
+		return TypeEmby
+	default:
+		return TypePlex
+	}
+}
+
+// New constructs a Backend of the requested type. libraryDir is the local
+// path Audplexus writes to (used to translate paths into the server's view).
+func New(t Type, db database.Database, libraryDir string) (Backend, error) {
+	switch t {
+	case TypePlex:
+		return NewPlex(db, libraryDir), nil
+	case TypeEmby:
+		return NewEmby(db, libraryDir), nil
+	default:
+		return nil, fmt.Errorf("unknown media server type: %q", t)
+	}
+}
+
+// log is the package-wide logger; per-backend files reuse it via msLog.
+var msLog = logging.Component("mediaserver")

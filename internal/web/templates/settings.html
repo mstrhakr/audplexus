@@ -74,6 +74,22 @@
             </section>
 
             <section class="auth-panel">
+                <h3>Media Server</h3>
+                <form method="POST" action="/auth/media-server/select" class="settings-form">
+                    <div class="form-group">
+                        <label for="media_server_type">Active Media Server</label>
+                        <select id="media_server_type" name="media_server_type" aria-describedby="media_server_type_help">
+                            <option value="plex" {{if eq .MediaServerType "plex"}}selected{{end}}>Plex (default)</option>
+                            <option value="emby" {{if eq .MediaServerType "emby"}}selected{{end}}>Emby</option>
+                        </select>
+                        <small id="media_server_type_help" class="muted">Audplexus uses this backend to trigger scans and manage series collections after each download. Restart Audplexus after switching.</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Save Active Backend</button>
+                </form>
+            </section>
+
+            {{if eq .MediaServerType "plex"}}
+            <section class="auth-panel">
                 <h3>Plex</h3>
                 <div class="auth-flow">
                     <div class="info-box" style="margin-bottom: 1rem;">
@@ -163,6 +179,48 @@
                     {{end}}
                 </div>
             </section>
+            {{end}}
+
+            {{if eq .MediaServerType "emby"}}
+            <section class="auth-panel">
+                <h3>Emby</h3>
+                <div class="auth-status">
+                    <p>
+                        {{if .EmbyConfigured}}
+                        <strong>&#10003; Emby connection saved</strong> &mdash; {{.EmbyURL}}
+                        <br>
+                        <strong>Library ID:</strong> {{.EmbyLibraryID}}{{if .EmbyLibraryPath}} &mdash; {{.EmbyLibraryPath}}{{end}}
+                        {{else}}
+                        Connect to Emby with a server URL, an API key (Emby Settings &rarr; Advanced &rarr; API Keys), and the audiobook library&apos;s ItemId.
+                        {{end}}
+                    </p>
+                </div>
+
+                <form method="POST" action="/auth/emby/configure" class="settings-form" style="margin-bottom: 1rem;">
+                    <div class="form-group">
+                        <label for="emby_url">Emby URL</label>
+                        <input type="url" id="emby_url" name="emby_url" value="{{.EmbyURL}}" placeholder="http://emby.local:8096" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="emby_api_key">Emby API Key</label>
+                        <input type="text" id="emby_api_key" name="emby_api_key" value="{{.EmbyAPIKey}}" placeholder="32-char API key from Emby" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="emby_library_id">Audiobook Library ID</label>
+                        <input type="text" id="emby_library_id" name="emby_library_id" value="{{.EmbyLibraryID}}" placeholder="e.g. 87111" required aria-describedby="emby_library_id_help">
+                        <small id="emby_library_id_help" class="muted">Find via <code>GET /emby/Library/MediaFolders?api_key=...</code> &mdash; pick the entry with <code>CollectionType=audiobooks</code>.</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Save Emby Settings</button>
+                </form>
+
+                {{if .EmbyConfigured}}
+                <form method="POST" action="/auth/emby/scan" style="margin-bottom: 1rem;">
+                    <button type="submit" class="btn btn-secondary">Trigger Test Library Refresh</button>
+                </form>
+                {{end}}
+
+            </section>
+            {{end}}
         </div>
     </div>
 
@@ -180,11 +238,19 @@
                 <label>Host Filesystem Path</label>
                 <div class="info-value">{{if .NativeAudiobooksPath}}{{.NativeAudiobooksPath}}{{else}}<span class="muted">Not configured</span>{{end}}</div>
             </div>
+            {{if eq .MediaServerType "plex"}}
             <div class="info-item">
                 <label>Plex Library Path (best effort)</label>
                 <div class="info-value">{{if .PlexSectionPath}}{{.PlexSectionPath}}{{else}}<span class="muted">Not exposed by Plex API for this connection</span>{{end}}</div>
                 <small class="muted">Section scans still work via section ID even when path is unavailable.</small>
             </div>
+            {{else if eq .MediaServerType "emby"}}
+            <div class="info-item">
+                <label>Emby Library Path</label>
+                <div class="info-value">{{if .EmbyLibraryPath}}{{.EmbyLibraryPath}}{{else}}<span class="muted">Not yet fetched &mdash; will populate after the first scan</span>{{end}}</div>
+                <small class="muted">Used to translate Audplexus paths into Emby&apos;s view when triggering targeted folder refreshes.</small>
+            </div>
+            {{end}}
         </div>
 
         <h3 class="path-group-title">Other Paths</h3>
@@ -224,7 +290,7 @@
             <div class="form-group">
                 <label for="sync_mode">Scheduled Sync Mode</label>
                 <select id="sync_mode" name="sync_mode">
-                    <option value="full" {{if eq .SyncMode "full"}}selected{{end}}>Full (Audible + filesystem + Plex)</option>
+                    <option value="full" {{if eq .SyncMode "full"}}selected{{end}}>Full (Audible + filesystem + media server)</option>
                     <option value="quick" {{if eq .SyncMode "quick"}}selected{{end}}>Quick (Audible-focused)</option>
                 </select>
                 <small>Mode used by scheduled sync runs.</small>
@@ -256,7 +322,7 @@
                     <span class="toggle-slider"></span>
                 </label>
                 <input type="hidden" name="chapter_file_sent" value="1">
-                <small>Create Plex-compatible <code>.chapters.txt</code> files alongside audiobooks</small>
+                <small>Create <code>.chapters.txt</code> files alongside audiobooks (read by Plex, Emby, and most audiobook players)</small>
             </div>
 
             <div class="form-group">
@@ -266,7 +332,7 @@
                     <span class="toggle-slider"></span>
                 </label>
                 <input type="hidden" name="plexmatch_file_sent" value="1">
-                <small>Write <code>.plexmatch</code> hint files in each book folder so Plex matches metadata by ASIN — 100% accurate scans every time</small>
+                <small>Write <code>.plexmatch</code> hint files in each book folder so Plex matches metadata by ASIN &mdash; Plex-specific; safe to leave on for Emby (file is ignored).</small>
             </div>
 
             <div class="form-group">
@@ -381,7 +447,7 @@
         <ul>
             <li>All synced books &amp; metadata</li>
             <li>Download queue &amp; history</li>
-            <li>Settings &amp; Plex configuration</li>
+            <li>Settings &amp; media server configuration</li>
             <li>Registered devices</li>
         </ul>
         <p>Audiobook files on disk are <strong>not affected</strong>.</p>

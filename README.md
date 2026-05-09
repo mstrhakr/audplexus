@@ -1,13 +1,48 @@
 # Audplexus
 
-A self-hosted web app that syncs your Audible library, downloads and processes audiobooks, and organizes output for Plex audiobook libraries.
+A self-hosted web app that syncs your Audible library, downloads and processes audiobooks, and organizes output for Plex **or Emby** audiobook libraries.
 
 ## What It Does
 
 - Connects to Audible and syncs your library metadata.
-- Downloads books and processes them into Plex-friendly output.
+- Downloads books and processes them into Plex/Emby-friendly output.
 - Adds metadata and optional companion files (cover, chapters, Plex match hints).
+- Triggers media-server library scans and creates series collections automatically.
 - Supports queue controls, retries, diagnostics, and scheduled sync.
+
+## Media Servers
+
+Audplexus drives the media server through a backend abstraction. Pick one with the `MEDIA_SERVER` env var (or via Settings &rarr; Media Server in the UI):
+
+| Backend | `MEDIA_SERVER` | Status |
+| --- | --- | --- |
+| Plex | `plex` (default) | Full support: plex.tv OAuth login, section scans, `.plexmatch` hints, collection management |
+| Emby | `emby` | Full support: API-key auth, library refresh, BoxSet collection management, automatic library-path detection |
+
+Switching backends requires a container restart. The DB keeps both backends&apos; settings, so flipping back is non-destructive.
+
+### Emby Setup
+
+1. Create an API key in Emby (`Settings &rarr; Advanced &rarr; API Keys &rarr; New API Key`).
+2. Find your audiobook library&apos;s ItemId &mdash; either via the UI (Settings &rarr; Media Server &rarr; Emby panel will let you paste it), or via the API:
+
+   ```bash
+   curl -s "http://your-emby:8096/emby/Library/MediaFolders?api_key=YOUR_KEY" | jq '.Items[] | select(.CollectionType=="audiobooks") | {Id, Name}'
+   ```
+
+3. Set env vars (or fill in the Settings UI panel):
+
+   ```bash
+   MEDIA_SERVER=emby
+   EMBY_URL=http://your-emby:8096
+   EMBY_API_KEY=...
+   EMBY_LIBRARY_ID=87111
+   ```
+
+4. After the first download (or via Settings &rarr; Trigger Test Library Refresh) Audplexus will:
+   - Trigger a refresh of the configured library.
+   - For each downloaded book, locate its item in Emby and add it to a BoxSet collection named after the series.
+   - Run a periodic reconcile that walks Emby&apos;s library and ensures every series with matched books has a populated collection.
 
 ## Quick Start
 
@@ -70,8 +105,13 @@ Key environment variables:
 | `DOWNLOAD_CONCURRENCY` | `0` | Concurrent downloads (0 = auto-detect based on CPU) |
 | `DECRYPT_CONCURRENCY` | `0` | Concurrent decrypt workers (0 = auto-detect) |
 | `PROCESS_CONCURRENCY` | `0` | Concurrent process workers (0 = auto-detect) |
+| `MEDIA_SERVER` | `plex` | Active backend: `plex` or `emby` |
 | `PLEX_URL` | | Plex server URL for library scan triggers |
 | `PLEX_TOKEN` | | Plex authentication token |
+| `EMBY_URL` | | Emby server URL (e.g. `http://emby:8096`) |
+| `EMBY_API_KEY` | | Emby API key from `Settings &rarr; Advanced &rarr; API Keys` |
+| `EMBY_LIBRARY_ID` | | Emby `ItemId` of the audiobook library (`CollectionType=audiobooks`) |
+| `EMBY_LIBRARY_PATH` | | Optional override of the path Emby uses to read the library; auto-detected via `VirtualFolders` on first scan |
 | `SYNC_SCHEDULE` | `0 */6 * * *` | Cron schedule for library sync |
 | `SYNC_MODE` | `full` | Scheduled sync mode (`quick` or `full`) |
 | `PUID` | | Unraid-style runtime UID override (used when container starts as root) |

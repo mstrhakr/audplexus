@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Audible Plex Downloader</title>
+    <title>Audplexus</title>
     <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/htmx.min.js"></script>
@@ -15,7 +15,7 @@
             <img src="/static/logo.svg" alt="Audplexus Logo" class="sidebar-logo" />
             <div class="sidebar-brand">
                 <h2 class="brand-title">Audplexus</h2>
-                <p class="brand-subtitle">Audible to Plex</p>
+                <p class="brand-subtitle">Audible to {{if .MediaServerDisplay}}{{.MediaServerDisplay}}{{else}}your library{{end}}</p>
             </div>
         </div>
         <ul class="nav-links">

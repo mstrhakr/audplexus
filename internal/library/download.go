@@ -19,6 +19,7 @@ import (
 	"github.com/mstrhakr/audplexus/internal/audnexus"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/logging"
+	"github.com/mstrhakr/audplexus/internal/mediaserver"
 	"github.com/mstrhakr/audplexus/internal/organizer"
 	audible "github.com/mstrhakr/go-audible"
 )
@@ -33,11 +34,14 @@ type DownloadManager struct {
 	ffmpeg       *audio.FFmpeg
 	audnexus     *audnexus.Client
 	organizer    *organizer.PlexOrganizer
-	libraryDir   string
-	downloadDir  string
-	outputFmt    string // "m4b" or "mp3"
-	embedCover   bool
-	plexClientID string
+	libraryDir  string
+	downloadDir string
+	outputFmt   string // "m4b" or "mp3"
+	embedCover  bool
+
+	// mediaServer is the active backend (Plex or Emby) used for scan triggers
+	// and collection management after each book is organized.
+	mediaServer mediaserver.Backend
 
 	// Pipeline concurrency settings
 	downloadConcurrency int
@@ -104,6 +108,12 @@ type QueueState struct {
 	Paused   bool      `json:"paused"`
 	Reason   string    `json:"reason,omitempty"`
 	PausedAt time.Time `json:"paused_at,omitempty"`
+}
+
+// MediaServer returns the configured media-server backend (may be nil if
+// none was wired up — pipeline calls are then no-ops).
+func (dm *DownloadManager) MediaServer() mediaserver.Backend {
+	return dm.mediaServer
 }
 
 // SetEmbedCover updates the embed cover setting at runtime.
@@ -238,6 +248,7 @@ func NewDownloadManager(
 	downloadConcurrency int,
 	decryptConcurrency int,
 	processConcurrency int,
+	mediaSvr mediaserver.Backend,
 ) *DownloadManager {
 	numCPU := runtime.NumCPU()
 
@@ -295,7 +306,7 @@ func NewDownloadManager(
 		downloadDir:         downloadDir,
 		outputFmt:           outputFmt,
 		embedCover:          embedCover,
-		plexClientID:        buildPlexClientID(),
+		mediaServer:         mediaSvr,
 		downloadConcurrency: downloadConcurrency,
 		decryptConcurrency:  decryptConcurrency,
 		processConcurrency:  processConcurrency,

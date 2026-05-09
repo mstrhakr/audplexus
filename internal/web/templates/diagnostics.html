@@ -1,7 +1,11 @@
 {{define "content"}}
 <h1>Library Diagnostics</h1>
 
-<p>Compare your Audible library with what's in Plex to identify missing or problematic books.</p>
+<p>Compare your Audible library with what&apos;s in your media server ({{if .MediaServerDisplay}}{{.MediaServerDisplay}}{{else}}Plex/Emby{{end}}) to identify missing or problematic books.</p>
+
+<script>
+window.MEDIA_SERVER_LABEL = "{{if .MediaServerDisplay}}{{.MediaServerDisplay}}{{else}}media server{{end}}";
+</script>
 
 <div class="diagnostics-summary" id="diagnostics-summary">
     <div class="loading">Loading diagnostic data...</div>
@@ -12,7 +16,7 @@
     <button id="btn-redownload-all" class="btn btn-warning" onclick="redownloadAll()" style="display:none;">Redownload All</button>
     <select id="filter-type" onchange="filterResults()">
         <option value="all">All Issues</option>
-        <option value="missing-plex">Missing from Plex</option>
+        <option value="missing-plex">Missing from Library</option>
         <option value="missing-disk">Missing from Disk</option>
         <option value="region">Region Mismatch</option>
     </select>
@@ -62,7 +66,7 @@ function renderSummary(data) {
             </div>
             <div class="stat-card">
                 <div class="stat-value">${data.plex_items}</div>
-                <div class="stat-label">In Plex</div>
+                <div class="stat-label">In ${window.MEDIA_SERVER_LABEL}</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value">${data.files_on_disk}</div>
@@ -70,7 +74,7 @@ function renderSummary(data) {
             </div>
             <div class="stat-card ${data.missing_from_plex > 0 ? 'stat-warning' : ''}">
                 <div class="stat-value">${data.missing_from_plex}</div>
-                <div class="stat-label">Missing from Plex</div>
+                <div class="stat-label">Missing from ${window.MEDIA_SERVER_LABEL}</div>
             </div>
             <div class="stat-card ${data.missing_from_disk > 0 ? 'stat-error' : ''}">
                 <div class="stat-value">${data.missing_from_disk}</div>
@@ -122,8 +126,8 @@ function renderResults(items) {
         if (item.on_disk) statusBadges.push('<span class="badge badge-success">On Disk</span>');
         else statusBadges.push('<span class="badge badge-error">Missing File</span>');
         
-        if (item.in_plex) statusBadges.push('<span class="badge badge-success">In Plex</span>');
-        else statusBadges.push('<span class="badge badge-warning">Not in Plex</span>');
+        if (item.in_plex) statusBadges.push('<span class="badge badge-success">In ' + window.MEDIA_SERVER_LABEL + '</span>');
+        else statusBadges.push('<span class="badge badge-warning">Not in ' + window.MEDIA_SERVER_LABEL + '</span>');
         
         const regionClass = item.region ? '' : 'text-muted';
         const regionDisplay = item.region ? `[${item.region}]` : 'N/A';

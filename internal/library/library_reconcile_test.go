@@ -299,6 +299,9 @@ func (m *reconcileMockDB) UpdateBookStatus(ctx context.Context, id int64, status
 func (m *reconcileMockDB) UpdateBookPlexInfo(ctx context.Context, id int64, plexRatingKey, plexTitle string) error {
 	return nil
 }
+func (m *reconcileMockDB) UpdateBookMediaServerInfo(ctx context.Context, id int64, serverID, serverTitle string) error {
+	return nil
+}
 func (m *reconcileMockDB) DeleteBook(ctx context.Context, id int64) error { return nil }
 func (m *reconcileMockDB) EnqueueDownload(ctx context.Context, item *database.DownloadQueue) error {
 	return nil
