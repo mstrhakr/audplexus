@@ -67,6 +67,14 @@
                     <p>You need to authenticate with your Amazon/Audible account to sync and download your library.</p>
                     <p>This flow generates a login URL. After signing in, paste the redirect URL back here to complete authentication.</p>
                     <form method="POST" action="/auth/start">
+                        <div class="form-group" style="margin-bottom: 0.75rem;">
+                            <label for="marketplace">Audible Region / Marketplace</label>
+                            <select id="marketplace" name="marketplace" class="form-control">
+                                {{range .Marketplaces}}
+                                <option value="{{.CountryCode}}"{{if eq .CountryCode $.CurrentMarketplace}} selected{{end}}>{{.Name}} ({{.CountryCode}})</option>
+                                {{end}}
+                            </select>
+                        </div>
                         <button type="submit" class="btn btn-primary">Generate Amazon Login Link</button>
                     </form>
                 </div>

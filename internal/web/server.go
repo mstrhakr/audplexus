@@ -1517,6 +1517,11 @@ func (s *Server) authBaseData(ctx context.Context) gin.H {
 	plexConfigured := plexURL != "" && plexToken != ""
 	plexSectionConfigured := strings.TrimSpace(plexSectionID) != ""
 
+	currentMarketplace := "us"
+	if creds := s.audible.GetCredentials(); creds != nil && creds.Marketplace != "" {
+		currentMarketplace = creds.Marketplace
+	}
+
 	data := gin.H{
 		"Authenticated":         s.audible.IsAuthenticated(),
 		"PlexURL":               plexURL,
@@ -1525,6 +1530,8 @@ func (s *Server) authBaseData(ctx context.Context) gin.H {
 		"PlexSectionID":         plexSectionID,
 		"PlexSectionTitle":      plexSectionTitle,
 		"PlexSectionConfigured": plexSectionConfigured,
+		"Marketplaces":          audible.AllMarketplaces(),
+		"CurrentMarketplace":    currentMarketplace,
 	}
 
 	if plexConfigured {
@@ -1549,6 +1556,14 @@ func (s *Server) renderAuthPage(c *gin.Context, status int, extra gin.H) {
 
 // handleAuthStart generates an OAuth URL and shows it to the user.
 func (s *Server) handleAuthStart(c *gin.Context) {
+	if mp := c.PostForm("marketplace"); mp != "" {
+		if market, ok := audible.GetMarketplace(mp); ok {
+			s.audible.SetMarketplace(market)
+			webLog.Info().Str("marketplace", mp).Msg("marketplace set from auth form")
+		} else {
+			webLog.Warn().Str("marketplace", mp).Msg("unknown marketplace code, using current")
+		}
+	}
 	authURL, err := s.audible.GetAuthURL()
 	if err != nil {
 		webLog.Error().Err(err).Msg("failed to generate auth URL")
