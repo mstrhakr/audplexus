@@ -192,6 +192,9 @@ func (e *EmbyBackend) EnsureBookInSeriesCollection(series, bookTitle string) {
 // server ID against matching local books, then ensures every series with
 // matched books has a populated BoxSet collection.
 func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(current, total int)) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	baseURL, apiKey, libraryID := e.settings(ctx)
 	if baseURL == "" || apiKey == "" || libraryID == "" {
 		return fmt.Errorf("Emby not configured")
@@ -411,9 +414,9 @@ func (e *EmbyBackend) LibraryItemCount(ctx context.Context) (int, error) {
 		"ParentId":         libraryID,
 		"Recursive":        "true",
 		// MusicAlbum is the album-level wrapper Emby creates per audiobook;
-// using it alone gives one record per book and matches what users see
-// in the library UI. (Audio + MusicAlbum together would double-count.)
-"IncludeItemTypes": "MusicAlbum",
+		// using it alone gives one record per book and matches what users see
+		// in the library UI. (Audio + MusicAlbum together would double-count.)
+		"IncludeItemTypes": "MusicAlbum",
 		"Limit":            "0",
 	})
 	if err != nil {
@@ -443,6 +446,9 @@ func (e *EmbyBackend) LibraryItemCount(ctx context.Context) (int, error) {
 
 // TriggerLibraryScan triggers a whole-library refresh and returns the count.
 func (e *EmbyBackend) TriggerLibraryScan(ctx context.Context) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	baseURL, apiKey, libraryID := e.settings(ctx)
 	if baseURL == "" || apiKey == "" || libraryID == "" {
 		return 0, fmt.Errorf("Emby not configured")
@@ -921,9 +927,9 @@ func (e *EmbyBackend) findItemByTitle(ctx context.Context, baseURL, apiKey, libr
 		"ParentId":         libraryID,
 		"Recursive":        "true",
 		// MusicAlbum is the album-level wrapper Emby creates per audiobook;
-// using it alone gives one record per book and matches what users see
-// in the library UI. (Audio + MusicAlbum together would double-count.)
-"IncludeItemTypes": "MusicAlbum",
+		// using it alone gives one record per book and matches what users see
+		// in the library UI. (Audio + MusicAlbum together would double-count.)
+		"IncludeItemTypes": "MusicAlbum",
 		"SearchTerm":       title,
 		"Limit":            "20",
 	})
@@ -1085,9 +1091,9 @@ func (e *EmbyBackend) listAllItems(ctx context.Context, baseURL, apiKey, library
 			"ParentId":         libraryID,
 			"Recursive":        "true",
 			// MusicAlbum is the album-level wrapper Emby creates per audiobook;
-// using it alone gives one record per book and matches what users see
-// in the library UI. (Audio + MusicAlbum together would double-count.)
-"IncludeItemTypes": "MusicAlbum",
+			// using it alone gives one record per book and matches what users see
+			// in the library UI. (Audio + MusicAlbum together would double-count.)
+			"IncludeItemTypes": "MusicAlbum",
 			"Limit":            strconv.Itoa(pageSize),
 			"StartIndex":       strconv.Itoa(startIndex),
 		})
