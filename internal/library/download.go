@@ -123,6 +123,28 @@ func (dm *DownloadManager) SetEmbedCover(v bool) {
 	dm.mu.Unlock()
 }
 
+// SetOutputFormat updates the output format setting at runtime.
+// Accepted values are "m4b" and "mp3"; unknown values are ignored.
+func (dm *DownloadManager) SetOutputFormat(v string) {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v != "m4b" && v != "mp3" {
+		return
+	}
+	dm.mu.Lock()
+	dm.outputFmt = v
+	dm.mu.Unlock()
+}
+
+// OutputFormat returns the current output format ("m4b" or "mp3").
+func (dm *DownloadManager) OutputFormat() string {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+	if dm.outputFmt == "" {
+		return "m4b"
+	}
+	return dm.outputFmt
+}
+
 // pipelineItem represents work moving through the pipeline stages.
 type pipelineItem struct {
 	BookID        int64

@@ -175,6 +175,144 @@ func (o *PlexOrganizer) OrganizeWithProgress(ctx context.Context, book *database
 	return finalPath, nil
 }
 
+// OrganizeMultiFile takes a directory of per-chapter audio files and moves them
+// into the Plex book folder, preserving each chapter as its own track. The
+// chapter files in srcDir are expected to already be named in playback order
+// (e.g. "01 - Prologue.mp3"); their names are kept verbatim inside the book
+// folder so Plex orders tracks naturally.
+//
+// onMoveProgress reports cumulative bytes moved across all chapter files.
+func (o *PlexOrganizer) OrganizeMultiFile(ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, srcDir string, onMoveProgress func(moved, total int64)) (string, error) {
+	_ = ctx
+	author := strings.TrimSpace(enriched.Author())
+	title := strings.TrimSpace(enriched.Title())
+	subtitle := strings.TrimSpace(enriched.Subtitle())
+	series := strings.TrimSpace(enriched.Series())
+	seriesPosition := strings.TrimSpace(enriched.SeriesPosition())
+	asin := strings.TrimSpace(book.ASIN)
+	region := strings.TrimSpace(enriched.Region())
+
+	if author == "" {
+		author = "Unknown Author"
+	}
+	if title == "" {
+		title = "Unknown Title"
+	}
+	filenameBase := buildFilenameBase(title, subtitle, series, seriesPosition, asin, region)
+	bookDirName := buildBookDirectoryName(title, asin, region)
+
+	bookDir := filepath.Join(o.libraryRoot, sanitizePath(author), sanitizePath(bookDirName))
+	if err := os.MkdirAll(bookDir, 0750); err != nil {
+		return "", fmt.Errorf("create book directory: %w", err)
+	}
+
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return "", fmt.Errorf("read chapter source: %w", err)
+	}
+
+	// Pre-scan to compute total bytes for progress reporting.
+	totalBytes := int64(0)
+	chapterFiles := make([]os.DirEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		chapterFiles = append(chapterFiles, e)
+		if fi, statErr := e.Info(); statErr == nil {
+			totalBytes += fi.Size()
+		}
+	}
+
+	orgLog.Info().
+		Str("asin", book.ASIN).
+		Str("title", enriched.Title()).
+		Str("dest", bookDir).
+		Int("chapters", len(chapterFiles)).
+		Msg("organizing chapter-split audiobook")
+
+	// firstFinal is returned as a representative path for the book record.
+	firstFinal := ""
+	movedTotal := int64(0)
+	for _, e := range chapterFiles {
+		src := filepath.Join(srcDir, e.Name())
+		dst := filepath.Join(bookDir, e.Name())
+
+		fileSize := int64(0)
+		if fi, err := os.Stat(src); err == nil {
+			fileSize = fi.Size()
+		}
+
+		if err := os.Rename(src, dst); err != nil {
+			// Cross-device rename; fall back to copy+delete with sub-file progress.
+			subProgress := func(moved, _ int64) {
+				if onMoveProgress != nil {
+					onMoveProgress(movedTotal+moved, totalBytes)
+				}
+			}
+			if err := copyFile(src, dst, fileSize, subProgress); err != nil {
+				return "", fmt.Errorf("move chapter file %q: %w", e.Name(), err)
+			}
+			_ = os.Remove(src)
+		}
+
+		movedTotal += fileSize
+		if onMoveProgress != nil {
+			onMoveProgress(movedTotal, totalBytes)
+		}
+
+		if firstFinal == "" {
+			firstFinal = dst
+		}
+	}
+
+	if firstFinal == "" {
+		return "", fmt.Errorf("no chapter files found in %s", srcDir)
+	}
+
+	// Generate .plexmatch hint file for perfect Plex library scanning.
+	o.mu.RLock()
+	wantPlexMatch := o.plexMatchFile
+	o.mu.RUnlock()
+	if wantPlexMatch {
+		if err := writePlexMatchFile(bookDir, enriched, book); err != nil {
+			orgLog.Warn().Err(err).Msg("failed to write .plexmatch file")
+		}
+	}
+
+	// Generate chapters file alongside the chapter tracks for tools that read it.
+	o.mu.RLock()
+	wantChapters := o.chapterFile
+	o.mu.RUnlock()
+	if wantChapters {
+		chapters := enriched.ChapterMarks()
+		if len(chapters) > 0 {
+			chapterPath := filepath.Join(bookDir, sanitizePath(filenameBase)+".chapters.txt")
+			if err := writeChaptersFile(chapterPath, chapters); err != nil {
+				orgLog.Warn().Err(err).Msg("failed to write chapters file")
+			}
+		}
+	}
+
+	// Update book in database. For multi-file output we record the directory as
+	// FilePath and the cumulative size of all chapter files.
+	book.FilePath = bookDir
+	book.FileSize = totalBytes
+	book.Status = database.BookStatusComplete
+	if err := o.db.UpsertBook(ctx, book); err != nil {
+		orgLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to update book record")
+	}
+
+	orgLog.Info().
+		Str("asin", book.ASIN).
+		Str("path", bookDir).
+		Int64("size", totalBytes).
+		Int("chapters", len(chapterFiles)).
+		Msg("audiobook organized successfully (chapter-split)")
+
+	return bookDir, nil
+}
+
 // buildFilenameBase builds a Plex-friendly filename with ASIN and optional region for easier scanning.
 // Output: "Title: Subtitle - SeriesName SeriesPosition ASIN [regionCode]" (subtitle/series/region are optional).
 func buildFilenameBase(title, subtitle, series, seriesPosition, asin, region string) string {

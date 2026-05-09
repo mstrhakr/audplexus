@@ -192,6 +192,7 @@ func (s *Server) setupTemplates() {
 			}
 			return template.HTML(htmlPolicy.Sanitize(raw))
 		},
+		"hasSuffix": strings.HasSuffix,
 	}
 
 	// Parse the base layout once as a clonable template
@@ -304,6 +305,9 @@ func (s *Server) setupRoutes() {
 		api.GET("/diagnostics/plex-items", s.handleDiagnosticsPlexItems)
 		api.POST("/downloads/redownload/:asin", s.handleRedownload)
 		api.POST("/diagnostics/redownload-all", s.handleDiagnosticsRedownloadAll)
+
+		// Per-book conversion between m4b and chapter-split mp3.
+		api.POST("/books/:id/convert", s.handleConvertBook)
 	}
 }
 
@@ -1420,9 +1424,9 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 		}
 	}
 	if format := c.PostForm("output_format"); format != "" {
-		if setSetting("output_format", format) {
-			restartRequired = true
-		}
+		// Output format is applied at runtime; no restart required.
+		_ = setSetting("output_format", format)
+		s.downloads.SetOutputFormat(format)
 	}
 	if _, ok := c.GetPostForm("download_concurrency"); ok {
 		if setSetting("download_concurrency", strings.TrimSpace(c.PostForm("download_concurrency"))) {
@@ -2059,6 +2063,43 @@ func (s *Server) handleRedownload(c *gin.Context) {
 		"success": true,
 		"message": fmt.Sprintf("Book '%s' has been queued for redownload", book.Title),
 	})
+}
+
+// handleConvertBook converts an existing book between single-file m4b and
+// chapter-split mp3 layouts in place.
+func (s *Server) handleConvertBook(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var id int64
+	if _, err := fmt.Sscanf(c.Param("id"), "%d", &id); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid book id"})
+		return
+	}
+
+	target := strings.TrimSpace(c.PostForm("format"))
+	if target == "" {
+		target = strings.TrimSpace(c.Query("format"))
+	}
+	if target == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing target format"})
+		return
+	}
+
+	if err := s.downloads.ConvertBook(ctx, id, target); err != nil {
+		webLog.Error().Err(err).Int64("book_id", id).Str("target", target).Msg("convert failed")
+		if c.GetHeader("HX-Request") == "true" {
+			c.HTML(http.StatusInternalServerError, "settings_saved.html", gin.H{"Message": "Convert failed: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": fmt.Sprintf("Converted to %s", target)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "format": target})
 }
 
 // handleDiagnosticsRedownloadAll redownloads only the problem books shown on the diagnostics page.

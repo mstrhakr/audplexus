@@ -290,6 +290,118 @@ func (dm *DownloadManager) handleProcessStage(ctx context.Context, item *pipelin
 		decryptedPath = filepath.Join(dm.downloadDir, item.ASIN+".m4b")
 	}
 
+	// If the user has selected MP3 (chapter-split) output, transcode the
+	// decrypted m4b into per-chapter mp3 files in a temp staging directory and
+	// then organize that directory into the Plex book folder.
+	if dm.OutputFormat() == "mp3" {
+		chapters := enriched.ChapterMarks()
+		if len(chapters) == 0 {
+			asinLog.Warn().Msg("mp3 chapter-split requested but no chapter data available; falling back to single-file output")
+		} else {
+			stageDir := filepath.Join(dm.downloadDir, item.ASIN+".chapters")
+			if err := os.MkdirAll(stageDir, 0750); err != nil {
+				dm.cleanupDownloadFiles(item.ASIN)
+				dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("create chapter staging dir: %w", err))
+				return
+			}
+
+			asinLog.Info().Int("chapters", len(chapters)).Str("stage_dir", stageDir).Msg("splitting into mp3 chapters")
+			if err := dm.ffmpeg.SplitChapters(decryptedPath, stageDir, chapters, "mp3"); err != nil {
+				_ = os.RemoveAll(stageDir)
+				dm.cleanupDownloadFiles(item.ASIN)
+				dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("split chapters: %w", err))
+				return
+			}
+
+			// Rough total for progress: sum the staged file sizes.
+			var totalBytes int64
+			if entries, err := os.ReadDir(stageDir); err == nil {
+				for _, e := range entries {
+					if e.IsDir() {
+						continue
+					}
+					if fi, err := e.Info(); err == nil {
+						totalBytes += fi.Size()
+					}
+				}
+			}
+
+			moveStart := time.Now()
+			var lastEmit time.Time
+			onMoveProgress := func(moved, total int64) {
+				now := time.Now()
+				if now.Sub(lastEmit) < 300*time.Millisecond && moved < total {
+					return
+				}
+				lastEmit = now
+
+				if total <= 0 {
+					total = totalBytes
+				}
+				progress := 0.0
+				if total > 0 {
+					progress = float64(moved) / float64(total)
+					if progress > 1 {
+						progress = 1
+					}
+				}
+				speed := 0.0
+				if elapsed := now.Sub(moveStart).Seconds(); elapsed > 0 {
+					speed = float64(moved) / elapsed
+				}
+				dm.emit(DownloadEvent{
+					ASIN:         item.ASIN,
+					BookID:       item.BookID,
+					Title:        item.Title,
+					Type:         "progress",
+					Stage:        "moving",
+					Progress:     progress,
+					BytesWritten: moved,
+					TotalBytes:   total,
+					Speed:        speed,
+				})
+			}
+
+			onMoveProgress(0, totalBytes)
+			finalPath, err := dm.organizer.OrganizeMultiFile(ctx, book, enriched, stageDir, onMoveProgress)
+			if err != nil {
+				_ = os.RemoveAll(stageDir)
+				dm.cleanupDownloadFiles(item.ASIN)
+				dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("organize: %w", err))
+				return
+			}
+			onMoveProgress(totalBytes, totalBytes)
+
+			// Best-effort: drop the staging dir and the now-orphan decrypted m4b.
+			_ = os.RemoveAll(stageDir)
+			dm.cleanupDownloadFiles(item.ASIN)
+
+			now := time.Now()
+			if item.DownloadItem != nil {
+				item.DownloadItem.Status = database.DownloadStatusComplete
+				item.DownloadItem.Progress = 1.0
+				item.DownloadItem.Error = ""
+				item.DownloadItem.CompletedAt = &now
+				_ = dm.db.UpdateDownload(ctx, item.DownloadItem)
+			}
+
+			asinLog.Info().Str("path", finalPath).Msg("pipeline complete (chapter-split)")
+			dm.triggerPlexScanForBook(finalPath)
+			if enriched != nil {
+				dm.addBookToSeriesCollection(enriched.Series(), enriched.Title())
+			}
+			dm.emit(DownloadEvent{
+				ASIN:     item.ASIN,
+				BookID:   item.BookID,
+				Title:    item.Title,
+				Type:     "complete",
+				Stage:    "complete",
+				Progress: 1.0,
+			})
+			return
+		}
+	}
+
 	totalBytes := int64(0)
 	if st, err := os.Stat(decryptedPath); err == nil {
 		totalBytes = st.Size()

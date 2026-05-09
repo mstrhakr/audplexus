@@ -367,6 +367,52 @@ func (f *FFmpeg) ConvertToMP3(inputPath, outputPath string, bitrate string) erro
 	)
 }
 
+// ConcatToM4B concatenates a list of audio files (in order) into a single
+// M4B output, transcoding to AAC. Used when reassembling chapter-split files
+// back into a single audiobook container.
+func (f *FFmpeg) ConcatToM4B(inputPaths []string, outputPath, bitrate string) error {
+	if len(inputPaths) == 0 {
+		return fmt.Errorf("concat: no input files")
+	}
+	if bitrate == "" {
+		bitrate = "128k"
+	}
+
+	// Build a concat list file in the same directory as the output.
+	listPath := outputPath + ".concat.txt"
+	lf, err := os.Create(listPath)
+	if err != nil {
+		return fmt.Errorf("create concat list: %w", err)
+	}
+	for _, p := range inputPaths {
+		// ffmpeg concat demuxer requires single-quoted absolute paths with
+		// internal quotes escaped per its grammar.
+		escaped := strings.ReplaceAll(p, `'`, `'\''`)
+		if _, err := fmt.Fprintf(lf, "file '%s'\n", escaped); err != nil {
+			lf.Close()
+			os.Remove(listPath)
+			return fmt.Errorf("write concat list: %w", err)
+		}
+	}
+	if err := lf.Close(); err != nil {
+		os.Remove(listPath)
+		return fmt.Errorf("close concat list: %w", err)
+	}
+	defer os.Remove(listPath)
+
+	decryptLog.Info().Int("inputs", len(inputPaths)).Str("output", outputPath).Msg("concatenating chapters into m4b")
+	return f.run(
+		"-f", "concat",
+		"-safe", "0",
+		"-i", listPath,
+		"-codec:a", "aac",
+		"-b:a", bitrate,
+		"-vn",
+		"-y",
+		outputPath,
+	)
+}
+
 // SplitChapters splits an audio file into separate chapter files.
 func (f *FFmpeg) SplitChapters(inputPath, outputDir string, chapters []ChapterMark, format string) error {
 	decryptLog.Info().Str("input", inputPath).Int("chapters", len(chapters)).Str("format", format).Msg("splitting chapters")
