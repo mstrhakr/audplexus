@@ -442,6 +442,12 @@ func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
 				if coverage < 0 {
 					coverage = 0
 				}
+				// A media server may report more items than we have books on
+				// disk (re-imports, alternate formats, manual additions). Cap
+				// at 100% so the dashboard reads sensibly.
+				if coverage > 100 {
+					coverage = 100
+				}
 				libraryCoverage = coverage
 				libraryCoverageAvailable = true
 			}

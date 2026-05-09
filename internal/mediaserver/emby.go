@@ -289,7 +289,10 @@ func (e *EmbyBackend) LibraryItemCount(ctx context.Context) (int, error) {
 	u, err := e.buildURL(baseURL, "/emby/Items", apiKey, map[string]string{
 		"ParentId":         libraryID,
 		"Recursive":        "true",
-		"IncludeItemTypes": "Audio,AudioBook,MusicAlbum",
+		// MusicAlbum is the album-level wrapper Emby creates per audiobook;
+// using it alone gives one record per book and matches what users see
+// in the library UI. (Audio + MusicAlbum together would double-count.)
+"IncludeItemTypes": "MusicAlbum",
 		"Limit":            "0",
 	})
 	if err != nil {
@@ -501,7 +504,10 @@ func (e *EmbyBackend) findItemByTitle(ctx context.Context, baseURL, apiKey, libr
 	u, err := e.buildURL(baseURL, "/emby/Items", apiKey, map[string]string{
 		"ParentId":         libraryID,
 		"Recursive":        "true",
-		"IncludeItemTypes": "Audio,AudioBook,MusicAlbum",
+		// MusicAlbum is the album-level wrapper Emby creates per audiobook;
+// using it alone gives one record per book and matches what users see
+// in the library UI. (Audio + MusicAlbum together would double-count.)
+"IncludeItemTypes": "MusicAlbum",
 		"SearchTerm":       title,
 		"Limit":            "20",
 	})
@@ -664,7 +670,10 @@ func (e *EmbyBackend) listAllItems(ctx context.Context, baseURL, apiKey, library
 		u, err := e.buildURL(baseURL, "/emby/Items", apiKey, map[string]string{
 			"ParentId":         libraryID,
 			"Recursive":        "true",
-			"IncludeItemTypes": "Audio,AudioBook,MusicAlbum",
+			// MusicAlbum is the album-level wrapper Emby creates per audiobook;
+// using it alone gives one record per book and matches what users see
+// in the library UI. (Audio + MusicAlbum together would double-count.)
+"IncludeItemTypes": "MusicAlbum",
 			"Limit":            strconv.Itoa(pageSize),
 			"StartIndex":       strconv.Itoa(startIndex),
 		})
