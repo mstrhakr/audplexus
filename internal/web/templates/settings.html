@@ -155,6 +155,15 @@
                         </div>
                         <button type="submit" class="btn btn-primary">Save Plex Server</button>
                     </form>
+                    {{else if .PlexTokenSet}}
+                    <div class="info-box" style="margin-bottom: 1rem; border-color: var(--warning);">Could not automatically discover Plex servers. Enter your Plex server URL manually (e.g. <code>http://192.168.1.x:32400</code>).</div>
+                    <form method="POST" action="/auth/plex/select" class="settings-form" style="margin-bottom: 1rem;">
+                        <div class="form-group">
+                            <label for="plex_url_manual">Plex Server URL</label>
+                            <input type="url" id="plex_url_manual" name="plex_url" value="{{.PlexURL}}" placeholder="http://192.168.1.x:32400" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save Plex Server</button>
+                    </form>
                     {{end}}
 
                     {{if .PlexConfigured}}

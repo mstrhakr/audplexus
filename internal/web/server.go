@@ -1609,6 +1609,15 @@ func (s *Server) authBaseData(ctx context.Context) gin.H {
 		"CurrentMarketplace":    currentMarketplace,
 	}
 
+	if plexToken != "" {
+		servers, err := s.plexListServerOptions(ctx, plexToken)
+		if err != nil {
+			webLog.Warn().Err(err).Msg("could not fetch Plex server list from plex.tv resources API")
+		} else if len(servers) > 0 {
+			data["PlexServers"] = servers
+		}
+	}
+
 	if plexConfigured {
 		sections, err := s.plexListSections(ctx, plexURL, plexToken)
 		if err == nil && len(sections) > 0 {
