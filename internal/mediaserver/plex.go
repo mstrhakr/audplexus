@@ -147,8 +147,7 @@ func (p *PlexBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 
 	booksByTitle := make(map[string][]database.Book)
 	for _, b := range books {
-		key := strings.ToLower(strings.TrimSpace(b.Title))
-		booksByTitle[key] = append(booksByTitle[key], b)
+		booksByTitle[normalizeTitle(b.Title)] = append(booksByTitle[normalizeTitle(b.Title)], b)
 	}
 
 	totalSteps := len(albums)
@@ -162,7 +161,7 @@ func (p *PlexBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 			return ctx.Err()
 		}
 		albumTitle := strings.TrimSpace(album.Title)
-		key := strings.ToLower(albumTitle)
+		key := normalizeTitle(albumTitle)
 		if candidates, ok := booksByTitle[key]; ok {
 			for _, book := range candidates {
 				if book.MediaServerID != album.RatingKey || book.MediaServerTitle != albumTitle {
@@ -487,14 +486,14 @@ func (p *PlexBackend) findAlbum(ctx context.Context, plexURL, token, sectionID, 
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return "", err
 	}
+	wantNorm := normalizeTitle(title)
 	for _, a := range r.MediaContainer.Metadata {
-		if strings.EqualFold(strings.TrimSpace(a.Title), strings.TrimSpace(title)) {
+		if normalizeTitle(a.Title) == wantNorm {
 			return a.RatingKey, nil
 		}
 	}
-	titleLower := strings.ToLower(strings.TrimSpace(title))
 	for _, a := range r.MediaContainer.Metadata {
-		if strings.Contains(strings.ToLower(a.Title), titleLower) {
+		if strings.Contains(normalizeTitle(a.Title), wantNorm) {
 			return a.RatingKey, nil
 		}
 	}
@@ -560,8 +559,9 @@ func (p *PlexBackend) findOrCreateCollection(ctx context.Context, plexURL, token
 	if err != nil {
 		return "", fmt.Errorf("list collections: %w", err)
 	}
+	wantSeries := normalizeTitle(seriesName)
 	for _, c := range collections {
-		if strings.EqualFold(strings.TrimSpace(c.Title), strings.TrimSpace(seriesName)) {
+		if normalizeTitle(c.Title) == wantSeries {
 			return c.RatingKey, nil
 		}
 	}

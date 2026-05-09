@@ -190,8 +190,7 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 
 	booksByTitle := make(map[string][]database.Book)
 	for _, b := range books {
-		key := strings.ToLower(strings.TrimSpace(b.Title))
-		booksByTitle[key] = append(booksByTitle[key], b)
+		booksByTitle[normalizeTitle(b.Title)] = append(booksByTitle[normalizeTitle(b.Title)], b)
 	}
 
 	totalSteps := len(items)
@@ -205,7 +204,7 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 			return ctx.Err()
 		}
 		title := strings.TrimSpace(item.Name)
-		key := strings.ToLower(title)
+		key := normalizeTitle(title)
 		if candidates, ok := booksByTitle[key]; ok {
 			for _, book := range candidates {
 				if book.MediaServerID != item.ID || book.MediaServerTitle != title {
@@ -533,15 +532,16 @@ func (e *EmbyBackend) findItemByTitle(ctx context.Context, baseURL, apiKey, libr
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return "", err
 	}
-	titleTrim := strings.TrimSpace(title)
+	// Normalized matching tolerates HTML entities, leading articles,
+	// "&" vs "and", smart quotes, etc.
+	wantNorm := normalizeTitle(title)
 	for _, it := range r.Items {
-		if strings.EqualFold(strings.TrimSpace(it.Name), titleTrim) {
+		if normalizeTitle(it.Name) == wantNorm {
 			return it.ID, nil
 		}
 	}
-	titleLower := strings.ToLower(titleTrim)
 	for _, it := range r.Items {
-		if strings.Contains(strings.ToLower(it.Name), titleLower) {
+		if strings.Contains(normalizeTitle(it.Name), wantNorm) {
 			return it.ID, nil
 		}
 	}
@@ -624,12 +624,9 @@ func (e *EmbyBackend) findCollectionByName(ctx context.Context, baseURL, apiKey,
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return "", err
 	}
-	want := strings.ToLower(strings.TrimSpace(name))
+	want := normalizeTitle(name)
 	for _, it := range r.Items {
-		if strings.EqualFold(strings.TrimSpace(it.Name), strings.TrimSpace(name)) {
-			return it.ID, nil
-		}
-		if strings.ToLower(strings.TrimSpace(it.Name)) == want {
+		if normalizeTitle(it.Name) == want {
 			return it.ID, nil
 		}
 	}
