@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -55,7 +56,12 @@ type Server struct {
 	audiobooksPath string
 	downloadsPath  string
 	configPath     string
-}
+	itemCountCache struct {
+		mu        sync.Mutex
+		key       string
+		count     int
+		fetchedAt time.Time
+	}
 
 // NewServer creates a new web server with all handlers registered.
 func NewServer(
@@ -428,10 +434,9 @@ func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
 
 	if backend := s.downloads.MediaServer(); backend != nil && backend.Configured(ctx) {
 		mediaServerConfigured = true
-		// Bound the call so a slow/dead media server can't stall the dashboard.
-		lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		items, err := backend.LibraryItemCount(lookupCtx)
-		cancel()
+		// Use cached item count (30s TTL). Avoids hammering the backend
+		// when the dashboard polls every ~12s.
+		items, err := s.getCachedLibraryItemCount(ctx, backend)
 		if err != nil {
 			webLog.Debug().Err(err).Str("backend", backendLabel).Msg("dashboard: media server item count failed")
 		} else {
@@ -512,6 +517,42 @@ func mediaServerLabel(t mediaserver.Type) (string, string) {
 	default:
 		return "plex", "Plex"
 	}
+}
+
+// getCachedLibraryItemCount returns the cached item count if valid (< 30s old),
+// otherwise queries the backend and updates the cache.
+func (s *Server) getCachedLibraryItemCount(ctx context.Context, backend mediaserver.Backend) (int, error) {
+	if backend == nil {
+		return 0, fmt.Errorf("backend not available")
+	}
+
+	// Create cache key from backend type.
+	cacheKey := string(mediaserver.Resolve(ctx, s.db))
+
+	s.itemCountCache.mu.Lock()
+	if s.itemCountCache.key == cacheKey && time.Since(s.itemCountCache.fetchedAt) < 30*time.Second {
+		count := s.itemCountCache.count
+		s.itemCountCache.mu.Unlock()
+		return count, nil
+	}
+	s.itemCountCache.mu.Unlock()
+
+	// Cache miss or expired; query the backend with a timeout.
+	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	items, err := backend.LibraryItemCount(lookupCtx)
+	cancel()
+	if err != nil {
+		return 0, err
+	}
+
+	// Update cache.
+	s.itemCountCache.mu.Lock()
+	s.itemCountCache.key = cacheKey
+	s.itemCountCache.count = items
+	s.itemCountCache.fetchedAt = time.Now()
+	s.itemCountCache.mu.Unlock()
+
+	return items, nil
 }
 
 func (s *Server) getDashboardDownloadsData(ctx context.Context) gin.H {
