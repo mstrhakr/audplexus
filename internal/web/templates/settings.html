@@ -621,37 +621,6 @@ function confirmRestart() {
             plexPopup.close();
         }
     }
-
-    var plexPopupMonitor = null;
-
-    function stopPopupMonitor() {
-        if (plexPopupMonitor) {
-            clearInterval(plexPopupMonitor);
-            plexPopupMonitor = null;
-        }
-    }
-
-    // Watch the popup: once plex.tv redirects it away from app.plex.tv after
-    // approval, reading location.href throws a cross-origin error — that's our
-    // signal to close it immediately so the user's focus returns to this tab.
-    function startPopupMonitor() {
-        stopPopupMonitor();
-        plexPopupMonitor = setInterval(function() {
-            if (!plexPopup || plexPopup.closed) {
-                stopPopupMonitor();
-                return;
-            }
-            try {
-                // This throws if origin changed (i.e. plex redirected away from app.plex.tv).
-                var _ = plexPopup.location.href;
-            } catch (e) {
-                // Cross-origin redirect detected — plex approval done, close the popup.
-                closePlexPopup();
-                stopPopupMonitor();
-            }
-        }, 500);
-    }
-
     function startPlexPolling(pinID, pinCode) {
         stopPlexPolling();
         if (!pinID || !pinCode) return;
@@ -671,7 +640,6 @@ function confirmRestart() {
 
                     if (data.status === 'complete') {
                         stopPlexPolling();
-                        stopPopupMonitor();
                         closePlexPopup();
                         var msg = data.message || 'Plex login complete. Loading updated settings...';
                         setPlexAuthMessage(msg, false);
@@ -688,7 +656,6 @@ function confirmRestart() {
                     }
 
                     stopPlexPolling();
-                    stopPopupMonitor();
                     setPlexAuthMessage(data.error || 'Plex login failed. Please try again.', true);
                     if (plexStartBtn) plexStartBtn.disabled = false;
                 })
@@ -714,7 +681,6 @@ function confirmRestart() {
             plexPopup = openPlexPopup(authURL);
             if (plexPopup) {
                 sessionStorage.setItem(popupOpenedKey, '1');
-                startPopupMonitor();
             }
         }
 
