@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mstrhakr/audplexus/internal/audnexus"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/logging"
 )
@@ -89,12 +90,15 @@ func Resolve(ctx context.Context, db database.Database) Type {
 
 // New constructs a Backend of the requested type. libraryDir is the local
 // path Audplexus writes to (used to translate paths into the server's view).
-func New(t Type, db database.Database, libraryDir string) (Backend, error) {
+// audnexusClient is used by backends that enrich server-side metadata (Emby
+// uploads author images sourced from Audnexus); pass nil to disable that
+// enrichment without breaking the rest of the backend's behavior.
+func New(t Type, db database.Database, audnexusClient *audnexus.Client, libraryDir string) (Backend, error) {
 	switch t {
 	case TypePlex:
 		return NewPlex(db, libraryDir), nil
 	case TypeEmby:
-		return NewEmby(db, libraryDir), nil
+		return NewEmby(db, audnexusClient, libraryDir), nil
 	default:
 		return nil, fmt.Errorf("unknown media server type: %q", t)
 	}

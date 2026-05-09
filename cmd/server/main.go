@@ -100,7 +100,7 @@ func main() {
 	// the download pipeline. Selection is via the `media_server_type` setting
 	// or MEDIA_SERVER env var; defaults to Plex for backwards compatibility.
 	mediaServerType := mediaserver.Resolve(context.Background(), db)
-	mediaSvr, err := mediaserver.New(mediaServerType, db, cfg.Paths.Audiobooks)
+	mediaSvr, err := mediaserver.New(mediaServerType, db, anClient, cfg.Paths.Audiobooks)
 	if err != nil {
 		log.Fatal().Err(err).Str("type", string(mediaServerType)).Msg("failed to construct media server backend")
 	}

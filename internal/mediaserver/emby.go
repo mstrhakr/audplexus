@@ -3,9 +3,11 @@ package mediaserver
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mstrhakr/audplexus/internal/audnexus"
 	"github.com/mstrhakr/audplexus/internal/database"
 )
 
@@ -25,15 +28,17 @@ import (
 // type virtual folder. Collections are exposed as BoxSet items.
 type EmbyBackend struct {
 	db         database.Database
+	audnexus   *audnexus.Client // optional; used to source author images
 	libraryDir string
 
 	adminMu     sync.Mutex
 	adminUserID string // cached id of an administrator user, used for item updates
 }
 
-// NewEmby constructs an Emby backend.
-func NewEmby(db database.Database, libraryDir string) *EmbyBackend {
-	return &EmbyBackend{db: db, libraryDir: libraryDir}
+// NewEmby constructs an Emby backend. audnexusClient may be nil to disable
+// audnexus-sourced enrichment (author images).
+func NewEmby(db database.Database, audnexusClient *audnexus.Client, libraryDir string) *EmbyBackend {
+	return &EmbyBackend{db: db, audnexus: audnexusClient, libraryDir: libraryDir}
 }
 
 func (e *EmbyBackend) Name() string { return string(TypeEmby) }
@@ -266,6 +271,7 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 
 	collectionsAdded := 0
 	tagsApplied := 0
+	collectionImagesSet := 0
 	seriesProcessed := 0
 	totalSeries := len(seriesBooks)
 	for series, booksInSeries := range seriesBooks {
@@ -273,15 +279,26 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 			return ctx.Err()
 		}
 
-		var seedID string
+		var seedID, seedCoverURL string
 		if len(booksInSeries) > 0 {
 			seedID = booksInSeries[0].MediaServerID
+			seedCoverURL = booksInSeries[0].CoverURL
 		}
 		collectionID, err := e.findOrCreateCollection(ctx, baseURL, apiKey, series, seedID)
 		if err != nil {
 			msLog.Warn().Err(err).Str("series", series).Msg("emby: failed to find/create collection during reconciliation")
 			seriesProcessed++
 			continue
+		}
+
+		// Give the BoxSet a primary image (the seed book's cover) when it
+		// doesn't already have one. Skips on every subsequent reconcile.
+		if collectionID != "" && seedCoverURL != "" && !e.itemHasPrimaryImage(ctx, baseURL, apiKey, collectionID) {
+			if err := e.uploadPrimaryImage(ctx, baseURL, apiKey, collectionID, seedCoverURL); err != nil {
+				msLog.Debug().Err(err).Str("series", series).Msg("emby: collection image upload failed")
+			} else {
+				collectionImagesSet++
+			}
 		}
 
 		franchise := franchiseFromSeries(series)
@@ -310,8 +327,76 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		}
 	}
 
-	msLog.Info().Int("series_checked", totalSeries).Int("collection_adds", collectionsAdded).Int("tags_applied", tagsApplied).Msg("emby: series collection reconciliation complete")
+	msLog.Info().
+		Int("series_checked", totalSeries).
+		Int("collection_adds", collectionsAdded).
+		Int("tags_applied", tagsApplied).
+		Int("collection_images_set", collectionImagesSet).
+		Msg("emby: series collection reconciliation complete")
+
+	// Author images: walk the unique authors in the local library, ask
+	// Audnexus for each one's image, and upload to the matching Emby
+	// MusicArtist. Skipped silently when the audnexus client is nil or no
+	// matching Emby artist exists.
+	if e.audnexus != nil {
+		artistsByName, err := e.listAlbumArtists(ctx, baseURL, apiKey, libraryID)
+		if err != nil {
+			msLog.Debug().Err(err).Msg("emby: failed to list album artists; skipping author image upload")
+		} else {
+			authorImagesSet := e.uploadAuthorImages(ctx, baseURL, apiKey, books, artistsByName)
+			msLog.Info().Int("author_images_set", authorImagesSet).Msg("emby: author image enrichment complete")
+		}
+	}
+
 	return nil
+}
+
+// uploadAuthorImages walks the unique authors across the given books, looks
+// up an image for each via Audnexus, and uploads it to the matching Emby
+// MusicArtist if one exists and doesn't already have a primary image.
+func (e *EmbyBackend) uploadAuthorImages(ctx context.Context, baseURL, apiKey string, books []database.Book, artistsByName map[string]string) int {
+	type authorRef struct {
+		name string
+		asin string
+	}
+	seen := make(map[string]authorRef)
+	for _, b := range books {
+		if b.AuthorASIN == "" || b.Author == "" {
+			continue
+		}
+		if _, ok := seen[b.AuthorASIN]; ok {
+			continue
+		}
+		seen[b.AuthorASIN] = authorRef{name: b.Author, asin: b.AuthorASIN}
+	}
+
+	uploaded := 0
+	for _, ref := range seen {
+		if ctx.Err() != nil {
+			return uploaded
+		}
+		artistID, ok := artistsByName[normalizeTitle(ref.name)]
+		if !ok || artistID == "" {
+			continue
+		}
+		if e.itemHasPrimaryImage(ctx, baseURL, apiKey, artistID) {
+			continue
+		}
+		author, err := e.audnexus.GetAuthor(ctx, ref.asin)
+		if err != nil {
+			msLog.Debug().Err(err).Str("author_asin", ref.asin).Msg("emby: audnexus author lookup failed")
+			continue
+		}
+		if strings.TrimSpace(author.Image) == "" {
+			continue
+		}
+		if err := e.uploadPrimaryImage(ctx, baseURL, apiKey, artistID, author.Image); err != nil {
+			msLog.Debug().Err(err).Str("author", ref.name).Msg("emby: author image upload failed")
+			continue
+		}
+		uploaded++
+	}
+	return uploaded
 }
 
 // LibraryItemCount returns how many items Emby has indexed in the configured
@@ -529,6 +614,138 @@ func (e *EmbyBackend) applyTags(ctx context.Context, baseURL, apiKey, adminID, i
 		return fmt.Errorf("emby item POST returned %d: %s", postResp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil
+}
+
+// uploadPrimaryImage downloads imageURL and pushes it as the Primary image
+// for the given Emby item. Used to give BoxSet collections a series cover
+// and to populate author (MusicArtist) avatars from Audnexus.
+//
+// Emby expects the image body as base64-encoded text with the source
+// Content-Type preserved on the request. Best-effort: failure logs at
+// debug and is swallowed.
+func (e *EmbyBackend) uploadPrimaryImage(ctx context.Context, baseURL, apiKey, itemID, imageURL string) error {
+	if strings.TrimSpace(itemID) == "" || strings.TrimSpace(imageURL) == "" {
+		return nil
+	}
+
+	// Fetch the source image.
+	imgReq, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return fmt.Errorf("build image GET: %w", err)
+	}
+	imgResp, err := http.DefaultClient.Do(imgReq)
+	if err != nil {
+		return fmt.Errorf("fetch image: %w", err)
+	}
+	defer imgResp.Body.Close()
+	if imgResp.StatusCode < 200 || imgResp.StatusCode >= 300 {
+		return fmt.Errorf("image source returned %d", imgResp.StatusCode)
+	}
+	contentType := strings.TrimSpace(imgResp.Header.Get("Content-Type"))
+	if contentType == "" {
+		// Guess from URL extension; default to jpeg.
+		if t := mime.TypeByExtension(filepath.Ext(imageURL)); t != "" {
+			contentType = t
+		} else {
+			contentType = "image/jpeg"
+		}
+	}
+	raw, err := io.ReadAll(io.LimitReader(imgResp.Body, 10*1024*1024))
+	if err != nil {
+		return fmt.Errorf("read image: %w", err)
+	}
+
+	// POST base64 body to Emby.
+	postURL, err := e.buildURL(baseURL, "/emby/Items/"+url.PathEscape(itemID)+"/Images/Primary", apiKey, nil)
+	if err != nil {
+		return err
+	}
+	encoded := base64.StdEncoding.EncodeToString(raw)
+	postReq, err := http.NewRequestWithContext(ctx, http.MethodPost, postURL, strings.NewReader(encoded))
+	if err != nil {
+		return err
+	}
+	postReq.Header.Set("Content-Type", contentType)
+	postResp, err := http.DefaultClient.Do(postReq)
+	if err != nil {
+		return fmt.Errorf("upload image: %w", err)
+	}
+	defer postResp.Body.Close()
+	if postResp.StatusCode < 200 || postResp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(postResp.Body, 1024))
+		return fmt.Errorf("image upload returned %d: %s", postResp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+// itemHasPrimaryImage reports whether the Emby item already has a primary
+// image. Used to skip redundant uploads on every reconcile.
+func (e *EmbyBackend) itemHasPrimaryImage(ctx context.Context, baseURL, apiKey, itemID string) bool {
+	u, err := e.buildURL(baseURL, "/emby/Items/"+url.PathEscape(itemID)+"/Images", apiKey, nil)
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false
+	}
+	var imgs []struct {
+		ImageType string `json:"ImageType"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&imgs); err != nil {
+		return false
+	}
+	for _, im := range imgs {
+		if im.ImageType == "Primary" {
+			return true
+		}
+	}
+	return false
+}
+
+// listAlbumArtists returns a name → Emby ItemId map of all album artists in
+// the configured audiobook library. Used to find which MusicArtist entity
+// to attach an author image to.
+func (e *EmbyBackend) listAlbumArtists(ctx context.Context, baseURL, apiKey, libraryID string) (map[string]string, error) {
+	u, err := e.buildURL(baseURL, "/emby/Artists/AlbumArtists", apiKey, map[string]string{
+		"ParentId": libraryID,
+		"Limit":    "5000",
+	})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("emby AlbumArtists returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var r struct {
+		Items []embyItem `json:"Items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(r.Items))
+	for _, it := range r.Items {
+		out[normalizeTitle(it.Name)] = it.ID
+	}
+	return out, nil
 }
 
 // --- internal helpers ---

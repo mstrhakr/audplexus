@@ -66,7 +66,7 @@ func (s *Server) handleEmbyScan(c *gin.Context) {
 	if backend == nil || backend.Name() != string(mediaserver.TypeEmby) {
 		// Construct a one-shot Emby backend just for the test scan so we can
 		// verify settings even before the active backend is switched.
-		backend = mediaserver.NewEmby(s.db, s.audiobooksPath)
+		backend = mediaserver.NewEmby(s.db, s.audnexus, s.audiobooksPath)
 	}
 
 	if !backend.Configured(ctx) {
