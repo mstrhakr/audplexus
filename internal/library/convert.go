@@ -143,7 +143,10 @@ func (dm *DownloadManager) convertM4BToMP3(ctx context.Context, book *database.B
 	}
 
 	asinLog.Info().Str("path", bookDir).Int("chapters", len(moved)).Msg("convert m4b→mp3 complete")
-	dm.triggerPlexScanForBook(bookDir)
+	if dm.mediaServer != nil {
+		dm.mediaServer.TriggerScanForBook(bookDir)
+		dm.mediaServer.EnsureBookInSeriesCollection(enriched.Series(), enriched.Title())
+	}
 	dm.emit(DownloadEvent{
 		ASIN:     book.ASIN,
 		BookID:   book.ID,
@@ -203,7 +206,10 @@ func (dm *DownloadManager) convertMP3ToM4B(ctx context.Context, book *database.B
 	}
 
 	asinLog.Info().Str("path", finalPath).Msg("convert mp3→m4b complete")
-	dm.triggerPlexScanForBook(finalPath)
+	if dm.mediaServer != nil {
+		dm.mediaServer.TriggerScanForBook(finalPath)
+		dm.mediaServer.EnsureBookInSeriesCollection(enriched.Series(), enriched.Title())
+	}
 	dm.emit(DownloadEvent{
 		ASIN:     book.ASIN,
 		BookID:   book.ID,

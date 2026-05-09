@@ -386,9 +386,11 @@ func (dm *DownloadManager) handleProcessStage(ctx context.Context, item *pipelin
 			}
 
 			asinLog.Info().Str("path", finalPath).Msg("pipeline complete (chapter-split)")
-			dm.triggerPlexScanForBook(finalPath)
-			if enriched != nil {
-				dm.addBookToSeriesCollection(enriched.Series(), enriched.Title())
+			if dm.mediaServer != nil {
+				dm.mediaServer.TriggerScanForBook(finalPath)
+				if enriched != nil {
+					dm.mediaServer.EnsureBookInSeriesCollection(enriched.Series(), enriched.Title())
+				}
 			}
 			dm.emit(DownloadEvent{
 				ASIN:     item.ASIN,
