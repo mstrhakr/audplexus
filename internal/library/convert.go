@@ -2,7 +2,9 @@ package library
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,12 +15,17 @@ import (
 	"github.com/mstrhakr/audplexus/internal/logging"
 )
 
+// ErrConvertInProgress is returned when a convert is already running for
+// the same book; the caller should retry once the in-flight conversion
+// finishes rather than racing on shared staging directories.
+var ErrConvertInProgress = errors.New("convert already in progress for this book")
+
 // ConvertBook converts an already-organized book between single-file m4b and
 // chapter-split mp3 layouts. The book's on-disk files are replaced in place
 // and its database record is updated to point at the new layout.
 //
-// targetFormat must be "m4b" or "mp3"; if it already matches the current
-// layout the call is a no-op.
+// If the book is already in targetFormat the call is a no-op (success).
+// Concurrent ConvertBook calls for the same book return ErrConvertInProgress.
 func (dm *DownloadManager) ConvertBook(ctx context.Context, bookID int64, targetFormat string) error {
 	targetFormat = strings.ToLower(strings.TrimSpace(targetFormat))
 	if targetFormat != "m4b" && targetFormat != "mp3" {
@@ -35,6 +42,21 @@ func (dm *DownloadManager) ConvertBook(ctx context.Context, bookID int64, target
 	if book.FilePath == "" {
 		return fmt.Errorf("book has no file on disk")
 	}
+
+	// Per-ASIN lock: reject (don't queue) duplicate requests so two clicks
+	// can't race on the same staging directories.
+	dm.convertMu.Lock()
+	if _, busy := dm.convertingASINs[book.ASIN]; busy {
+		dm.convertMu.Unlock()
+		return ErrConvertInProgress
+	}
+	dm.convertingASINs[book.ASIN] = struct{}{}
+	dm.convertMu.Unlock()
+	defer func() {
+		dm.convertMu.Lock()
+		delete(dm.convertingASINs, book.ASIN)
+		dm.convertMu.Unlock()
+	}()
 
 	asinLog := dlLog.WithField("asin", book.ASIN)
 
@@ -57,7 +79,8 @@ func (dm *DownloadManager) ConvertBook(ctx context.Context, bookID int64, target
 	}
 
 	if currentFormat == targetFormat {
-		return fmt.Errorf("book is already in %s format", targetFormat)
+		asinLog.Info().Str("format", targetFormat).Msg("convert no-op: book is already in target format")
+		return nil
 	}
 
 	// Refresh metadata so we have chapter marks (m4b → mp3) or canonical
@@ -77,6 +100,51 @@ func (dm *DownloadManager) ConvertBook(ctx context.Context, bookID int64, target
 		return dm.convertMP3ToM4B(ctx, book, enriched, bookDir, asinLog)
 	}
 	return nil
+}
+
+// moveFileCrossFS moves src to dst, falling back to copy+delete if Rename
+// returns an EXDEV (cross-device) error. PlexOrganizer uses the same pattern
+// for its primary move; we replicate it here so convert works when downloads
+// and library are on different filesystems.
+func moveFileCrossFS(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	} else if !isCrossDeviceErr(err) {
+		return err
+	}
+
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dst)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(dst)
+		return err
+	}
+	return os.Remove(src)
+}
+
+// isCrossDeviceErr reports whether err is the "invalid cross-device link"
+// (EXDEV) error returned by os.Rename when src and dst live on different
+// filesystems. We string-match because the syscall errno isn't exposed
+// portably across Linux/Windows.
+func isCrossDeviceErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "cross-device") || strings.Contains(msg, "different drive") || strings.Contains(msg, "EXDEV")
 }
 
 func (dm *DownloadManager) convertM4BToMP3(ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, bookDir string, asinLog *logging.Logger) error {
@@ -118,7 +186,7 @@ func (dm *DownloadManager) convertM4BToMP3(ctx context.Context, book *database.B
 		}
 		src := filepath.Join(stageDir, e.Name())
 		dst := filepath.Join(bookDir, e.Name())
-		if err := os.Rename(src, dst); err != nil {
+		if err := moveFileCrossFS(src, dst); err != nil {
 			// Roll back any files already moved into the book dir.
 			for _, m := range moved {
 				_ = os.Remove(m)

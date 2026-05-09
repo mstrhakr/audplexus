@@ -1423,10 +1423,16 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 			restartRequired = true
 		}
 	}
-	if format := c.PostForm("output_format"); format != "" {
-		// Output format is applied at runtime; no restart required.
-		_ = setSetting("output_format", format)
-		s.downloads.SetOutputFormat(format)
+	if raw := c.PostForm("output_format"); raw != "" {
+		// Normalize and reject anything that isn't a supported format so we
+		// never persist a value the runtime will silently ignore.
+		format := strings.ToLower(strings.TrimSpace(raw))
+		if format != "m4b" && format != "mp3" {
+			webLog.Warn().Str("value", raw).Msg("ignoring invalid output_format")
+		} else {
+			_ = setSetting("output_format", format)
+			s.downloads.SetOutputFormat(format)
+		}
 	}
 	if _, ok := c.GetPostForm("download_concurrency"); ok {
 		if setSetting("download_concurrency", strings.TrimSpace(c.PostForm("download_concurrency"))) {
@@ -2070,8 +2076,8 @@ func (s *Server) handleRedownload(c *gin.Context) {
 func (s *Server) handleConvertBook(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	var id int64
-	if _, err := fmt.Sscanf(c.Param("id"), "%d", &id); err != nil {
+	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid book id"})
 		return
 	}
@@ -2086,12 +2092,16 @@ func (s *Server) handleConvertBook(c *gin.Context) {
 	}
 
 	if err := s.downloads.ConvertBook(ctx, id, target); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, library.ErrConvertInProgress) {
+			status = http.StatusConflict
+		}
 		webLog.Error().Err(err).Int64("book_id", id).Str("target", target).Msg("convert failed")
 		if c.GetHeader("HX-Request") == "true" {
-			c.HTML(http.StatusInternalServerError, "settings_saved.html", gin.H{"Message": "Convert failed: " + err.Error()})
+			c.HTML(status, "settings_saved.html", gin.H{"Message": "Convert failed: " + err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 

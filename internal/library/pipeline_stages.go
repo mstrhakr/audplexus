@@ -299,6 +299,14 @@ func (dm *DownloadManager) handleProcessStage(ctx context.Context, item *pipelin
 			asinLog.Warn().Msg("mp3 chapter-split requested but no chapter data available; falling back to single-file output")
 		} else {
 			stageDir := filepath.Join(dm.downloadDir, item.ASIN+".chapters")
+			// Clear any leftovers from a previous run; chapter counts can
+			// change across re-runs and stale files would otherwise leak
+			// into the final book folder.
+			if err := os.RemoveAll(stageDir); err != nil && !os.IsNotExist(err) {
+				dm.cleanupDownloadFiles(item.ASIN)
+				dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("clean chapter staging dir: %w", err))
+				return
+			}
 			if err := os.MkdirAll(stageDir, 0750); err != nil {
 				dm.cleanupDownloadFiles(item.ASIN)
 				dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("create chapter staging dir: %w", err))

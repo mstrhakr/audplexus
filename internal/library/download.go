@@ -71,6 +71,12 @@ type DownloadManager struct {
 	activeByASIN   map[string]PipelineStateItem
 	waitingDecrypt map[string]PipelineStateItem
 	waitingMoving  map[string]PipelineStateItem
+
+	// convertMu guards convertingASINs so only one ConvertBook call runs per
+	// book at a time; concurrent requests for the same ASIN are rejected
+	// rather than racing on shared staging directories.
+	convertMu       sync.Mutex
+	convertingASINs map[string]struct{}
 }
 
 // PipelineStateItem is a live in-memory view of one item in the pipeline.
@@ -339,6 +345,7 @@ func NewDownloadManager(
 		activeByASIN:        make(map[string]PipelineStateItem),
 		waitingDecrypt:      make(map[string]PipelineStateItem),
 		waitingMoving:       make(map[string]PipelineStateItem),
+		convertingASINs:     make(map[string]struct{}),
 	}
 }
 
