@@ -60,6 +60,15 @@ func main() {
 	}
 	log.Info().Msg("database migrations complete")
 
+	// One-shot startup pass: decode HTML entities (e.g. "&amp;", "&uacute;")
+	// that older sync runs left in book text fields. Idempotent — books that
+	// are already clean are skipped without writes.
+	if fixed, err := library.CleanupTextFields(context.Background(), db); err != nil {
+		log.Warn().Err(err).Msg("title cleanup pass failed")
+	} else if fixed > 0 {
+		log.Info().Int("books_updated", fixed).Msg("title cleanup: decoded HTML entities in existing book rows")
+	}
+
 	// Apply runtime-configurable settings stored in DB (override config file defaults).
 	applyDBSettings(db, cfg)
 

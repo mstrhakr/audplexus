@@ -548,6 +548,10 @@ func (s *Server) getDownloadTitles(ctx context.Context, rows []database.Download
 		}
 		book, err := s.db.GetBookByASIN(ctx, row.ASIN)
 		if err != nil || book == nil || book.Title == "" {
+			// The matching book row was removed (sync prune, manual delete)
+			// but the historical queue entry survives. Show a softened
+			// label rather than the raw ASIN, which reads as gibberish.
+			titles[row.ASIN] = "Removed: " + row.ASIN
 			continue
 		}
 		titles[row.ASIN] = book.Title
