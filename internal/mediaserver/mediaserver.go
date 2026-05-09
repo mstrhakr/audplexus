@@ -62,6 +62,13 @@ type Backend interface {
 	// TriggerLibraryScan kicks off a server-side library refresh and returns
 	// the post-scan item count. Used by the periodic sync flow.
 	TriggerLibraryScan(ctx context.Context) (int, error)
+
+	// TagItem applies the given tags to a server-side item (e.g. attaching
+	// a series and franchise label so the user can filter the audiobook
+	// library by them directly). Tags are additive in spirit but the
+	// implementation may replace any tags this app previously set. Backends
+	// without a useful tag concept may no-op. Best-effort; logs errors.
+	TagItem(ctx context.Context, serverItemID string, tags []string)
 }
 
 // Resolve picks the active backend from the DB setting (falling back to the

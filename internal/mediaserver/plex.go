@@ -40,6 +40,12 @@ func buildPlexClientID() string {
 
 func (p *PlexBackend) Name() string { return string(TypePlex) }
 
+// TagItem is a no-op for Plex: the Plex equivalent of grouping is a
+// collection (which we already create per series), and Plex does not expose
+// a clean per-item tag concept comparable to Emby's.
+func (p *PlexBackend) TagItem(ctx context.Context, serverItemID string, tags []string) {
+}
+
 func (p *PlexBackend) Configured(ctx context.Context) bool {
 	u, t, s := p.settings(ctx)
 	return u != "" && t != "" && s != ""

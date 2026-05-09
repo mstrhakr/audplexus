@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mstrhakr/audplexus/internal/database"
@@ -25,6 +26,9 @@ import (
 type EmbyBackend struct {
 	db         database.Database
 	libraryDir string
+
+	adminMu     sync.Mutex
+	adminUserID string // cached id of an administrator user, used for item updates
 }
 
 // NewEmby constructs an Emby backend.
@@ -163,6 +167,19 @@ func (e *EmbyBackend) EnsureBookInSeriesCollection(series, bookTitle string) {
 			return
 		}
 		msLog.Info().Str("series", series).Str("book", bookTitle).Msg("emby: book added to series collection")
+
+		// Tag the book with its series (and franchise, when one is implied
+		// by the naming convention) so the user can filter the audiobook
+		// library by them directly. Best-effort; logged on failure.
+		if adminID, adminErr := e.resolveAdminUserID(ctx, baseURL, apiKey); adminErr == nil && adminID != "" {
+			tags := []string{series}
+			if f := franchiseFromSeries(series); f != "" {
+				tags = append(tags, f)
+			}
+			if err := e.applyTags(ctx, baseURL, apiKey, adminID, itemID, tags); err != nil {
+				msLog.Debug().Err(err).Str("item_id", itemID).Strs("tags", tags).Msg("emby: tag write failed")
+			}
+		}
 	}()
 }
 
@@ -241,7 +258,14 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		return nil
 	}
 
+	// Resolve admin user once for the full reconcile pass; tag writes need it.
+	adminID, adminErr := e.resolveAdminUserID(ctx, baseURL, apiKey)
+	if adminErr != nil {
+		msLog.Warn().Err(adminErr).Msg("emby: no admin user available; series tags will be skipped this pass")
+	}
+
 	collectionsAdded := 0
+	tagsApplied := 0
 	seriesProcessed := 0
 	totalSeries := len(seriesBooks)
 	for series, booksInSeries := range seriesBooks {
@@ -260,11 +284,24 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 			continue
 		}
 
+		franchise := franchiseFromSeries(series)
+		tagsForBook := []string{series}
+		if franchise != "" {
+			tagsForBook = append(tagsForBook, franchise)
+		}
+
 		for _, book := range booksInSeries {
 			if err := e.addToCollection(ctx, baseURL, apiKey, collectionID, book.MediaServerID); err != nil {
 				msLog.Warn().Err(err).Str("series", series).Str("book", book.Title).Msg("emby: failed to add book to collection during reconciliation")
 			} else {
 				collectionsAdded++
+			}
+			if adminID != "" {
+				if err := e.applyTags(ctx, baseURL, apiKey, adminID, book.MediaServerID, tagsForBook); err != nil {
+					msLog.Debug().Err(err).Int64("book_id", book.ID).Strs("tags", tagsForBook).Msg("emby: tag write failed during reconcile")
+				} else {
+					tagsApplied++
+				}
 			}
 		}
 		seriesProcessed++
@@ -273,7 +310,7 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		}
 	}
 
-	msLog.Info().Int("series_checked", totalSeries).Int("collection_adds", collectionsAdded).Msg("emby: series collection reconciliation complete")
+	msLog.Info().Int("series_checked", totalSeries).Int("collection_adds", collectionsAdded).Int("tags_applied", tagsApplied).Msg("emby: series collection reconciliation complete")
 	return nil
 }
 
@@ -329,6 +366,169 @@ func (e *EmbyBackend) TriggerLibraryScan(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return e.LibraryItemCount(ctx)
+}
+
+// TagItem applies the given tags to an Emby item so the user can filter the
+// audiobook library by them directly. Best-effort: failure is logged and not
+// surfaced to the caller — losing tags should never fail a download.
+//
+// Implementation: GET the item's full BaseItemDto via an admin user, set
+// `TagItems` to the desired list, lock the `Tags` field so a future metadata
+// refresh doesn't strip them, then POST the modified DTO back. Empty tag
+// lists are a no-op (we don't actively clear tags the user may have set).
+func (e *EmbyBackend) TagItem(ctx context.Context, serverItemID string, tags []string) {
+	if strings.TrimSpace(serverItemID) == "" {
+		return
+	}
+	cleaned := make([]string, 0, len(tags))
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t != "" {
+			cleaned = append(cleaned, t)
+		}
+	}
+	if len(cleaned) == 0 {
+		return
+	}
+
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		baseURL, apiKey, _ := e.settings(bgCtx)
+		if baseURL == "" || apiKey == "" {
+			return
+		}
+		adminID, err := e.resolveAdminUserID(bgCtx, baseURL, apiKey)
+		if err != nil || adminID == "" {
+			msLog.Debug().Err(err).Str("item_id", serverItemID).Msg("emby: skipping tag write; no admin user resolved")
+			return
+		}
+		if err := e.applyTags(bgCtx, baseURL, apiKey, adminID, serverItemID, cleaned); err != nil {
+			msLog.Warn().Err(err).Str("item_id", serverItemID).Strs("tags", cleaned).Msg("emby: tag write failed")
+			return
+		}
+		msLog.Debug().Str("item_id", serverItemID).Strs("tags", cleaned).Msg("emby: tags applied")
+	}()
+}
+
+// resolveAdminUserID finds the first administrator user and caches the id.
+// Item updates require an admin context.
+func (e *EmbyBackend) resolveAdminUserID(ctx context.Context, baseURL, apiKey string) (string, error) {
+	e.adminMu.Lock()
+	cached := e.adminUserID
+	e.adminMu.Unlock()
+	if cached != "" {
+		return cached, nil
+	}
+
+	u, err := e.buildURL(baseURL, "/emby/Users", apiKey, nil)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", fmt.Errorf("emby Users returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var users []struct {
+		ID     string `json:"Id"`
+		Policy struct {
+			IsAdministrator bool `json:"IsAdministrator"`
+		} `json:"Policy"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&users); err != nil {
+		return "", err
+	}
+	for _, u := range users {
+		if u.Policy.IsAdministrator && u.ID != "" {
+			e.adminMu.Lock()
+			e.adminUserID = u.ID
+			e.adminMu.Unlock()
+			return u.ID, nil
+		}
+	}
+	return "", fmt.Errorf("no administrator user found")
+}
+
+// applyTags performs the round-trip: GET full DTO, modify TagItems + lock,
+// POST back.
+func (e *EmbyBackend) applyTags(ctx context.Context, baseURL, apiKey, adminID, itemID string, tags []string) error {
+	getURL, err := e.buildURL(baseURL, "/emby/Users/"+url.PathEscape(adminID)+"/Items/"+url.PathEscape(itemID), apiKey, nil)
+	if err != nil {
+		return err
+	}
+	getReq, err := http.NewRequestWithContext(ctx, http.MethodGet, getURL, nil)
+	if err != nil {
+		return err
+	}
+	getResp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		return err
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode < 200 || getResp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(getResp.Body, 2048))
+		return fmt.Errorf("emby item GET returned %d: %s", getResp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var dto map[string]any
+	if err := json.NewDecoder(getResp.Body).Decode(&dto); err != nil {
+		return fmt.Errorf("decode item DTO: %w", err)
+	}
+
+	tagItems := make([]map[string]any, 0, len(tags))
+	for _, t := range tags {
+		tagItems = append(tagItems, map[string]any{"Name": t})
+	}
+	dto["TagItems"] = tagItems
+
+	// Lock Tags so a metadata refresh doesn't wipe them.
+	locked := map[string]struct{}{"Tags": {}}
+	if existing, ok := dto["LockedFields"].([]any); ok {
+		for _, v := range existing {
+			if s, ok := v.(string); ok && s != "" {
+				locked[s] = struct{}{}
+			}
+		}
+	}
+	lockedSlice := make([]string, 0, len(locked))
+	for k := range locked {
+		lockedSlice = append(lockedSlice, k)
+	}
+	dto["LockedFields"] = lockedSlice
+
+	body, err := json.Marshal(dto)
+	if err != nil {
+		return fmt.Errorf("marshal item DTO: %w", err)
+	}
+
+	postURL, err := e.buildURL(baseURL, "/emby/Items/"+url.PathEscape(itemID), apiKey, nil)
+	if err != nil {
+		return err
+	}
+	postReq, err := http.NewRequestWithContext(ctx, http.MethodPost, postURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	postResp, err := http.DefaultClient.Do(postReq)
+	if err != nil {
+		return err
+	}
+	defer postResp.Body.Close()
+	if postResp.StatusCode < 200 || postResp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(postResp.Body, 2048))
+		return fmt.Errorf("emby item POST returned %d: %s", postResp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
 }
 
 // --- internal helpers ---
