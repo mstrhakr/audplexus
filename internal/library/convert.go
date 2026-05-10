@@ -138,7 +138,10 @@ func (dm *DownloadManager) convertM4BToMP3(parentCtx, ctx context.Context, book 
 	_ = parentCtx
 	_ = bookDir
 	chapters := enriched.ChapterMarks()
-	meta := enriched.ToAudioMetadata()
+	meta, coverPath := dm.metadataWithOptionalCover(ctx, book.ASIN, enriched)
+	if coverPath != "" {
+		defer os.Remove(coverPath)
+	}
 	if len(chapters) == 0 {
 		return fmt.Errorf("no chapter data available for ASIN %s; cannot split into mp3", book.ASIN)
 	}
@@ -247,6 +250,10 @@ func (dm *DownloadManager) convertMP3ToM4B(parentCtx, ctx context.Context, book 
 	// existing mp3 layout intact.
 	stagePath := filepath.Join(dm.downloadDir, book.ASIN+".convert.m4b")
 	defer os.Remove(stagePath)
+	meta, coverPath := dm.metadataWithOptionalCover(ctx, book.ASIN, enriched)
+	if coverPath != "" {
+		defer os.Remove(coverPath)
+	}
 
 	asinLog.Info().Int("inputs", len(mp3Files)).Str("output", stagePath).Msg("convert: concatenating mp3 chapters into m4b")
 	// ConcatToM4B is one long ffmpeg call without per-byte progress;
@@ -259,7 +266,7 @@ func (dm *DownloadManager) convertMP3ToM4B(parentCtx, ctx context.Context, book 
 		Stage:    "converting",
 		Progress: 0.05,
 	})
-	if err := dm.ffmpeg.ConcatToM4B(mp3Files, stagePath, "128k", enriched.ToAudioMetadata()); err != nil {
+	if err := dm.ffmpeg.ConcatToM4B(mp3Files, stagePath, "128k", meta); err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return fmt.Errorf("cancelled by user")
 		}

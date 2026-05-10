@@ -418,10 +418,22 @@ func (f *FFmpeg) ConcatToM4B(inputPaths []string, outputPath, bitrate string, me
 		"-f", "concat",
 		"-safe", "0",
 		"-i", listPath,
+	}
+	if meta.CoverPath != "" {
+		args = append(args,
+			"-i", meta.CoverPath,
+			"-map", "0:a",
+			"-map", "1:v",
+			"-c:v", "copy",
+			"-disposition:v:0", "attached_pic",
+		)
+	} else {
+		args = append(args, "-vn")
+	}
+	args = append(args,
 		"-codec:a", "aac",
 		"-b:a", bitrate,
-		"-vn",
-	}
+	)
 	args = append(args, metaArgs...)
 	args = append(args, "-y", outputPath)
 
@@ -464,11 +476,35 @@ func (f *FFmpeg) SplitChapters(inputPath, outputDir string, chapters []ChapterMa
 		args := []string{
 			"-ss", formatDuration(ch.StartMs),
 		}
+		if chapterMeta.CoverPath != "" {
+			args = append(args,
+				"-i", chapterMeta.CoverPath,
+				"-map", "0:a",
+				"-map", "1:v",
+			)
+		}
+		args = append(args, "-ss", formatDuration(ch.StartMs))
 		if ch.EndMs > 0 {
 			args = append(args, "-to", formatDuration(ch.EndMs))
 		}
 		args = append(args, "-i", inputPath)
 		args = append(args, codec...)
+		if chapterMeta.CoverPath != "" {
+			if format == "mp3" {
+				args = append(args,
+					"-c:v", "mjpeg",
+					"-disposition:v:0", "attached_pic",
+					"-id3v2_version", "3",
+					"-metadata:s:v", "title=Album cover",
+					"-metadata:s:v", "comment=Cover (front)",
+				)
+			} else {
+				args = append(args,
+					"-c:v", "copy",
+					"-disposition:v:0", "attached_pic",
+				)
+			}
+		}
 		args = append(args, buildMetadataArgs(chapterMeta)...)
 		args = append(args, "-y", outputPath)
 

@@ -398,7 +398,10 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 	// then organize that directory into the Plex book folder.
 	if dm.OutputFormat() == "mp3" {
 		chapters := enriched.ChapterMarks()
-		meta := enriched.ToAudioMetadata()
+		meta, coverPath := dm.metadataWithOptionalCover(ctx, item.ASIN, enriched)
+		if coverPath != "" {
+			defer os.Remove(coverPath)
+		}
 		if len(chapters) == 0 {
 			asinLog.Warn().Msg("mp3 chapter-split requested but no chapter data available; falling back to single-file output")
 		} else {

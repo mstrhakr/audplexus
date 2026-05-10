@@ -953,21 +953,7 @@ func (dm *DownloadManager) decryptBook(ctx context.Context, item *pipelineItem, 
 
 	// Output as m4b (decrypted container copy)
 	outputPath := filepath.Join(dm.downloadDir, asin+".m4b")
-	meta := enriched.ToAudioMetadata()
-
-	coverPath := ""
-	dm.mu.Lock()
-	wantCover := dm.embedCover
-	dm.mu.Unlock()
-	if wantCover {
-		downloaded, err := dm.downloadCoverToTemp(ctx, enriched.CoverURL(), asin)
-		if err != nil {
-			dlLog.Warn().Err(err).Str("asin", asin).Msg("cover prefetch failed; continuing without embedded cover")
-		} else {
-			coverPath = downloaded
-			meta.CoverPath = coverPath
-		}
-	}
+	meta, _ := dm.metadataWithOptionalCover(ctx, asin, enriched)
 
 	// Use file size as a stable denominator for decrypt progress.
 	var totalInputBytes int64
@@ -1039,6 +1025,27 @@ func (dm *DownloadManager) decryptBook(ctx context.Context, item *pipelineItem, 
 	}
 
 	return outputPath, nil
+}
+
+func (dm *DownloadManager) metadataWithOptionalCover(ctx context.Context, asin string, enriched *audnexus.EnrichedBook) (audio.Metadata, string) {
+	meta := enriched.ToAudioMetadata()
+
+	dm.mu.Lock()
+	wantCover := dm.embedCover
+	dm.mu.Unlock()
+	if !wantCover {
+		return meta, ""
+	}
+
+	coverPath, err := dm.downloadCoverToTemp(ctx, enriched.CoverURL(), asin)
+	if err != nil {
+		dlLog.Warn().Err(err).Str("asin", asin).Msg("cover prefetch failed; continuing without embedded cover")
+		return meta, ""
+	}
+	if coverPath != "" {
+		meta.CoverPath = coverPath
+	}
+	return meta, coverPath
 }
 
 func (dm *DownloadManager) downloadCoverToTemp(ctx context.Context, coverURL, asin string) (string, error) {
