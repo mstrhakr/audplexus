@@ -476,6 +476,10 @@ func (f *FFmpeg) SplitChapters(inputPath, outputDir string, chapters []ChapterMa
 		args := []string{
 			"-ss", formatDuration(ch.StartMs),
 		}
+		if ch.EndMs > 0 {
+			args = append(args, "-to", formatDuration(ch.EndMs))
+		}
+		args = append(args, "-i", inputPath)
 		if chapterMeta.CoverPath != "" {
 			args = append(args,
 				"-i", chapterMeta.CoverPath,
@@ -483,11 +487,6 @@ func (f *FFmpeg) SplitChapters(inputPath, outputDir string, chapters []ChapterMa
 				"-map", "1:v",
 			)
 		}
-		args = append(args, "-ss", formatDuration(ch.StartMs))
-		if ch.EndMs > 0 {
-			args = append(args, "-to", formatDuration(ch.EndMs))
-		}
-		args = append(args, "-i", inputPath)
 		args = append(args, codec...)
 		if chapterMeta.CoverPath != "" {
 			if format == "mp3" {
