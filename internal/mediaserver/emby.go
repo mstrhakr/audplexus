@@ -99,7 +99,17 @@ func (e *EmbyBackend) settings(ctx context.Context) (string, string, string) {
 
 // libraryServerPath returns the path the Emby server uses to read the library
 // (cached in DB; populated on first scan or via VirtualFolders lookup).
+//
+// Per-destination row binding (codex P2): when the backend is bound to
+// a destination row that carries an explicit DestinationPath, that
+// wins over cached/env values. Lets multi-dest installs route to
+// different mounts per destination.
 func (e *EmbyBackend) libraryServerPath(ctx context.Context, baseURL, apiKey, libraryID string) string {
+	if e.destination != nil {
+		if dp := strings.TrimSpace(e.destination.DestinationPath); dp != "" {
+			return dp
+		}
+	}
 	cached, _ := e.db.GetSetting(ctx, "emby_library_path")
 	cached = strings.TrimSpace(cached)
 	if cached != "" {
@@ -143,7 +153,16 @@ func (e *EmbyBackend) OnBookOrganized(ctx context.Context, book OrganizedBook) [
 	} else {
 		localFolder := filepath.Dir(book.LocalPath)
 		serverPath := e.libraryServerPath(scanCtx, baseURL, apiKey, libraryID)
-		scanPath, ok := translateScanPath(localFolder, strings.TrimSpace(e.libraryDir), serverPath)
+		// Per-destination AudiobookPath wins over the global libraryDir
+		// for path translation (codex P2). Required for multi-dest
+		// installs where each destination has its own mount mapping.
+		localRoot := strings.TrimSpace(e.libraryDir)
+		if e.destination != nil {
+			if ap := strings.TrimSpace(e.destination.AudiobookPath); ap != "" {
+				localRoot = ap
+			}
+		}
+		scanPath, ok := translateScanPath(localFolder, localRoot, serverPath)
 		if !ok {
 			// Fallback: refresh whole library. Still counts as a successful
 			// scan trigger from the caller's perspective; just less targeted.

@@ -72,11 +72,35 @@ func resolveLegacyMediaServerType(ctx context.Context, db database.Database) dat
 		return database.LibraryDestinationTypeJellyfin
 	case database.LibraryDestinationTypeABS:
 		return database.LibraryDestinationTypeABS
-	default:
-		// Be conservative: don't synthesize a destination for an unknown
-		// legacy value. Worst case the user adds one via Settings.
-		return ""
 	}
+
+	// CRITICAL upgrade-path fix (codex P1): existing v0.2.x Plex installs
+	// commonly never set media_server_type or MEDIA_SERVER because Plex was
+	// the silent default. Without this fallback those installs would
+	// upgrade to a non-nil DestinationManager with an empty
+	// library_destinations table, causing FanOut to no-op and the legacy
+	// pipeline_stages.go fallback to also no-op (it only fires when
+	// dm.destinations is nil). Detect "Plex configured via legacy
+	// settings/env but no explicit type" and synthesize a Plex row.
+	if hasPlexLegacyConfig(ctx, db) {
+		return database.LibraryDestinationTypePlex
+	}
+	if hasEmbyLegacyConfig(ctx, db) {
+		return database.LibraryDestinationTypeEmby
+	}
+	return ""
+}
+
+func hasPlexLegacyConfig(ctx context.Context, db database.Database) bool {
+	return settingOrEnv(ctx, db, "plex_url", "PLEX_URL") != "" &&
+		settingOrEnv(ctx, db, "plex_token", "PLEX_TOKEN") != "" &&
+		settingOrEnv(ctx, db, "plex_section_id", "PLEX_SECTION_ID") != ""
+}
+
+func hasEmbyLegacyConfig(ctx context.Context, db database.Database) bool {
+	return settingOrEnv(ctx, db, "emby_url", "EMBY_URL") != "" &&
+		settingOrEnv(ctx, db, "emby_api_key", "EMBY_API_KEY") != "" &&
+		settingOrEnv(ctx, db, "emby_library_id", "EMBY_LIBRARY_ID") != ""
 }
 
 func buildSynthesizedDestination(ctx context.Context, db database.Database, t database.LibraryDestinationType) (*database.LibraryDestination, error) {

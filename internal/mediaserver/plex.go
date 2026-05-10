@@ -331,6 +331,25 @@ func (p *PlexBackend) TriggerLibraryScan(ctx context.Context) (int, error) {
 // --- internal helpers (verbatim port of internal/library/plex_*.go) ---
 
 func (p *PlexBackend) resolveScanPath(ctx context.Context, plexURL, plexToken, sectionID, localScanPath string) (string, bool) {
+	// Per-destination path mapping (codex P2): when the backend is bound
+	// to a destination row that carries explicit AudiobookPath /
+	// DestinationPath, those win over the global libraryDir +
+	// plex_section_path settings. Lets multi-dest installs route to
+	// different mounts (household Plex on /audiobooks vs parents' Plex
+	// on /mnt/exports/audiobooks) without colliding on a single global.
+	if p.destination != nil {
+		audiobookPath := strings.TrimSpace(p.destination.AudiobookPath)
+		destPath := strings.TrimSpace(p.destination.DestinationPath)
+		if audiobookPath != "" && destPath != "" {
+			scanPath, ok := translateScanPath(localScanPath, audiobookPath, destPath)
+			if !ok {
+				msLog.Warn().Str("local_path", localScanPath).Str("audiobook_path", audiobookPath).Str("destination_path", destPath).Msg("plex: per-destination path translation failed")
+				return "", false
+			}
+			return scanPath, true
+		}
+	}
+
 	plexPath, _ := p.db.GetSetting(ctx, "plex_section_path")
 	plexPath = strings.TrimSpace(plexPath)
 

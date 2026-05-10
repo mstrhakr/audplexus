@@ -111,6 +111,7 @@ func NewServer(
 	// the legacy single-backend path when no destinations are wired
 	// (early boot before first-boot synthesis).
 	syncSvc.SetPlexSyncCallback(func(ctx context.Context) (int, error) {
+		// Modern path: fan out to enabled destinations.
 		if dm := dlMgr.Destinations(); dm != nil {
 			total, results := dm.TriggerScanAll(ctx)
 			if len(results) > 0 {
@@ -125,7 +126,10 @@ func NewServer(
 				return total, nil
 			}
 		}
-		// Legacy fallback for installs without destinations yet.
+		// Legacy fallback — fan-out returned no destinations OR manager
+		// isn't wired. This happens for fresh upgrades from v0.2.x where
+		// MEDIA_SERVER was never set explicitly (Plex was the silent
+		// default). Codex P1 finding.
 		backend := dlMgr.MediaServer()
 		if backend == nil {
 			return 0, fmt.Errorf("no destinations configured")
@@ -157,7 +161,9 @@ func NewServer(
 				return nil
 			}
 		}
-		// Legacy fallback.
+		// Legacy fallback (codex P1) — fires when fan-out returned no
+		// destinations, e.g. fresh upgrades where MEDIA_SERVER was never
+		// set and Plex was the silent default.
 		backend := dlMgr.MediaServer()
 		if backend == nil {
 			return fmt.Errorf("no destinations configured")

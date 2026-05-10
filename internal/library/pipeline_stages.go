@@ -388,16 +388,23 @@ func (dm *DownloadManager) handleProcessStage(ctx context.Context, item *pipelin
 		organizedBook.CoverPath = coverCandidate
 	}
 
-	switch {
-	case dm.destinations != nil:
+	// Multi-destination fan-out is the modern path. Legacy single-backend
+	// path only fires when EITHER destinations isn't wired (very early
+	// boot) OR fan-out returned zero results (no enabled rows AND legacy
+	// config is present — codex flagged this gap; without the fallback,
+	// existing Plex installs that never set media_server_type lose their
+	// post-download scan/collection work after upgrade).
+	ranFanOut := false
+	if dm.destinations != nil {
 		results := dm.destinations.FanOut(ctx, organizedBook)
 		for _, r := range results {
 			logBookOutcomes(asinLog, "destination:"+r.Destination.DisplayName, book.ID, r.Outcomes)
 		}
-	case dm.mediaServer != nil:
-		// Legacy path — kept for safety until destinations are everywhere.
+		ranFanOut = len(results) > 0
+	}
+	if !ranFanOut && dm.mediaServer != nil {
 		outcomes := dm.mediaServer.OnBookOrganized(ctx, organizedBook)
-		logBookOutcomes(asinLog, dm.mediaServer.Name(), book.ID, outcomes)
+		logBookOutcomes(asinLog, "legacy:"+dm.mediaServer.Name(), book.ID, outcomes)
 	}
 
 	// Mark queue item complete only after the entire pipeline (including

@@ -164,6 +164,17 @@ func (f *FFmpeg) buildDecryptArgs(inputPath, outputPath, activationBytes, key, i
 	}
 
 	args = append(args, "-c", "copy")
+
+	// AudiobookRich profile writes freeform tags (series/series-part/asin)
+	// into the file. ffmpeg's mp4 muxer drops unknown -metadata keys
+	// unless `use_metadata_tags` is set — verified empirically against
+	// ffmpeg 6.1.1. Without this flag the freeform atoms vanish silently
+	// and ABS/Audiobookshelf can't auto-detect series. The standalone
+	// EmbedMetadata path also sets this flag for the same reason.
+	if meta.Profile == TagProfileAudiobookRich {
+		args = append(args, "-movflags", "use_metadata_tags")
+	}
+
 	args = append(args, buildMetadataArgs(meta)...)
 	args = append(args, "-y", outputPath)
 	return args
