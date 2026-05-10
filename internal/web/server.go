@@ -25,6 +25,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/render"
 	"github.com/microcosm-cc/bluemonday"
+	"github.com/mstrhakr/audplexus/internal/audio"
 	"github.com/mstrhakr/audplexus/internal/audnexus"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
@@ -271,6 +272,7 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/auth/emby/configure", s.handleEmbyConfigure)
 	s.router.POST("/auth/emby/scan", s.handleEmbyScan)
 	s.router.POST("/auth/media-server/select", s.handleMediaServerSelect)
+	s.router.POST("/settings/tag-profile", s.handleTagProfileSelect)
 
 	// API / HTMX endpoints
 	api := s.router.Group("/api")
@@ -757,6 +759,24 @@ func (s *Server) handleSettings(c *gin.Context) {
 	c.HTML(http.StatusOK, "settings.html", data)
 }
 
+// handleTagProfileSelect persists the active tag profile. Strict validation
+// at this boundary — the user picked something explicitly, so silent
+// fallback to Basic on a typo would hide a real form bug or stale browser tab.
+func (s *Server) handleTagProfileSelect(c *gin.Context) {
+	parsed, ok := audio.ParseTagProfileStrict(c.PostForm("tag_profile"))
+	if !ok {
+		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": "Unknown tag profile."})
+		return
+	}
+	if err := s.db.SetSetting(c.Request.Context(), audio.SettingKeyTagProfile, string(parsed)); err != nil {
+		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to set tag profile: " + err.Error()})
+		return
+	}
+	s.renderAuthPage(c, http.StatusOK, gin.H{
+		"Success": "Tag profile set to \"" + parsed.Label() + "\". Applied to subsequent downloads — already-organized books are unchanged.",
+	})
+}
+
 func (s *Server) settingsPageData(ctx context.Context) gin.H {
 	authData := s.authBaseData(ctx)
 
@@ -803,6 +823,17 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 	embyLibraryPath, _ := s.db.GetSetting(ctx, "emby_library_path")
 	embyConfigured := embyURL != "" && embyAPIKey != "" && embyLibraryID != ""
 
+	// Tag profile selector (PR-A): which set of metadata atoms to embed.
+	tagProfile := audio.ResolveTagProfile(ctx, s.db)
+	tagProfiles := make([]gin.H, 0, len(audio.AllTagProfiles()))
+	for _, p := range audio.AllTagProfiles() {
+		tagProfiles = append(tagProfiles, gin.H{
+			"Value":       string(p),
+			"Label":       p.Label(),
+			"Description": p.Description(),
+		})
+	}
+
 	data := gin.H{
 		"SyncSchedule":         syncSchedule,
 		"SyncEnabled":          syncEnabled,
@@ -830,6 +861,10 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 		"EmbyLibraryID":   embyLibraryID,
 		"EmbyLibraryPath": embyLibraryPath,
 		"EmbyConfigured":  embyConfigured,
+
+		// Tag profile selector (PR-A)
+		"TagProfile":  string(tagProfile),
+		"TagProfiles": tagProfiles,
 	}
 
 	for k, v := range authData {

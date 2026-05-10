@@ -836,6 +836,7 @@ func (dm *DownloadManager) decryptBook(ctx context.Context, item *pipelineItem, 
 	// Output as m4b (decrypted container copy)
 	outputPath := filepath.Join(dm.downloadDir, asin+".m4b")
 	meta := enriched.ToAudioMetadata()
+	meta.Profile = audio.ResolveTagProfile(ctx, dm.db)
 
 	coverPath := ""
 	dm.mu.Lock()
