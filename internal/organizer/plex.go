@@ -301,6 +301,7 @@ func (o *PlexOrganizer) OrganizeMultiFile(ctx context.Context, book *database.Bo
 	book.Status = database.BookStatusComplete
 	if err := o.db.UpsertBook(ctx, book); err != nil {
 		orgLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to update book record")
+		return "", fmt.Errorf("update book record: %w", err)
 	}
 
 	orgLog.Info().
