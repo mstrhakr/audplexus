@@ -72,6 +72,16 @@ type DownloadManager struct {
 	waitingDecrypt map[string]PipelineStateItem
 	waitingMoving  map[string]PipelineStateItem
 
+	// cancelMu guards activeCancels and cancelTokenSeq. Each in-flight
+	// pipeline stage registers a cancel func keyed by ASIN; the
+	// user-facing Cancel-active endpoint looks up the func here to abort
+	// a stuck download/decrypt/process. Tokens distinguish which stage
+	// registered the entry so a late-firing defer from a prior stage
+	// can't delete the current stage's slot.
+	cancelMu       sync.Mutex
+	activeCancels  map[string]activeCancel
+	cancelTokenSeq uint64
+
 	// convertMu guards convertingASINs so only one ConvertBook call runs per
 	// book at a time; concurrent requests for the same ASIN are rejected
 	// rather than racing on shared staging directories.
@@ -149,6 +159,84 @@ func (dm *DownloadManager) OutputFormat() string {
 		return "m4b"
 	}
 	return dm.outputFmt
+}
+
+// cancelToken identifies one registration for a given ASIN. Pipeline stages
+// each get their own token so a late-firing unregister deferred by an
+// earlier stage can't accidentally delete a later stage's entry.
+type cancelToken uint64
+
+// registerActiveCancel stores cancel under asin so CancelActiveDownload can
+// reach it and returns a token the caller passes back to
+// unregisterActiveCancel. If a previous registration is still in place for
+// the same asin (e.g. a defer from a prior pipeline stage hadn't run yet),
+// it is cancelled to avoid leaking the cancel func.
+func (dm *DownloadManager) registerActiveCancel(asin string, cancel context.CancelFunc) cancelToken {
+	if asin == "" {
+		return 0
+	}
+	dm.cancelMu.Lock()
+	if prev, ok := dm.activeCancels[asin]; ok {
+		// Stale entry from a prior stage. Cancel it to release any
+		// resources, then overwrite — this is defensive, the pipeline
+		// shouldn't normally run two stages for one ASIN concurrently.
+		prev.cancel()
+	}
+	dm.cancelTokenSeq++
+	// Skip the 0 sentinel if the counter ever wraps. unregisterActiveCancel
+	// treats token 0 as "no asin" so a wrapped value of 0 would silently
+	// stop guarding against late defers.
+	if dm.cancelTokenSeq == 0 {
+		dm.cancelTokenSeq = 1
+	}
+	tok := cancelToken(dm.cancelTokenSeq)
+	dm.activeCancels[asin] = activeCancel{token: tok, cancel: cancel}
+	dm.cancelMu.Unlock()
+	return tok
+}
+
+// unregisterActiveCancel removes the cancel func for asin only if the
+// stored entry still matches the token returned by registerActiveCancel.
+// This guards against a late defer from a previous stage clobbering the
+// current stage's entry.
+func (dm *DownloadManager) unregisterActiveCancel(asin string, tok cancelToken) {
+	if asin == "" || tok == 0 {
+		return
+	}
+	dm.cancelMu.Lock()
+	if cur, ok := dm.activeCancels[asin]; ok && cur.token == tok {
+		delete(dm.activeCancels, asin)
+	}
+	dm.cancelMu.Unlock()
+}
+
+// CancelActiveDownload aborts the in-flight pipeline stage for the given
+// ASIN by cancelling its context. Returns true if a cancel was issued,
+// false if no active item matched. The pipeline stage handler is
+// responsible for cleaning up partial files when its context is cancelled.
+func (dm *DownloadManager) CancelActiveDownload(asin string) bool {
+	if asin == "" {
+		return false
+	}
+	dm.cancelMu.Lock()
+	entry, ok := dm.activeCancels[asin]
+	if ok {
+		delete(dm.activeCancels, asin)
+	}
+	dm.cancelMu.Unlock()
+	if !ok {
+		return false
+	}
+	entry.cancel()
+	return true
+}
+
+// activeCancel pairs a registered CancelFunc with a generation token so
+// unregisterActiveCancel only deletes its own entry, never one belonging
+// to a later pipeline stage for the same ASIN.
+type activeCancel struct {
+	token  cancelToken
+	cancel context.CancelFunc
 }
 
 // pipelineItem represents work moving through the pipeline stages.
@@ -346,6 +434,7 @@ func NewDownloadManager(
 		waitingDecrypt:      make(map[string]PipelineStateItem),
 		waitingMoving:       make(map[string]PipelineStateItem),
 		convertingASINs:     make(map[string]struct{}),
+		activeCancels:       make(map[string]activeCancel),
 	}
 }
 

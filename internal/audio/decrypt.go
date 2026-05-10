@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/mstrhakr/audplexus/internal/logging"
 )
@@ -164,6 +165,16 @@ func (f *FFmpeg) buildDecryptArgs(inputPath, outputPath, activationBytes, key, i
 	}
 
 	args = append(args, "-c", "copy")
+	// +faststart relocates the MP4 moov atom (the index) to the front of
+	// the output file. Audible delivers AAX/AAXC with moov at the END,
+	// and stream-copy preserves that layout. Any downstream ffmpeg
+	// invocation that opens the m4b then has to scan the whole file
+	// trying to find the index — observed ffmpeg RSS climbing to 7+ GB
+	// when SplitChapters opened a 573 MB book. Faststart costs us one
+	// extra pass over the file during decrypt (still seconds on stream
+	// copy speeds) and makes everything afterwards constant-memory.
+	// Helps Plex/Emby metadata scans too.
+	args = append(args, "-movflags", "+faststart")
 	args = append(args, buildMetadataArgs(meta)...)
 	args = append(args, "-y", outputPath)
 	return args
@@ -358,7 +369,7 @@ func (f *FFmpeg) ConvertToMP3(inputPath, outputPath string, bitrate string) erro
 		bitrate = "128k"
 	}
 	decryptLog.Info().Str("input", inputPath).Str("output", outputPath).Str("bitrate", bitrate).Msg("converting to MP3")
-	return f.run(
+	return f.runTranscode(
 		"-i", inputPath,
 		"-codec:a", "libmp3lame",
 		"-b:a", bitrate,
@@ -401,7 +412,7 @@ func (f *FFmpeg) ConcatToM4B(inputPaths []string, outputPath, bitrate string) er
 	defer os.Remove(listPath)
 
 	decryptLog.Info().Int("inputs", len(inputPaths)).Str("output", outputPath).Msg("concatenating chapters into m4b")
-	return f.run(
+	return f.runTranscode(
 		"-f", "concat",
 		"-safe", "0",
 		"-i", listPath,
@@ -414,29 +425,67 @@ func (f *FFmpeg) ConcatToM4B(inputPaths []string, outputPath, bitrate string) er
 }
 
 // SplitChapters splits an audio file into separate chapter files.
-func (f *FFmpeg) SplitChapters(inputPath, outputDir string, chapters []ChapterMark, format string) error {
+//
+// For "m4b" output the call is a stream copy (cheap). For "mp3" output
+// each chapter is re-encoded with libmp3lame.
+//
+// onChapter, when non-nil, is invoked after each chapter finishes encoding
+// with (1-based-index, total) so callers can report progress to the UI.
+func (f *FFmpeg) SplitChapters(inputPath, outputDir string, chapters []ChapterMark, format string, onChapter func(done, total int)) error {
 	decryptLog.Info().Str("input", inputPath).Int("chapters", len(chapters)).Str("format", format).Msg("splitting chapters")
 	ext := ".m4b"
 	codec := []string{"-c", "copy"}
+	reencode := false
 	if format == "mp3" {
 		ext = ".mp3"
 		codec = []string{"-codec:a", "libmp3lame", "-b:a", "128k"}
+		reencode = true
 	}
 
 	for i, ch := range chapters {
 		outputPath := fmt.Sprintf("%s/%02d - %s%s", outputDir, i+1, sanitizeFilename(ch.Title), ext)
+		// -ss/-to MUST come before -i so ffmpeg uses input-side fast seek
+		// (jumps to the byte offset via the container index). Output-side
+		// seek decodes-and-discards from the start of the file, which on a
+		// 10-hour audiobook means buffering hours of audio in the muxer
+		// queue before emitting the first output byte.
 		args := []string{
-			"-i", inputPath,
 			"-ss", formatDuration(ch.StartMs),
 		}
 		if ch.EndMs > 0 {
 			args = append(args, "-to", formatDuration(ch.EndMs))
 		}
+		args = append(args, "-i", inputPath)
 		args = append(args, codec...)
 		args = append(args, "-y", outputPath)
 
-		if err := f.run(args...); err != nil {
+		chapterStart := time.Now()
+		decryptLog.Info().
+			Int("chapter", i+1).
+			Int("of", len(chapters)).
+			Str("title", ch.Title).
+			Int("start_ms", ch.StartMs).
+			Int("end_ms", ch.EndMs).
+			Msg("encoding chapter")
+
+		var err error
+		if reencode {
+			err = f.runTranscode(args...)
+		} else {
+			err = f.run(args...)
+		}
+		if err != nil {
 			return fmt.Errorf("split chapter %d (%s): %w", i+1, ch.Title, err)
+		}
+
+		decryptLog.Info().
+			Int("chapter", i+1).
+			Int("of", len(chapters)).
+			Str("elapsed", time.Since(chapterStart).Round(time.Second).String()).
+			Msg("chapter encoded")
+
+		if onChapter != nil {
+			onChapter(i+1, len(chapters))
 		}
 	}
 	return nil

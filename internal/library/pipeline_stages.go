@@ -2,15 +2,23 @@ package library
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/mstrhakr/audplexus/internal/audnexus"
 	"github.com/mstrhakr/audplexus/internal/database"
 )
+
+// downloadStallTimeout is how long the download stage may go without seeing
+// any new bytes before its context is cancelled and the request is treated
+// as a stalled CDN connection. Audible's CDN normally resets within seconds
+// of an actual error, but we've seen connections sit silently for minutes.
+const downloadStallTimeout = 2 * time.Minute
 
 // copyFileSimple copies src to dst, overwriting any existing file. Used for
 // best-effort sidecar writes (e.g. folder.jpg) where progress isn't needed.
@@ -59,15 +67,28 @@ func (dm *DownloadManager) handleDownloadStage(ctx context.Context, item *databa
 		Book:         book,
 	}
 
-	// Start metadata lookup immediately so download starts with metadata fetch.
+	// Per-item cancellable context: lets the user abort this download from
+	// the UI and lets the stall watchdog kill a stuck connection without
+	// taking down the whole worker pool.
+	itemCtx, cancelItem := context.WithCancel(ctx)
+	cancelTok := dm.registerActiveCancel(item.ASIN, cancelItem)
+	defer func() {
+		dm.unregisterActiveCancel(item.ASIN, cancelTok)
+		cancelItem()
+	}()
+
+	// Start metadata lookup immediately. Use the parent worker ctx (not
+	// itemCtx) so the in-flight audnexus calls survive a stall-watchdog
+	// cancel of the download and remain available to decrypt/process,
+	// which depend on chapter data to honor the mp3-split setting.
 	dm.startMetadataPrefetch(ctx, pipeItem)
 
 	// Mark download as active
 	now := time.Now()
 	item.Status = database.DownloadStatusActive
 	item.StartedAt = &now
-	_ = dm.db.UpdateDownload(ctx, item)
-	_ = dm.db.UpdateBookStatus(ctx, item.BookID, database.BookStatusDownloading)
+	_ = dm.db.UpdateDownload(itemCtx, item)
+	_ = dm.db.UpdateBookStatus(itemCtx, item.BookID, database.BookStatusDownloading)
 
 	dm.emit(DownloadEvent{ASIN: item.ASIN, BookID: item.BookID, Title: bookTitle, Type: "started", Stage: "downloading"})
 
@@ -75,11 +96,53 @@ func (dm *DownloadManager) handleDownloadStage(ctx context.Context, item *databa
 	var lastDBWrite time.Time
 	var lastLogPct int
 	downloadStart := time.Now()
+	var bytesSnapshot atomic.Int64
+	var stalled atomic.Bool
+
+	// Stall watchdog: if no new bytes arrive for downloadStallTimeout while
+	// the download is in progress, cancel the item context. The CDN's TCP
+	// keepalive can take 2h to fire, so without this a hung connection
+	// would sit in io.Copy until then.
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		var lastSeen int64
+		var lastSeenAt = time.Now()
+		for {
+			select {
+			case <-itemCtx.Done():
+				return
+			case <-ticker.C:
+				cur := bytesSnapshot.Load()
+				if cur > lastSeen {
+					lastSeen = cur
+					lastSeenAt = time.Now()
+					continue
+				}
+				// Fire whether or not any bytes arrived — a connection
+				// that hangs before the first byte (slow TLS, server
+				// silently dropping the request) is exactly the kind
+				// of stall this watchdog is meant to recover from.
+				if time.Since(lastSeenAt) >= downloadStallTimeout {
+					stalled.Store(true)
+					asinLog.Warn().
+						Int64("bytes", cur).
+						Dur("idle", time.Since(lastSeenAt).Round(time.Second)).
+						Msg("download stalled with no progress; cancelling")
+					cancelItem()
+					return
+				}
+			}
+		}
+	}()
 
 	writer := &fileDownloadWriter{
 		asin:        item.ASIN,
 		downloadDir: dm.downloadDir,
 		onProgress: func(written, total int64) {
+			bytesSnapshot.Store(written)
 			progress := 0.0
 			if total > 0 {
 				progress = float64(written) / float64(total)
@@ -108,7 +171,7 @@ func (dm *DownloadManager) handleDownloadStage(ctx context.Context, item *databa
 			// Persist to DB every 5 seconds
 			if now.Sub(lastDBWrite) >= 5*time.Second {
 				lastDBWrite = now
-				_ = dm.db.UpdateDownload(ctx, item)
+				_ = dm.db.UpdateDownload(itemCtx, item)
 			}
 
 			// SSE to UI every 500ms for smooth progress
@@ -131,8 +194,23 @@ func (dm *DownloadManager) handleDownloadStage(ctx context.Context, item *databa
 		},
 	}
 
-	bytesWritten, err := dm.client.DownloadBook(ctx, item.ASIN, writer)
+	bytesWritten, err := dm.client.DownloadBook(itemCtx, item.ASIN, writer)
+	// Watchdog goroutine winds down once itemCtx is done; wait so it's
+	// fully gone before we exit and cancelItem fires from the deferred
+	// cleanup (avoids a brief leak window if the worker keeps churning).
+	cancelItem()
+	<-watchDone
+
 	if err != nil {
+		// Distinguish a watchdog-initiated stall cancel from a real network
+		// error or a parent-context cancel (queue paused / shutdown) so the
+		// user-facing message is accurate.
+		switch {
+		case stalled.Load():
+			err = fmt.Errorf("download stalled (no progress for %s); cancelled", downloadStallTimeout)
+		case ctx.Err() == nil && errors.Is(err, context.Canceled):
+			err = fmt.Errorf("cancelled by user")
+		}
 		asinLog.Error().Err(err).Msg("download failed")
 		writer.Cleanup()
 		dm.cleanupDownloadFiles(item.ASIN)
@@ -181,9 +259,19 @@ func (dm *DownloadManager) handleDownloadStage(ctx context.Context, item *databa
 }
 
 // handleDecryptStage handles the decryption stage of the pipeline.
-func (dm *DownloadManager) handleDecryptStage(ctx context.Context, item *pipelineItem) {
+func (dm *DownloadManager) handleDecryptStage(parentCtx context.Context, item *pipelineItem) {
 	asinLog := dlLog.WithField("asin", item.ASIN)
 	asinLog.Info().Msg("starting decrypt stage")
+
+	// Per-item cancel: lets the user abort this decrypt from the UI.
+	// parentCtx is preserved separately for cleanup writes (failItem) so
+	// they don't fail just because the user cancelled this item.
+	ctx, cancelItem := context.WithCancel(parentCtx)
+	cancelTok := dm.registerActiveCancel(item.ASIN, cancelItem)
+	defer func() {
+		dm.unregisterActiveCancel(item.ASIN, cancelTok)
+		cancelItem()
+	}()
 
 	_ = dm.db.UpdateBookStatus(ctx, item.BookID, database.BookStatusDecrypting)
 	dm.emit(DownloadEvent{ASIN: item.ASIN, BookID: item.BookID, Title: item.Title, Type: "stage", Stage: "decrypting"})
@@ -198,14 +286,14 @@ func (dm *DownloadManager) handleDecryptStage(ctx context.Context, item *pipelin
 	}
 
 	if item.BookErr != nil {
-		dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("load book: %w", item.BookErr))
+		dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("load book: %w", item.BookErr))
 		return
 	}
 
 	if item.Book == nil {
 		book, err := dm.db.GetBook(ctx, item.BookID)
 		if err != nil {
-			dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("load book: %w", err))
+			dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("load book: %w", err))
 			return
 		}
 		item.Book = book
@@ -221,9 +309,14 @@ func (dm *DownloadManager) handleDecryptStage(ctx context.Context, item *pipelin
 
 	decryptedPath, err := dm.decryptBook(ctx, item, enriched)
 	if err != nil {
+		// If the user cancelled this item, surface that in the failure
+		// message rather than a noisy ffmpeg "context canceled" error.
+		if parentCtx.Err() == nil && errors.Is(err, context.Canceled) {
+			err = fmt.Errorf("cancelled by user")
+		}
 		asinLog.Error().Err(err).Msg("decryption failed")
 		dm.cleanupDownloadFiles(item.ASIN)
-		dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("decrypt: %w", err))
+		dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("decrypt: %w", err))
 		return
 	}
 	item.DecryptedPath = decryptedPath
@@ -259,9 +352,19 @@ func (dm *DownloadManager) handleDecryptStage(ctx context.Context, item *pipelin
 }
 
 // handleProcessStage handles final organization/chapter generation for already-tagged audio.
-func (dm *DownloadManager) handleProcessStage(ctx context.Context, item *pipelineItem) {
+func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *pipelineItem) {
 	asinLog := dlLog.WithField("asin", item.ASIN)
 	asinLog.Info().Msg("starting move stage")
+
+	// Per-item cancel: lets the user abort this process step from the UI.
+	// parentCtx stays valid for failItem cleanup writes even if the user
+	// cancels this item mid-flight.
+	ctx, cancelItem := context.WithCancel(parentCtx)
+	cancelTok := dm.registerActiveCancel(item.ASIN, cancelItem)
+	defer func() {
+		dm.unregisterActiveCancel(item.ASIN, cancelTok)
+		cancelItem()
+	}()
 
 	_ = dm.db.UpdateBookStatus(ctx, item.BookID, database.BookStatusProcessing)
 	dm.emit(DownloadEvent{ASIN: item.ASIN, BookID: item.BookID, Title: item.Title, Type: "stage", Stage: "moving"})
@@ -273,7 +376,7 @@ func (dm *DownloadManager) handleProcessStage(ctx context.Context, item *pipelin
 		book, err = dm.db.GetBook(ctx, item.BookID)
 		if err != nil {
 			asinLog.Error().Err(err).Msg("failed to load book record")
-			dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("load book: %w", err))
+			dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("load book: %w", err))
 			return
 		}
 	}
@@ -304,20 +407,40 @@ func (dm *DownloadManager) handleProcessStage(ctx context.Context, item *pipelin
 			// into the final book folder.
 			if err := os.RemoveAll(stageDir); err != nil && !os.IsNotExist(err) {
 				dm.cleanupDownloadFiles(item.ASIN)
-				dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("clean chapter staging dir: %w", err))
+				dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("clean chapter staging dir: %w", err))
 				return
 			}
 			if err := os.MkdirAll(stageDir, 0750); err != nil {
 				dm.cleanupDownloadFiles(item.ASIN)
-				dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("create chapter staging dir: %w", err))
+				dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("create chapter staging dir: %w", err))
 				return
 			}
 
 			asinLog.Info().Int("chapters", len(chapters)).Str("stage_dir", stageDir).Msg("splitting into mp3 chapters")
-			if err := dm.ffmpeg.SplitChapters(decryptedPath, stageDir, chapters, "mp3"); err != nil {
+			// Switch the badge to "transcoding" so the UI reflects what we're
+			// actually doing (re-encoding audio, not moving files).
+			dm.emit(DownloadEvent{ASIN: item.ASIN, BookID: item.BookID, Title: item.Title, Type: "stage", Stage: "transcoding"})
+			onChapter := func(done, total int) {
+				progress := 0.0
+				if total > 0 {
+					progress = float64(done) / float64(total)
+				}
+				dm.emit(DownloadEvent{
+					ASIN:     item.ASIN,
+					BookID:   item.BookID,
+					Title:    item.Title,
+					Type:     "progress",
+					Stage:    "transcoding",
+					Progress: progress,
+				})
+			}
+			if err := dm.ffmpeg.SplitChapters(decryptedPath, stageDir, chapters, "mp3", onChapter); err != nil {
 				_ = os.RemoveAll(stageDir)
 				dm.cleanupDownloadFiles(item.ASIN)
-				dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("split chapters: %w", err))
+				if parentCtx.Err() == nil && errors.Is(err, context.Canceled) {
+					err = fmt.Errorf("cancelled by user")
+				}
+				dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("split chapters: %w", err))
 				return
 			}
 
@@ -375,7 +498,10 @@ func (dm *DownloadManager) handleProcessStage(ctx context.Context, item *pipelin
 			if err != nil {
 				_ = os.RemoveAll(stageDir)
 				dm.cleanupDownloadFiles(item.ASIN)
-				dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("organize: %w", err))
+				if parentCtx.Err() == nil && errors.Is(err, context.Canceled) {
+					err = fmt.Errorf("cancelled by user")
+				}
+				dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("organize: %w", err))
 				return
 			}
 			onMoveProgress(totalBytes, totalBytes)
@@ -390,7 +516,9 @@ func (dm *DownloadManager) handleProcessStage(ctx context.Context, item *pipelin
 				item.DownloadItem.Progress = 1.0
 				item.DownloadItem.Error = ""
 				item.DownloadItem.CompletedAt = &now
-				_ = dm.db.UpdateDownload(ctx, item.DownloadItem)
+				// Detach: the work is done, the row must commit even if
+				// the worker context is being torn down at shutdown.
+				_ = dm.db.UpdateDownload(context.WithoutCancel(parentCtx), item.DownloadItem)
 			}
 
 			asinLog.Info().Str("path", finalPath).Msg("pipeline complete (chapter-split)")
@@ -462,7 +590,10 @@ func (dm *DownloadManager) handleProcessStage(ctx context.Context, item *pipelin
 	if err != nil {
 		asinLog.Error().Err(err).Msg("organization failed")
 		dm.cleanupDownloadFiles(item.ASIN)
-		dm.failItem(ctx, item.DownloadItem, item.Title, fmt.Errorf("organize: %w", err))
+		if parentCtx.Err() == nil && errors.Is(err, context.Canceled) {
+			err = fmt.Errorf("cancelled by user")
+		}
+		dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("organize: %w", err))
 		return
 	}
 	onMoveProgress(totalBytes, totalBytes)
@@ -489,7 +620,9 @@ func (dm *DownloadManager) handleProcessStage(ctx context.Context, item *pipelin
 		item.DownloadItem.Progress = 1.0
 		item.DownloadItem.Error = ""
 		item.DownloadItem.CompletedAt = &now
-		_ = dm.db.UpdateDownload(ctx, item.DownloadItem)
+		// Detach: the work is done, the row must commit even if the
+		// worker context is being torn down at shutdown.
+		_ = dm.db.UpdateDownload(context.WithoutCancel(parentCtx), item.DownloadItem)
 	}
 
 	asinLog.Info().Str("path", finalPath).Msg("pipeline complete")
