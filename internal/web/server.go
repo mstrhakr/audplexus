@@ -1421,7 +1421,10 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 		if strings.TrimSpace(current) == value {
 			return false
 		}
-		_ = s.db.SetSetting(ctx, key, value)
+		if err := s.db.SetSetting(ctx, key, value); err != nil {
+			webLog.Error().Err(err).Str("key", key).Msg("failed to persist setting")
+			return false
+		}
 		return true
 	}
 
@@ -1449,8 +1452,14 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 		if format != "m4b" && format != "mp3" {
 			webLog.Warn().Str("value", raw).Msg("ignoring invalid output_format")
 		} else {
-			_ = setSetting("output_format", format)
-			s.downloads.SetOutputFormat(format)
+			current, _ := s.db.GetSetting(ctx, "output_format")
+			if strings.TrimSpace(current) == format {
+				s.downloads.SetOutputFormat(format)
+			} else if err := s.db.SetSetting(ctx, "output_format", format); err != nil {
+				webLog.Error().Err(err).Str("key", "output_format").Msg("failed to persist setting")
+			} else {
+				s.downloads.SetOutputFormat(format)
+			}
 		}
 	}
 	if _, ok := c.GetPostForm("download_concurrency"); ok {
@@ -1502,6 +1511,50 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 		return
 	}
 	c.Redirect(http.StatusSeeOther, "/settings")
+}
+
+// removeBookPath deletes the stored book path regardless of whether it points
+// to a single file or a directory of chapter files. It also removes the parent
+// directory when it becomes empty (but never removes the library root).
+func (s *Server) removeBookPath(path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			webLog.Warn().Err(err).Str("path", path).Msg("failed to stat old book path")
+		}
+		return
+	}
+
+	if fi.IsDir() {
+		if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
+			webLog.Warn().Err(err).Str("path", path).Msg("failed to remove old book directory")
+			return
+		}
+	} else {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			webLog.Warn().Err(err).Str("path", path).Msg("failed to remove old book file")
+			return
+		}
+	}
+
+	parentDir := filepath.Dir(filepath.Clean(path))
+	rootDir := filepath.Clean(s.audiobooksPath)
+	if parentDir == "" || parentDir == rootDir {
+		return
+	}
+	entries, err := os.ReadDir(parentDir)
+	if err == nil && len(entries) == 0 {
+		if err := os.Remove(parentDir); err != nil {
+			webLog.Warn().Err(err).Str("path", parentDir).Msg("failed to remove empty directory")
+		} else {
+			webLog.Info().Str("path", parentDir).Msg("removed empty directory")
+		}
+	}
 }
 
 // handleRestart requests process shutdown so the container/service can restart it.
@@ -2038,27 +2091,8 @@ func (s *Server) handleRedownload(c *gin.Context) {
 		return
 	}
 
-	// Delete the old file and folder if they exist
-	if book.FilePath != "" {
-		// First remove the file itself
-		if err := os.Remove(book.FilePath); err != nil && !os.IsNotExist(err) {
-			webLog.Warn().Err(err).Str("path", book.FilePath).Msg("failed to remove old file")
-		}
-
-		// Then check if the parent folder is empty and remove it
-		parentDir := filepath.Dir(book.FilePath)
-		if parentDir != "" && parentDir != s.audiobooksPath {
-			entries, err := os.ReadDir(parentDir)
-			if err == nil && len(entries) == 0 {
-				// Directory is empty, remove it
-				if err := os.Remove(parentDir); err != nil {
-					webLog.Warn().Err(err).Str("path", parentDir).Msg("failed to remove empty directory")
-				} else {
-					webLog.Info().Str("path", parentDir).Msg("removed empty book directory")
-				}
-			}
-		}
-	}
+	// Delete the old file or directory tree if it exists.
+	s.removeBookPath(book.FilePath)
 
 	// Reset book status to "new" so it can be re-downloaded
 	book.Status = database.BookStatusNew
@@ -2161,19 +2195,8 @@ func (s *Server) handleDiagnosticsRedownloadAll(c *gin.Context) {
 			continue
 		}
 
-		// Delete old file if it exists
-		if book.FilePath != "" {
-			if err := os.Remove(book.FilePath); err != nil && !os.IsNotExist(err) {
-				webLog.Warn().Err(err).Str("path", book.FilePath).Msg("failed to remove old file")
-			}
-			parentDir := filepath.Dir(book.FilePath)
-			if parentDir != "" && parentDir != s.audiobooksPath {
-				entries, err := os.ReadDir(parentDir)
-				if err == nil && len(entries) == 0 {
-					_ = os.Remove(parentDir)
-				}
-			}
-		}
+		// Delete old file or directory tree if it exists.
+		s.removeBookPath(book.FilePath)
 
 		// Reset book status
 		book.Status = database.BookStatusNew
