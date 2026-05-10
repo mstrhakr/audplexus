@@ -40,12 +40,6 @@ func buildPlexClientID() string {
 
 func (p *PlexBackend) Name() string { return string(TypePlex) }
 
-// TagItem is a no-op for Plex: the Plex equivalent of grouping is a
-// collection (which we already create per series), and Plex does not expose
-// a clean per-item tag concept comparable to Emby's.
-func (p *PlexBackend) TagItem(ctx context.Context, serverItemID string, tags []string) {
-}
-
 func (p *PlexBackend) Configured(ctx context.Context) bool {
 	u, t, s := p.settings(ctx)
 	return u != "" && t != "" && s != ""
@@ -67,67 +61,65 @@ func (p *PlexBackend) settings(ctx context.Context) (string, string, string) {
 	return strings.TrimSpace(u), strings.TrimSpace(t), strings.TrimSpace(s)
 }
 
-// TriggerScanForBook asks Plex to scan the folder containing finalPath.
-func (p *PlexBackend) TriggerScanForBook(finalPath string) {
-	if strings.TrimSpace(finalPath) == "" {
-		return
+// OnBookOrganized runs the per-book post-organize work synchronously and
+// returns one Outcome per logical operation. Operations are idempotent:
+// scan triggers tolerate repeats, collection-add is a no-op when the album
+// already belongs to the collection.
+func (p *PlexBackend) OnBookOrganized(ctx context.Context, book OrganizedBook) []Outcome {
+	plexURL, plexToken, sectionID := p.settings(ctx)
+	if plexURL == "" || plexToken == "" || sectionID == "" {
+		return []Outcome{SkippedConfigured(OpScanTrigger)}
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
+	outcomes := make([]Outcome, 0, 3)
 
-		plexURL, plexToken, sectionID := p.settings(ctx)
-		if plexURL == "" || plexToken == "" || sectionID == "" {
-			return
-		}
-
-		localScanPath := filepath.Dir(finalPath)
-		scanPath, ok := p.resolveScanPath(ctx, plexURL, plexToken, sectionID, localScanPath)
-		if !ok {
-			msLog.Warn().
-				Str("backend", "plex").
-				Str("local_path", localScanPath).
-				Str("section_id", sectionID).
-				Msg("skipping per-book plex scan; section path unavailable")
-			return
-		}
-
-		if err := p.triggerSectionScan(ctx, plexURL, plexToken, sectionID, scanPath); err != nil {
-			msLog.Warn().Err(err).Str("scan_path", scanPath).Msg("plex scan trigger failed")
-			return
-		}
-		msLog.Info().Str("scan_path", scanPath).Str("section_id", sectionID).Msg("plex scan triggered for completed book")
-	}()
-}
-
-// EnsureBookInSeriesCollection adds the book to a series collection in Plex.
-func (p *PlexBackend) EnsureBookInSeriesCollection(series, bookTitle string) {
-	if strings.TrimSpace(series) == "" {
-		return
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
-
-		plexURL, plexToken, sectionID := p.settings(ctx)
-		if plexURL == "" || plexToken == "" || sectionID == "" {
-			return
-		}
-
-		albumKey, err := p.waitForAlbum(ctx, plexURL, plexToken, sectionID, bookTitle)
-		if err != nil {
-			msLog.Warn().Err(err).Str("series", series).Str("book", bookTitle).Msg("plex: failed to add book to series collection")
-			return
-		}
-
-		if err := p.ensureBookInCollectionWithKey(ctx, plexURL, plexToken, sectionID, series, albumKey); err != nil {
-			msLog.Warn().Err(err).Str("series", series).Str("book", bookTitle).Msg("plex: failed to add book to series collection")
+	// 1. Scan trigger
+	scanCtx, scanCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer scanCancel()
+	scanStart := time.Now()
+	scanPath, scanPathOK := p.resolveScanPath(scanCtx, plexURL, plexToken, sectionID, filepath.Dir(book.LocalPath))
+	switch {
+	case strings.TrimSpace(book.LocalPath) == "":
+		outcomes = append(outcomes, Failed(OpScanTrigger, fmt.Errorf("empty local path"), "no path to scan"))
+	case !scanPathOK:
+		outcomes = append(outcomes, Failed(OpScanTrigger, fmt.Errorf("section path unavailable"), "plex section path could not be resolved"))
+	default:
+		if err := p.triggerSectionScan(scanCtx, plexURL, plexToken, sectionID, scanPath); err != nil {
+			outcomes = append(outcomes, Failed(OpScanTrigger, err, "plex returned non-2xx on /refresh"))
 		} else {
-			msLog.Info().Str("series", series).Str("book", bookTitle).Msg("plex: book added to series collection")
+			outcomes = append(outcomes, Succeeded(OpScanTrigger, "section scan triggered for "+scanPath, "", time.Since(scanStart)))
 		}
-	}()
+	}
+
+	// 2 + 3: only if the book has a series. Otherwise nothing further to do.
+	if strings.TrimSpace(book.Series) == "" {
+		return outcomes
+	}
+
+	// Item match. Plex needs the book indexed before we can add it to a
+	// collection; this waits up to ~90s for the album to appear.
+	matchCtx, matchCancel := context.WithTimeout(ctx, 120*time.Second)
+	defer matchCancel()
+	matchStart := time.Now()
+	albumKey, err := p.waitForAlbum(matchCtx, plexURL, plexToken, sectionID, book.Title)
+	if err != nil {
+		outcomes = append(outcomes,
+			Failed(OpItemMatch, err, "album not found in plex within retry window"),
+			Outcome{Operation: OpSeriesGrouping, Status: OutcomeDeferred,
+				Detail: "skipped: depends on item_match", Err: err})
+		return outcomes
+	}
+	outcomes = append(outcomes, Succeeded(OpItemMatch, "matched plex album by title", albumKey, time.Since(matchStart)))
+
+	// Series grouping (Plex collection).
+	groupStart := time.Now()
+	if err := p.ensureBookInCollectionWithKey(matchCtx, plexURL, plexToken, sectionID, book.Series, albumKey); err != nil {
+		outcomes = append(outcomes, Failed(OpSeriesGrouping, err, "could not add album to series collection"))
+		return outcomes
+	}
+	outcomes = append(outcomes, Succeeded(OpSeriesGrouping, "album added to series collection \""+book.Series+"\"", albumKey, time.Since(groupStart)))
+
+	return outcomes
 }
 
 // ReconcileLibrary fetches all Plex albums, matches to local books, and
@@ -217,7 +209,7 @@ func (p *PlexBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 			return ctx.Err()
 		}
 
-		collectionID, err := p.findOrCreateCollection(ctx, plexURL, plexToken, sectionID, series, machineID)
+		collectionID, err := p.findOrCreateCollection(ctx, plexURL, plexToken, sectionID, series)
 		if err != nil {
 			msLog.Warn().Err(err).Str("series", series).Msg("plex: failed to find/create collection during reconciliation")
 			seriesProcessed++
@@ -511,7 +503,7 @@ func (p *PlexBackend) ensureBookInCollectionWithKey(ctx context.Context, plexURL
 	if err != nil {
 		return fmt.Errorf("get machine identifier: %w", err)
 	}
-	collectionID, err := p.findOrCreateCollection(ctx, plexURL, token, sectionID, series, machineID)
+	collectionID, err := p.findOrCreateCollection(ctx, plexURL, token, sectionID, series)
 	if err != nil {
 		return fmt.Errorf("find/create collection %q: %w", series, err)
 	}
@@ -560,7 +552,7 @@ func (p *PlexBackend) machineIdentifier(ctx context.Context, plexURL, token stri
 	return id, nil
 }
 
-func (p *PlexBackend) findOrCreateCollection(ctx context.Context, plexURL, token, sectionID, seriesName, machineID string) (string, error) {
+func (p *PlexBackend) findOrCreateCollection(ctx context.Context, plexURL, token, sectionID, seriesName string) (string, error) {
 	collections, err := p.listCollections(ctx, plexURL, token, sectionID)
 	if err != nil {
 		return "", fmt.Errorf("list collections: %w", err)
