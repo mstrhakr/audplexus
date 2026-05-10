@@ -189,13 +189,118 @@ func (j *JellyfinBackend) OnBookOrganized(ctx context.Context, book OrganizedBoo
 	return outcomes
 }
 
-// ReconcileLibrary is not yet implemented for Jellyfin — returns a typed
-// not-implemented error so callers can decide whether to retry. The
-// per-book OnBookOrganized fan-out + book_library_destinations join table
-// covers the normal case; a full reconcile pass requires a Jellyfin-shaped
-// item walk that lives in a follow-up.
+// ReconcileLibrary walks the Jellyfin AudioBook library, matches items
+// back to local books by normalized title, and records the server item ID
+// via UpdateBookMediaServerInfo. Mirror of EmbyBackend.ReconcileLibrary
+// with the AudioBook filter and Jellyfin-specific JSON field names.
+//
+// Series collection management is deliberately not done here — that's
+// handled by OnBookOrganized for new books on a per-book basis. Reconcile
+// is for ID matching, not collection rebuild.
 func (j *JellyfinBackend) ReconcileLibrary(ctx context.Context, progressFn func(current, total int)) error {
-	return fmt.Errorf("jellyfin reconcile not yet implemented; per-book sync via OnBookOrganized works")
+	baseURL, apiKey, libraryID := j.settings(ctx)
+	if baseURL == "" || apiKey == "" || libraryID == "" {
+		return fmt.Errorf("jellyfin not configured")
+	}
+
+	items, err := j.listAllAudioBooks(ctx, baseURL, apiKey, libraryID)
+	if err != nil {
+		return fmt.Errorf("list jellyfin AudioBooks: %w", err)
+	}
+	msLog.Info().Int("jellyfin_items", len(items)).Msg("jellyfin: fetched library item list for reconcile")
+
+	completeStatus := database.BookStatusComplete
+	books, _, err := j.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 100000})
+	if err != nil {
+		return fmt.Errorf("list complete books: %w", err)
+	}
+	booksByTitle := make(map[string][]database.Book)
+	for _, b := range books {
+		key := normalizeTitle(b.Title)
+		booksByTitle[key] = append(booksByTitle[key], b)
+	}
+
+	if progressFn != nil {
+		progressFn(0, len(items))
+	}
+	matched := 0
+	for i, it := range items {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		key := normalizeTitle(it.Name)
+		candidates := booksByTitle[key]
+		for _, book := range candidates {
+			if book.MediaServerID != it.Id || book.MediaServerTitle != it.Name {
+				if err := j.db.UpdateBookMediaServerInfo(ctx, book.ID, it.Id, it.Name); err != nil {
+					msLog.Warn().Err(err).Int64("book_id", book.ID).Str("title", book.Title).Msg("jellyfin: failed to update book media server info")
+				} else {
+					matched++
+				}
+			}
+		}
+		if progressFn != nil && (i%25 == 0 || i == len(items)-1) {
+			progressFn(i+1, len(items))
+		}
+	}
+	msLog.Info().Int("matched", matched).Int("jellyfin_items", len(items)).Int("local_books", len(books)).Msg("jellyfin: reconcile complete")
+	return nil
+}
+
+type jellyfinItem struct {
+	Id   string `json:"Id"`
+	Name string `json:"Name"`
+}
+
+func (j *JellyfinBackend) listAllAudioBooks(ctx context.Context, baseURL, apiKey, libraryID string) ([]jellyfinItem, error) {
+	const pageSize = 200
+	var all []jellyfinItem
+	startIndex := 0
+	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		u, err := j.buildURL(baseURL, "/Items", map[string]string{
+			"ParentId":         libraryID,
+			"Recursive":        "true",
+			"IncludeItemTypes": "AudioBook",
+			"StartIndex":       fmt.Sprintf("%d", startIndex),
+			"Limit":            fmt.Sprintf("%d", pageSize),
+		})
+		if err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		j.addAuthHeader(req, apiKey)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			resp.Body.Close()
+			return nil, fmt.Errorf("jellyfin /Items returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		var r struct {
+			Items            []jellyfinItem `json:"Items"`
+			TotalRecordCount int            `json:"TotalRecordCount"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("parse jellyfin items page at startIndex %d: %w", startIndex, err)
+		}
+		resp.Body.Close()
+
+		all = append(all, r.Items...)
+		if len(r.Items) < pageSize {
+			break
+		}
+		startIndex += len(r.Items)
+	}
+	return all, nil
 }
 
 // LibraryItemCount queries Jellyfin for the AudioBook count.

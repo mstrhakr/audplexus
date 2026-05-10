@@ -274,6 +274,21 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/auth/media-server/select", s.handleMediaServerSelect)
 	s.router.POST("/settings/tag-profile", s.handleTagProfileSelect)
 
+	// Library destinations CRUD (multi-destination model). Two-page flow
+	// for add (type picker → type-specific form) and delete (GET confirm
+	// → POST with confirm=1) keeps the UI JS-free + back-button-safe.
+	s.router.GET("/destinations/new", s.handleDestinationsNewPicker)
+	s.router.POST("/destinations/new", s.handleDestinationsNewForm)
+	s.router.POST("/destinations/create", s.handleDestinationsCreate)
+	s.router.GET("/destinations/:id/edit", s.handleDestinationEditForm)
+	s.router.POST("/destinations/:id", s.handleDestinationUpdate)
+	s.router.POST("/destinations/:id/toggle", s.handleDestinationToggle)
+	// Delete is POST-only — destructive actions must not be safe GETs (per
+	// RFC 9110 + WCAG link-purpose semantics for destructive controls).
+	// The same endpoint serves both: confirm=1 actually deletes;
+	// otherwise the confirmation page is rendered.
+	s.router.POST("/destinations/:id/delete", s.handleDestinationDelete)
+
 	// API / HTMX endpoints
 	api := s.router.Group("/api")
 	{
@@ -865,6 +880,9 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 		// Tag profile selector (PR-A)
 		"TagProfile":  string(tagProfile),
 		"TagProfiles": tagProfiles,
+
+		// Library destinations (PR-C UI). Sensitive fields stripped.
+		"Destinations": s.destinationsForView(ctx),
 	}
 
 	for k, v := range authData {

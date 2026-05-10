@@ -1,0 +1,104 @@
+{{define "content"}}
+{{$isEdit := .Dest}}
+{{$dt := .DestType}}
+<div class="settings-page">
+    <header class="settings-header">
+        <h1>{{if $isEdit}}Edit {{.DestTypeLabel}} Destination{{else}}Add {{.DestTypeLabel}} Destination{{end}}</h1>
+        <p>
+            {{if $isEdit}}Update the connection details below. Leave the API key / token blank to keep the existing value.
+            {{else}}Fill in the connection details. Audplexus will fan out post-download work to this destination.{{end}}
+        </p>
+    </header>
+
+    {{if .FormError}}
+    <div class="info-box" role="alert" style="border-color:var(--error);margin-bottom:1rem" id="form-error-summary" tabindex="-1">
+        <strong>Could not save:</strong> {{.FormError}}
+    </div>
+    {{end}}
+
+    <section class="auth-grid">
+        <section class="auth-panel" aria-labelledby="form-heading">
+            <h3 id="form-heading">Connection</h3>
+            <form method="POST"
+                  action="{{if $isEdit}}/destinations/{{.Dest.ID}}{{else}}/destinations/create{{end}}"
+                  class="settings-form">
+                {{if not $isEdit}}<input type="hidden" name="type" value="{{$dt}}">{{end}}
+
+                <div class="form-group">
+                    <label for="display_name">Display name</label>
+                    <input id="display_name" name="display_name" type="text" required maxlength="128"
+                           value="{{if $isEdit}}{{.Dest.DisplayName}}{{end}}"
+                           aria-describedby="display_name_help">
+                    <small id="display_name_help" class="muted">Shown in the Settings list and per-destination logs. Free-form, e.g. "Living room Plex".</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="url">{{.DestTypeLabel}} URL</label>
+                    <input id="url" name="url" type="url" required
+                           value="{{if $isEdit}}{{.Dest.URL}}{{end}}"
+                           placeholder="http://server.lan:8096"
+                           aria-describedby="url_help">
+                    <small id="url_help" class="muted">Internal URL Audplexus uses to reach the server. Use the LAN address; no public proxy required.</small>
+                </div>
+
+                {{if eq $dt "plex"}}
+                <div class="form-group">
+                    <label for="plex_token">Plex token</label>
+                    <input id="plex_token" name="plex_token" type="password" autocomplete="off"
+                           {{if not $isEdit}}required{{end}}
+                           aria-describedby="plex_token_help">
+                    <small id="plex_token_help" class="muted">{{if $isEdit}}Leave blank to keep the current token. {{end}}Get one from <code>https://&lt;plex&gt;/web/index.html#!/settings/server</code> &rarr; Account.</small>
+                </div>
+                <div class="form-group">
+                    <label for="plex_section_id">Plex section ID</label>
+                    <input id="plex_section_id" name="plex_section_id" type="text" required
+                           value="{{if $isEdit}}{{.Dest.PlexSectionID}}{{end}}"
+                           aria-describedby="plex_section_id_help">
+                    <small id="plex_section_id_help" class="muted">Numeric library/section ID. Find via <code>GET /library/sections?X-Plex-Token=&lt;token&gt;</code>.</small>
+                </div>
+                {{else}}
+                <div class="form-group">
+                    <label for="api_key">API key</label>
+                    <input id="api_key" name="api_key" type="password" autocomplete="off"
+                           {{if not $isEdit}}required{{end}}
+                           aria-describedby="api_key_help">
+                    <small id="api_key_help" class="muted">{{if $isEdit}}Leave blank to keep the current API key. {{end}}{{if eq $dt "abs"}}Audiobookshelf API key from Settings &rarr; Users &rarr; API Keys (admin scope required for scans).{{else}}{{.DestTypeLabel}} server API key.{{end}}</small>
+                </div>
+                <div class="form-group">
+                    <label for="library_id">Library ID</label>
+                    <input id="library_id" name="library_id" type="text" required
+                           value="{{if $isEdit}}{{.Dest.LibraryID}}{{end}}"
+                           aria-describedby="library_id_help">
+                    <small id="library_id_help" class="muted">{{if eq $dt "abs"}}UUID of the audiobook library on the ABS server.{{else}}Library ItemId of the audiobook library on the {{.DestTypeLabel}} server.{{end}}</small>
+                </div>
+                {{end}}
+
+                <details style="margin:1rem 0;">
+                    <summary>Advanced: per-destination path translation</summary>
+                    <div class="form-group" style="margin-top:.75rem">
+                        <label for="audiobook_path">Audplexus-side audiobook path</label>
+                        <input id="audiobook_path" name="audiobook_path" type="text"
+                               value="{{if $isEdit}}{{.Dest.AudiobookPath}}{{end}}"
+                               placeholder="/audiobooks"
+                               aria-describedby="audiobook_path_help">
+                        <small id="audiobook_path_help" class="muted">Path Audplexus writes to. Leave blank to use the global Audiobooks path.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="destination_path">{{.DestTypeLabel}}-side audiobook path</label>
+                        <input id="destination_path" name="destination_path" type="text"
+                               value="{{if $isEdit}}{{.Dest.DestinationPath}}{{end}}"
+                               placeholder="/data/audiobooks"
+                               aria-describedby="destination_path_help">
+                        <small id="destination_path_help" class="muted">Path {{.DestTypeLabel}} sees the same files at. Used to translate scan triggers.</small>
+                    </div>
+                </details>
+
+                <div style="display:flex;gap:.75rem;margin-top:1rem">
+                    <a href="/settings#library-destinations" class="btn btn-outline">Cancel</a>
+                    <button type="submit" class="btn btn-primary">{{if $isEdit}}Save Destination{{else}}Create Destination{{end}}</button>
+                </div>
+            </form>
+        </section>
+    </section>
+</div>
+{{end}}

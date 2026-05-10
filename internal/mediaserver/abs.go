@@ -157,11 +157,141 @@ func (a *ABSBackend) OnBookOrganized(ctx context.Context, book OrganizedBook) []
 	return outcomes
 }
 
-// ReconcileLibrary stub. ABS folder watcher + per-book scan covers the
-// common case; a full reconcile pass walking /api/libraries/{id}/items
-// is a follow-up.
+// ReconcileLibrary walks the ABS library, matches each item back to a
+// local book by ASIN, and records the server item ID via
+// UpdateBookMediaServerInfo so future operations can address items
+// directly. Pages through /api/libraries/{id}/items in batches.
+//
+// ABS auto-detects series from embedded metadata when the Audiobook-rich
+// tag profile is enabled, so this reconcile pass intentionally does NOT
+// patch series back onto items — that lives in OnBookOrganized for
+// freshly-organized books and as an opt-in repair for older books.
 func (a *ABSBackend) ReconcileLibrary(ctx context.Context, progressFn func(current, total int)) error {
-	return fmt.Errorf("abs reconcile not yet implemented; folder watcher + per-book scan covers normal case")
+	baseURL, apiKey, libraryID := a.settings(ctx)
+	if baseURL == "" || apiKey == "" || libraryID == "" {
+		return fmt.Errorf("abs not configured")
+	}
+
+	items, err := a.listAllItems(ctx, baseURL, apiKey, libraryID)
+	if err != nil {
+		return fmt.Errorf("list abs items: %w", err)
+	}
+	msLog.Info().Int("abs_items", len(items)).Msg("abs: fetched library item list for reconcile")
+
+	completeStatus := database.BookStatusComplete
+	books, _, err := a.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 100000})
+	if err != nil {
+		return fmt.Errorf("list complete books: %w", err)
+	}
+	booksByASIN := make(map[string]database.Book, len(books))
+	for _, b := range books {
+		if b.ASIN != "" {
+			booksByASIN[strings.ToUpper(strings.TrimSpace(b.ASIN))] = b
+		}
+	}
+
+	if progressFn != nil {
+		progressFn(0, len(items))
+	}
+	matched := 0
+	for i, it := range items {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		asin := strings.ToUpper(strings.TrimSpace(it.ASIN))
+		if asin == "" {
+			continue
+		}
+		book, ok := booksByASIN[asin]
+		if !ok {
+			continue
+		}
+		if book.MediaServerID != it.ID || book.MediaServerTitle != it.Title {
+			if err := a.db.UpdateBookMediaServerInfo(ctx, book.ID, it.ID, it.Title); err != nil {
+				msLog.Warn().Err(err).Int64("book_id", book.ID).Str("asin", asin).Msg("abs: failed to update book media server info")
+			} else {
+				matched++
+			}
+		}
+		if progressFn != nil && (i%25 == 0 || i == len(items)-1) {
+			progressFn(i+1, len(items))
+		}
+	}
+	msLog.Info().Int("matched", matched).Int("abs_items", len(items)).Int("local_books", len(books)).Msg("abs: reconcile complete")
+	return nil
+}
+
+// absLibraryItem is a thin DTO of the fields ReconcileLibrary needs from
+// /api/libraries/{id}/items — keeps the parser tolerant to ABS's larger
+// response shape without forcing us to model every field.
+type absLibraryItem struct {
+	ID    string
+	Title string
+	ASIN  string
+}
+
+func (a *ABSBackend) listAllItems(ctx context.Context, baseURL, apiKey, libraryID string) ([]absLibraryItem, error) {
+	const pageSize = 200
+	var all []absLibraryItem
+	page := 0
+	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		u, err := a.buildURL(baseURL, "/api/libraries/"+url.PathEscape(libraryID)+"/items", map[string]string{
+			"limit":    fmt.Sprintf("%d", pageSize),
+			"page":     fmt.Sprintf("%d", page),
+			"minified": "1",
+		})
+		if err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		a.addAuthHeader(req, apiKey)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			resp.Body.Close()
+			return nil, fmt.Errorf("abs /items returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+
+		var r struct {
+			Results []struct {
+				ID    string `json:"id"`
+				Media struct {
+					Metadata struct {
+						Title string `json:"title"`
+						ASIN  string `json:"asin"`
+					} `json:"metadata"`
+				} `json:"media"`
+			} `json:"results"`
+			Total int `json:"total"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("parse abs items page %d: %w", page, err)
+		}
+		resp.Body.Close()
+
+		for _, hit := range r.Results {
+			all = append(all, absLibraryItem{
+				ID:    hit.ID,
+				Title: hit.Media.Metadata.Title,
+				ASIN:  hit.Media.Metadata.ASIN,
+			})
+		}
+		if len(r.Results) < pageSize {
+			break
+		}
+		page++
+	}
+	return all, nil
 }
 
 // LibraryItemCount queries the ABS library stats endpoint.

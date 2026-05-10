@@ -260,6 +260,62 @@
 
             </section>
             {{end}}
+
+            <section class="auth-panel" aria-labelledby="library-destinations-heading" id="library-destinations" style="grid-column: 1 / -1;">
+                <h3 id="library-destinations-heading">Library Destinations</h3>
+                <p class="muted" style="margin-top:.25rem;margin-bottom:.75rem">Where Audplexus pushes scans, item-matching, and series-collection work after each download. Multiple destinations of the same type are allowed (e.g. household + parents' Plex).</p>
+
+                {{if .Destinations}}
+                <ul role="list" class="destinations-list" style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.75rem">
+                    {{range .Destinations}}
+                    <li class="destination-card" aria-labelledby="dest-{{.ID}}-name" style="padding:.75rem;border:1px solid var(--border, #2a2f3a);border-radius:6px;">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem">
+                            <div>
+                                <h4 id="dest-{{.ID}}-name" style="margin:0 0 .25rem 0;font-size:1rem">{{.DisplayName}}</h4>
+                                <p style="margin:0;font-size:.85rem">
+                                    <span class="badge badge-type">{{.TypeLabel}}</span>
+                                    <span aria-hidden="true" class="muted">&middot;</span>
+                                    <span class="visually-hidden">Status: </span>
+                                    {{if eq .Health "healthy"}}<span class="badge badge-success">Healthy</span>
+                                    {{else if eq .Health "failed"}}<span class="badge badge-error">Failed</span>
+                                    {{else if eq .Health "never"}}<span class="badge badge-inactive">Never checked</span>
+                                    {{else}}<span class="badge badge-warning">Not configured</span>{{end}}
+                                    <span aria-hidden="true" class="muted">&middot;</span>
+                                    <span class="muted">Enabled: {{if .Enabled}}yes{{else}}no{{end}}</span>
+                                    {{if .URL}}<span aria-hidden="true" class="muted">&middot;</span> <span class="muted">{{.URL}}</span>{{end}}
+                                </p>
+                                {{if and (eq .Health "failed") .LastError}}
+                                <p style="margin:.25rem 0 0 0;font-size:.85rem"><small id="dest-{{.ID}}-err" class="muted">{{.LastError}}</small></p>
+                                {{end}}
+                            </div>
+                            <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+                                <a href="/destinations/{{.ID}}/edit" class="btn btn-outline btn-sm"
+                                   {{if and (eq .Health "failed") .LastError}}aria-describedby="dest-{{.ID}}-err"{{end}}>
+                                    Edit<span class="visually-hidden"> {{.DisplayName}}</span>
+                                </a>
+                                <form method="POST" action="/destinations/{{.ID}}/toggle" style="margin:0">
+                                    <button type="submit" class="btn btn-outline btn-sm">
+                                        {{if .Enabled}}Disable{{else}}Enable{{end}}<span class="visually-hidden"> {{.DisplayName}}</span>
+                                    </button>
+                                </form>
+                                <form method="POST" action="/destinations/{{.ID}}/delete" style="margin:0">
+                                    <button type="submit" class="btn btn-danger btn-sm">
+                                        Delete<span class="visually-hidden"> {{.DisplayName}}</span>
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    </li>
+                    {{end}}
+                </ul>
+                {{else}}
+                <p class="muted">No destinations configured yet. Add one to start fanning out scans, or set <code>MEDIA_SERVER</code> + per-type env vars and restart for first-boot synthesis.</p>
+                {{end}}
+
+                <p style="margin:1rem 0 0 0">
+                    <a href="/destinations/new" class="btn btn-primary">Add destination</a>
+                </p>
+            </section>
         </div>
     </div>
 

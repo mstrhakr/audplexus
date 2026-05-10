@@ -1,0 +1,29 @@
+{{define "content"}}
+<div class="settings-page">
+    <header class="settings-header">
+        <h1>Add Library Destination</h1>
+        <p>Pick the kind of server Audplexus should push to. The next step asks for the type-specific configuration.</p>
+    </header>
+
+    <section class="auth-grid">
+        <section class="auth-panel" aria-labelledby="dest-type-heading">
+            <h3 id="dest-type-heading">Destination type</h3>
+            <form method="POST" action="/destinations/new" class="settings-form">
+                <fieldset class="form-group" style="border:0;padding:0;margin:0">
+                    <legend class="visually-hidden">Choose a destination type</legend>
+                    <p style="display:flex;flex-direction:column;gap:.5rem;margin:0">
+                        <label><input type="radio" name="type" value="plex" required> Plex</label>
+                        <label><input type="radio" name="type" value="emby"> Emby</label>
+                        <label><input type="radio" name="type" value="jellyfin"> Jellyfin</label>
+                        <label><input type="radio" name="type" value="abs"> Audiobookshelf</label>
+                    </p>
+                </fieldset>
+                <div style="display:flex;gap:.75rem;margin-top:1rem">
+                    <a href="/settings#library-destinations" class="btn btn-outline">Cancel</a>
+                    <button type="submit" class="btn btn-primary">Continue</button>
+                </div>
+            </form>
+        </section>
+    </section>
+</div>
+{{end}}

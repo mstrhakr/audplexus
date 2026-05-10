@@ -249,6 +249,21 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 .badge-error { background: var(--error); color: #fff; }
 .badge-info { background: var(--info); color: #fff; }
 .badge-neutral { background: var(--neutral); color: #fff; }
+.badge-inactive { background: #444; color: #ddd; }   /* "never checked" — neutral, AA contrast */
+.badge-type { background: #2a3a4f; color: #cfe1ff; }   /* subtle blue tag for type label */
+
+/* SR-only utility — visually hidden, accessible to screen readers. */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
 
 /* Search bar */
 .search-bar {

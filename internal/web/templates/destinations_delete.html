@@ -1,0 +1,27 @@
+{{define "content"}}
+<div class="settings-page">
+    <header class="settings-header">
+        <h1>Delete Library Destination</h1>
+    </header>
+
+    <section class="auth-grid">
+        <section class="auth-panel" aria-labelledby="del-heading">
+            <h3 id="del-heading">Delete &quot;{{.Dest.DisplayName}}&quot;?</h3>
+            <p>
+                This removes the {{.Dest.TypeLabel}} destination from Audplexus.
+                Your media files and the {{.Dest.TypeLabel}} server itself are not touched.
+                Audplexus will stop fanning out post-download work to this destination.
+            </p>
+            <p><strong>This cannot be undone.</strong> The per-(book, destination) sync history for this destination is also deleted.</p>
+
+            <form method="POST" action="/destinations/{{.Dest.ID}}/delete">
+                <input type="hidden" name="confirm" value="1">
+                <div style="display:flex;gap:.75rem">
+                    <a href="/settings#library-destinations" class="btn btn-outline">Cancel</a>
+                    <button type="submit" class="btn btn-danger">Permanently delete</button>
+                </div>
+            </form>
+        </section>
+    </section>
+</div>
+{{end}}
