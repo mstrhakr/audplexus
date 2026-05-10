@@ -129,6 +129,104 @@ type DestinationFanOutResult struct {
 	Outcomes    []mediaserver.Outcome
 }
 
+// TriggerScanAll calls TriggerLibraryScan on every enabled destination
+// concurrently, bounded by maxConcurrency. Returns the aggregated item
+// counts so the sync service can show a summary. Errors are logged
+// per-destination and do not abort other destinations.
+//
+// Used by the Full Sync flow's Library Scan phase: multi-dest aware
+// replacement for the legacy single-backend ReconcileLibrary call that
+// only ran against the active MEDIA_SERVER.
+func (m *DestinationManager) TriggerScanAll(ctx context.Context) (int, []DestinationScanResult) {
+	dests := m.ListEnabled(ctx)
+	if len(dests) == 0 {
+		return 0, nil
+	}
+	sem := semaphore.NewWeighted(int64(m.maxConcurrency))
+	results := make([]DestinationScanResult, len(dests))
+	var wg sync.WaitGroup
+
+	for i, db := range dests {
+		i, db := i, db
+		if err := sem.Acquire(ctx, 1); err != nil {
+			results[i] = DestinationScanResult{Destination: db.Row, Err: err}
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer sem.Release(1)
+			perCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			defer cancel()
+			items, err := db.Backend.TriggerLibraryScan(perCtx)
+			results[i] = DestinationScanResult{Destination: db.Row, Items: items, Err: err}
+			if err != nil {
+				dlLog.Warn().Err(err).Str("destination_id", db.Row.ID).Str("destination", db.Row.DisplayName).Msg("destinations: library scan failed")
+			}
+		}()
+	}
+	wg.Wait()
+
+	totalItems := 0
+	for _, r := range results {
+		if r.Err == nil {
+			totalItems += r.Items
+		}
+	}
+	return totalItems, results
+}
+
+// ReconcileAll calls ReconcileLibrary on every enabled destination
+// concurrently. Same fan-out semantics as TriggerScanAll: errors
+// per-destination logged, others continue.
+func (m *DestinationManager) ReconcileAll(ctx context.Context, progressFn func(current, total int)) []DestinationReconcileResult {
+	dests := m.ListEnabled(ctx)
+	if len(dests) == 0 {
+		return nil
+	}
+	sem := semaphore.NewWeighted(int64(m.maxConcurrency))
+	results := make([]DestinationReconcileResult, len(dests))
+	var wg sync.WaitGroup
+
+	for i, db := range dests {
+		i, db := i, db
+		if err := sem.Acquire(ctx, 1); err != nil {
+			results[i] = DestinationReconcileResult{Destination: db.Row, Err: err}
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer sem.Release(1)
+			// Reconcile can be long (paged item list + per-book matching).
+			// 10-minute per-destination cap; pipeline-level ctx still rules.
+			perCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			defer cancel()
+			err := db.Backend.ReconcileLibrary(perCtx, progressFn)
+			results[i] = DestinationReconcileResult{Destination: db.Row, Err: err}
+			if err != nil {
+				dlLog.Warn().Err(err).Str("destination_id", db.Row.ID).Str("destination", db.Row.DisplayName).Msg("destinations: reconcile failed")
+			}
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+// DestinationScanResult captures one destination's library-scan trigger
+// outcome (item count + error).
+type DestinationScanResult struct {
+	Destination database.LibraryDestination
+	Items       int
+	Err         error
+}
+
+// DestinationReconcileResult captures one destination's reconcile outcome.
+type DestinationReconcileResult struct {
+	Destination database.LibraryDestination
+	Err         error
+}
+
 // recordOutcomes upserts the book_library_destinations row for this
 // (book, destination) with summary state derived from the outcomes.
 func (m *DestinationManager) recordOutcomes(ctx context.Context, bookID int64, dest *database.LibraryDestination, outcomes []mediaserver.Outcome) {

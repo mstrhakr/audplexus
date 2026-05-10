@@ -124,6 +124,13 @@ func (dm *DownloadManager) MediaServer() mediaserver.Backend {
 	return dm.mediaServer
 }
 
+// Destinations returns the multi-library-destination manager (may be nil).
+// Used by the sync service to fan out the Library Scan phase across every
+// enabled destination instead of only the legacy single backend.
+func (dm *DownloadManager) Destinations() *DestinationManager {
+	return dm.destinations
+}
+
 // SetEmbedCover updates the embed cover setting at runtime.
 func (dm *DownloadManager) SetEmbedCover(v bool) {
 	dm.mu.Lock()
