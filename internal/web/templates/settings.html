@@ -102,6 +102,22 @@
                 </form>
             </section>
 
+            <section class="auth-panel">
+                <h3>Tag Profile</h3>
+                <form method="POST" action="/settings/tag-profile" class="settings-form">
+                    <div class="form-group">
+                        <label for="tag_profile">Embedded metadata profile</label>
+                        <select id="tag_profile" name="tag_profile" aria-describedby="tag_profile_help">
+                            {{range .TagProfiles}}
+                            <option value="{{.Value}}"{{if eq .Value $.TagProfile}} selected{{end}}>{{.Label}}</option>
+                            {{end}}
+                        </select>
+                        <small id="tag_profile_help" class="muted">Controls which metadata atoms get written into each m4b on download. <strong>Basic</strong> matches Audplexus's historical behavior. <strong>Audiobook-rich</strong> adds <code>series</code>, <code>series-part</code>, and <code>asin</code> freeform atoms — read by Audiobookshelf for series auto-grouping. Applies to subsequent downloads only; already-organized books are unchanged.</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Save Tag Profile</button>
+                </form>
+            </section>
+
             {{if eq .MediaServerType "plex"}}
             <section class="auth-panel">
                 <h3>Plex</h3>
