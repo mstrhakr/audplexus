@@ -489,14 +489,16 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 		}
 	}
 
-	// --- Phase 3: Plex Sync (full sync only) ---
+	// --- Phase 3: Library Scan (full sync only). Phase identifier kept as
+	// PhasePlexSync for URL/JS back-compat, but user-visible messages are
+	// backend-agnostic — works for Plex, Emby, Jellyfin, ABS. ---
 	plexItems := 0
 	if mode == SyncModeFull && s.plexSyncFunc != nil {
-		s.setPhase(PhasePlexSync, "running", "Syncing with Plex (scan + query)...")
+		s.setPhase(PhasePlexSync, "running", "Syncing with library destination (scan + query)...")
 		items, plexErr := s.plexSyncFunc(ctx)
 		if plexErr != nil {
 			s.setPhase(PhasePlexSync, "failed", plexErr.Error())
-			syncLog.Warn().Err(plexErr).Msg("plex sync phase failed")
+			syncLog.Warn().Err(plexErr).Msg("library scan phase failed")
 		} else {
 			plexItems = items
 			s.mu.Lock()
@@ -504,8 +506,8 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 			s.progress.PlexScanned = true
 			s.emitLocked()
 			s.mu.Unlock()
-			s.setPhase(PhasePlexSync, "complete", fmt.Sprintf("%d items in Plex (scan complete)", plexItems))
-			syncLog.Info().Int("plex_items", plexItems).Msg("synced with Plex")
+			s.setPhase(PhasePlexSync, "complete", fmt.Sprintf("%d items in library (scan complete)", plexItems))
+			syncLog.Info().Int("library_items", plexItems).Msg("library scan complete")
 		}
 	}
 
