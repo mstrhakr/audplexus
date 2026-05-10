@@ -161,19 +161,26 @@ func (m *DestinationManager) TriggerScanAll(ctx context.Context) (int, []Destina
 			items, err := db.Backend.TriggerLibraryScan(perCtx)
 			results[i] = DestinationScanResult{Destination: db.Row, Items: items, Err: err}
 			if err != nil {
-				dlLog.Warn().Err(err).Str("destination_id", db.Row.ID).Str("destination", db.Row.DisplayName).Msg("destinations: library scan failed")
+				dlLog.Warn().Err(err).Str("destination_id", db.Row.ID).Str("destination_name", db.Row.DisplayName).Msg("destinations: library scan failed")
 			}
 		}()
 	}
 	wg.Wait()
 
-	totalItems := 0
+	// Report the MAX per-destination count, not the sum. With 3
+	// destinations pointing at the same /audiobooks mount, summing gives
+	// 3x the true count (342 books × 3 = 1026 — visibly bogus). Max is
+	// the closest sane single-number summary; per-destination truth lives
+	// on the dashboard cards. If destinations legitimately disagree
+	// (e.g. Emby skipped a book with bad metadata), max picks the
+	// most-thorough server's count, which never overstates.
+	maxItems := 0
 	for _, r := range results {
-		if r.Err == nil {
-			totalItems += r.Items
+		if r.Err == nil && r.Items > maxItems {
+			maxItems = r.Items
 		}
 	}
-	return totalItems, results
+	return maxItems, results
 }
 
 // ReconcileAll calls ReconcileLibrary on every enabled destination
@@ -205,7 +212,7 @@ func (m *DestinationManager) ReconcileAll(ctx context.Context, progressFn func(c
 			err := db.Backend.ReconcileLibrary(perCtx, progressFn)
 			results[i] = DestinationReconcileResult{Destination: db.Row, Err: err}
 			if err != nil {
-				dlLog.Warn().Err(err).Str("destination_id", db.Row.ID).Str("destination", db.Row.DisplayName).Msg("destinations: reconcile failed")
+				dlLog.Warn().Err(err).Str("destination_id", db.Row.ID).Str("destination_name", db.Row.DisplayName).Msg("destinations: reconcile failed")
 			}
 		}()
 	}

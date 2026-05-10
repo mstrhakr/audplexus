@@ -176,6 +176,7 @@
                             hx-include="closest form"
                             hx-target="#test-result"
                             hx-swap="innerHTML"
+                            hx-disabled-elt="this"
                             hx-on::before-request="document.getElementById('test-result').setAttribute('aria-busy', 'true'); document.getElementById('test-result').textContent = 'Testing connection…';"
                             hx-on::after-request="document.getElementById('test-result').setAttribute('aria-busy', 'false');">
                         Test Connection

@@ -115,6 +115,55 @@ func TestFirstBootSynthesisSkipsIncompleteConfig(t *testing.T) {
 	}
 }
 
+// TestFirstBootSynthesisInfersPlexFromConfigWhenTypeUnset is the
+// regression test for codex P1 finding: existing v0.2.x Plex installs
+// commonly never set MEDIA_SERVER or media_server_type because Plex was
+// the silent default. Without this fallback, those installs would
+// upgrade to a non-nil DestinationManager + empty library_destinations
+// and silently lose every post-download scan/collection trigger.
+func TestFirstBootSynthesisInfersPlexFromConfigWhenTypeUnset(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	// Critical: NO media_server_type set, NO MEDIA_SERVER env var.
+	// But plex_* settings ARE present (the typical v0.2.x Plex install).
+	t.Setenv("MEDIA_SERVER", "")
+	_ = db.SetSetting(ctx, "plex_url", "http://plex.lan:32400")
+	_ = db.SetSetting(ctx, "plex_token", "tok")
+	_ = db.SetSetting(ctx, "plex_section_id", "5")
+
+	if err := SynthesizeLibraryDestinationsIfEmpty(ctx, db); err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+
+	all, _ := db.ListLibraryDestinations(ctx)
+	if len(all) != 1 {
+		t.Fatalf("expected 1 inferred Plex destination (codex P1), got %d", len(all))
+	}
+	if all[0].Type != database.LibraryDestinationTypePlex {
+		t.Errorf("expected Plex destination inferred from plex_* settings; got %q", all[0].Type)
+	}
+}
+
+// TestFirstBootSynthesisInfersEmbyFromConfigWhenTypeUnset — same shape
+// for Emby. Less common than the Plex variant but worth covering.
+func TestFirstBootSynthesisInfersEmbyFromConfigWhenTypeUnset(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	t.Setenv("MEDIA_SERVER", "")
+	_ = db.SetSetting(ctx, "emby_url", "http://emby.lan:8096")
+	_ = db.SetSetting(ctx, "emby_api_key", "key")
+	_ = db.SetSetting(ctx, "emby_library_id", "lib1")
+
+	if err := SynthesizeLibraryDestinationsIfEmpty(ctx, db); err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+	all, _ := db.ListLibraryDestinations(ctx)
+	if len(all) != 1 || all[0].Type != database.LibraryDestinationTypeEmby {
+		t.Fatalf("expected 1 Emby inferred destination, got %+v", all)
+	}
+}
+
 func TestFirstBootSynthesisHandlesNoLegacyConfig(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()

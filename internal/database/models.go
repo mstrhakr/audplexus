@@ -1,6 +1,9 @@
 package database
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Book represents an audiobook in the local database.
 type Book struct {
@@ -143,6 +146,26 @@ func (d *LibraryDestination) HasAPIKey() bool { return d.APIKey != "" }
 
 // HasPlexToken reports whether the destination has a Plex token set.
 func (d *LibraryDestination) HasPlexToken() bool { return d.PlexToken != "" }
+
+// String redacts secrets in default fmt formatting. `json:"-"` covers
+// json.Marshal but Printf("%+v", dest) would still expose APIKey and
+// PlexToken via reflection. This Stringer wins for %v/%s; %+v falls
+// back to the GoStringer below for completeness.
+func (d LibraryDestination) String() string {
+	return fmt.Sprintf("LibraryDestination{ID:%s Type:%s DisplayName:%q Enabled:%t URL:%s LibraryID:%s APIKey:%s PlexToken:%s}",
+		d.ID, d.Type, d.DisplayName, d.Enabled, d.URL, d.LibraryID,
+		redactToken(d.APIKey), redactToken(d.PlexToken))
+}
+
+// GoString covers the %#v verb used by some loggers. Same redaction.
+func (d LibraryDestination) GoString() string { return d.String() }
+
+func redactToken(s string) string {
+	if s == "" {
+		return "<unset>"
+	}
+	return "<redacted>"
+}
 
 // BookDestinationSyncState is the per-(book, destination) state machine.
 type BookDestinationSyncState string

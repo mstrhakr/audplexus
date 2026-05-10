@@ -101,6 +101,37 @@ func TestEmbedArgsAudiobookRichSetsMovFlagsUseMetadataTags(t *testing.T) {
 	}
 }
 
+// TestBuildDecryptArgsAudiobookRichSetsMovFlags is the regression test
+// for codex P2 finding: the actual download pipeline goes through
+// DecryptAAX(C)WithMetadata → buildDecryptArgs, NOT EmbedMetadata →
+// embedArgs. Previously only embedArgs had the muxer flag, so the
+// freeform series/series-part/asin atoms were silently dropped on every
+// real download under Audiobook-rich profile. Guards the flag.
+func TestBuildDecryptArgsAudiobookRichSetsMovFlags(t *testing.T) {
+	f := &FFmpeg{}
+	args := f.buildDecryptArgs("/in.aax", "/out.m4b", "ABCD1234", "", "", Metadata{
+		Title:   "Foundation",
+		ASIN:    "B0",
+		Profile: TagProfileAudiobookRich,
+	})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-movflags use_metadata_tags") {
+		t.Errorf("buildDecryptArgs(AudiobookRich) must include -movflags use_metadata_tags so series/asin atoms aren't silently dropped during decrypt+embed:\n%s", joined)
+	}
+}
+
+func TestBuildDecryptArgsBasicDoesNotSetMovFlags(t *testing.T) {
+	f := &FFmpeg{}
+	args := f.buildDecryptArgs("/in.aax", "/out.m4b", "ABCD1234", "", "", Metadata{
+		Title:   "Foundation",
+		Profile: TagProfileBasic,
+	})
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "-movflags") {
+		t.Errorf("buildDecryptArgs(Basic) must not set -movflags (preserves historical behavior):\n%s", joined)
+	}
+}
+
 func TestEmbedArgsBasicDoesNotSetMovFlags(t *testing.T) {
 	// Basic profile preserves today's exact behavior — no muxer flag
 	// changes. Existing libraries upgrade with zero diff.

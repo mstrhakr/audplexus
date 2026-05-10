@@ -536,6 +536,7 @@ type destinationSummaryView struct {
 	CoverageSet   bool
 	Health        string // "healthy" | "failed" | "never" | "not_configured"
 	HealthDetail  string // for failed: shorter human message
+	LastCheckedAt *time.Time
 }
 
 // destinationSummaries computes per-destination summary cards for the
@@ -558,13 +559,14 @@ func (s *Server) destinationSummaries(ctx context.Context, completeBooks int) []
 	for _, r := range rows {
 		row := r
 		v := destinationSummaryView{
-			ID:          row.ID,
-			DisplayName: row.DisplayName,
-			Type:        string(row.Type),
-			TypeLabel:   destinationTypeLabel(row.Type),
-			Enabled:     row.Enabled,
-			Configured:  destinationConfigured(&row),
-			Health:      summarizeHealth(&row),
+			ID:            row.ID,
+			DisplayName:   row.DisplayName,
+			Type:          string(row.Type),
+			TypeLabel:     destinationTypeLabel(row.Type),
+			Enabled:       row.Enabled,
+			Configured:    destinationConfigured(&row),
+			Health:        summarizeHealth(&row),
+			LastCheckedAt: row.LastHealthCheckAt,
 		}
 
 		if !v.Enabled || !v.Configured {
@@ -584,7 +586,7 @@ func (s *Server) destinationSummaries(ctx context.Context, completeBooks int) []
 
 		count, err := s.getCachedDestinationItemCount(ctx, row.ID, backend)
 		if err != nil {
-			webLog.Debug().Err(err).Str("destination", row.ID).Msg("dashboard: destination item count failed")
+			webLog.Debug().Err(err).Str("destination_id", row.ID).Str("destination_name", row.DisplayName).Msg("dashboard: destination item count failed")
 			v.Health = "failed"
 			v.HealthDetail = err.Error()
 		} else {
