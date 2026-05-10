@@ -24,37 +24,54 @@
         <div class="stat-value" id="stat-failed-dl">{{.FailedDL}}</div>
         <div class="stat-label">Failed</div>
     </div>
-    {{if .MediaServerConfigured}}
-    <div class="stat-card">
-        <div class="stat-value" id="stat-media-server-conn">1</div>
-        <div class="stat-label">{{.MediaServerDisplay}} Connected</div>
-    </div>
-    {{if .LibraryItemsSet}}
-    <div class="stat-card">
-        <div class="stat-value" id="stat-library-items">{{.LibraryItems}}</div>
-        <div class="stat-label">{{.MediaServerDisplay}} Library Items</div>
-    </div>
-    {{if .LibraryCoverageSet}}
-    <div class="stat-card">
-        <div class="stat-value" id="stat-library-coverage">{{.LibraryCoverage}}%</div>
-        <div class="stat-label">{{.MediaServerDisplay}} Coverage</div>
-    </div>
-    {{end}}
-    {{end}}
-    {{end}}
 </div>
 
-{{if .MediaServerConfigured}}
-<div class="info-box info-box-compact">
-    <strong>{{.MediaServerDisplay}}:</strong>
-    {{if .LibraryDetail}}{{.LibraryDetail}}{{else}}Connected{{end}}
-    {{if .LibraryItemsSet}}&mdash; {{.LibraryItems}} item(s) indexed{{end}}
-    {{if .LibraryCoverageSet}} ({{.LibraryCoverage}}% of downloaded books){{end}}
-</div>
-{{end}}
+<section aria-labelledby="dest-summary-heading" style="margin-top:1.25rem">
+    <h2 id="dest-summary-heading" style="margin:0 0 .5rem 0">Destinations</h2>
+    {{if .DestinationSummaries}}
+    {{/* aria-live=polite + atomic=false → SR users hear destination
+         additions/removals and badge state changes (Healthy → Failed)
+         WITHOUT chatter on every 12s count tick. The numeric <dd>
+         elements have aria-live=off so count fluctuations stay silent. */}}
+    <ul role="list" aria-live="polite" aria-atomic="false" class="destination-summary-list" style="list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.75rem">
+        {{range .DestinationSummaries}}
+        <li aria-labelledby="dest-sum-{{.ID}}-name" style="padding:.6rem .75rem;border:1px solid var(--border, #2a2f3a);border-radius:6px">
+            <h3 id="dest-sum-{{.ID}}-name" style="margin:0 0 .25rem 0;font-size:.95rem">
+                {{.DisplayName}}
+            </h3>
+            <p style="margin:0 0 .35rem 0;font-size:.8rem">
+                <span class="badge badge-type">{{.TypeLabel}}</span>
+                <span aria-hidden="true" class="muted">&middot;</span>
+                {{if not .Enabled}}<span class="badge badge-inactive" role="status">Disabled</span>
+                {{else if eq .Health "healthy"}}<span class="badge badge-success" role="status">Healthy</span>
+                {{else if eq .Health "failed"}}<span class="badge badge-error" role="status">Failed</span>
+                {{else if eq .Health "never"}}<span class="badge badge-inactive" role="status">Never checked</span>
+                {{else}}<span class="badge badge-warning" role="status">Not configured</span>{{end}}
+            </p>
+            {{if .ItemCountSet}}
+            <dl style="margin:0;display:flex;gap:1rem;font-size:.85rem">
+                <div>
+                    <dt class="muted" style="font-weight:normal">Items</dt>
+                    <dd aria-live="off" style="margin:0;font-weight:600">{{.ItemCount}}</dd>
+                </div>
+                {{if .CoverageSet}}
+                <div>
+                    <dt class="muted" style="font-weight:normal">Coverage</dt>
+                    <dd aria-live="off" style="margin:0;font-weight:600">{{.Coverage}}%</dd>
+                </div>
+                {{end}}
+            </dl>
+            {{end}}
+        </li>
+        {{end}}
+    </ul>
+    {{else}}
+    <p class="muted">No destinations configured. <a href="/destinations/new">Add a library destination</a> to fan out scans after each download.</p>
+    {{end}}
+</section>
 
 {{if .LastSync}}
-<div class="info-box">
+<div class="info-box" style="margin-top:1rem">
     <strong>Last Sync:</strong> {{formatDate .LastSync.StartedAt}} &mdash;
     {{.LastSync.BooksFound}} found, {{.LastSync.BooksAdded}} added
     ({{.LastSync.Status}})

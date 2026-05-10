@@ -63,6 +63,20 @@ type Server struct {
 		count     int
 		fetchedAt time.Time
 	}
+
+	// destItemCountCache caches per-destination LibraryItemCount results
+	// (30s TTL) so the dashboard's 12s poll doesn't hammer remote servers.
+	// Keyed by destination ID; entries expire independently.
+	destItemCountCache struct {
+		mu      sync.Mutex
+		entries map[string]destCountEntry
+	}
+}
+
+type destCountEntry struct {
+	count     int
+	fetchedAt time.Time
+	err       error
 }
 
 // NewServer creates a new web server with all handlers registered.
@@ -506,6 +520,11 @@ func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
 		"FailedDL":      len(failedDownloads),
 		"LastSync":      lastSync,
 
+		// Per-destination summary cards (PR-G+ multi-dest dashboard).
+		// Replaces the single-active-backend cards. Empty slice means
+		// "no destinations configured yet" — template shows a CTA.
+		"DestinationSummaries": s.destinationSummaries(ctx, completeBooks),
+
 		// Backend-agnostic media server status (preferred in templates).
 		"MediaServerType":       string(mediaServerType),
 		"MediaServerLabel":      backendLabel,
@@ -536,6 +555,133 @@ func mediaServerLabel(t mediaserver.Type) (string, string) {
 	default:
 		return "plex", "Plex"
 	}
+}
+
+// destinationSummaryView is the per-destination card rendered on the
+// dashboard. Sensitive fields are intentionally absent; only display info.
+type destinationSummaryView struct {
+	ID            string
+	DisplayName   string
+	Type          string
+	TypeLabel     string
+	Enabled       bool
+	Configured    bool
+	ItemCount     int
+	ItemCountSet  bool
+	Coverage      int
+	CoverageSet   bool
+	Health        string // "healthy" | "failed" | "never" | "not_configured"
+	HealthDetail  string // for failed: shorter human message
+}
+
+// destinationSummaries computes per-destination summary cards for the
+// dashboard. Item counts are cached at 30s TTL per destination so the
+// 12s dashboard poll doesn't hammer remote servers.
+//
+// Per a11y-lead: badges are role="status" so SR users hear destination
+// state changes (Healthy → Failed) without per-tick count chatter.
+func (s *Server) destinationSummaries(ctx context.Context, completeBooks int) []destinationSummaryView {
+	rows, err := s.db.ListLibraryDestinations(ctx)
+	if err != nil {
+		webLog.Warn().Err(err).Msg("dashboard: list destinations failed")
+		return nil
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	out := make([]destinationSummaryView, 0, len(rows))
+	for _, r := range rows {
+		row := r
+		v := destinationSummaryView{
+			ID:          row.ID,
+			DisplayName: row.DisplayName,
+			Type:        string(row.Type),
+			TypeLabel:   destinationTypeLabel(row.Type),
+			Enabled:     row.Enabled,
+			Configured:  destinationConfigured(&row),
+			Health:      summarizeHealth(&row),
+		}
+
+		if !v.Enabled || !v.Configured {
+			out = append(out, v)
+			continue
+		}
+
+		// Construct a backend instance bound to this destination row so
+		// LibraryItemCount uses the row's URL/api_key, not the legacy
+		// settings table.
+		backend, err := s.buildDestinationBackend(&row)
+		if err != nil {
+			v.HealthDetail = err.Error()
+			out = append(out, v)
+			continue
+		}
+
+		count, err := s.getCachedDestinationItemCount(ctx, row.ID, backend)
+		if err != nil {
+			webLog.Debug().Err(err).Str("destination", row.ID).Msg("dashboard: destination item count failed")
+			v.Health = "failed"
+			v.HealthDetail = err.Error()
+		} else {
+			v.ItemCount = count
+			v.ItemCountSet = true
+			if completeBooks > 0 {
+				cov := int(math.Round((float64(count) / float64(completeBooks)) * 100))
+				if cov < 0 {
+					cov = 0
+				}
+				if cov > 100 {
+					cov = 100
+				}
+				v.Coverage = cov
+				v.CoverageSet = true
+			}
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// buildDestinationBackend constructs a Backend bound to the given row.
+// Same shape as DestinationManager.buildBackend; duplicated here because
+// the dashboard handler doesn't go through the download manager.
+func (s *Server) buildDestinationBackend(row *database.LibraryDestination) (mediaserver.Backend, error) {
+	switch row.Type {
+	case database.LibraryDestinationTypePlex:
+		return mediaserver.NewPlex(s.db, s.audiobooksPath).WithDestination(row), nil
+	case database.LibraryDestinationTypeEmby:
+		return mediaserver.NewEmby(s.db, s.audnexus, s.audiobooksPath).WithDestination(row), nil
+	case database.LibraryDestinationTypeJellyfin:
+		return mediaserver.NewJellyfin(s.db, s.audnexus, s.audiobooksPath).WithDestination(row), nil
+	case database.LibraryDestinationTypeABS:
+		return mediaserver.NewABS(s.db, s.audiobooksPath).WithDestination(row), nil
+	}
+	return nil, fmt.Errorf("unsupported destination type: %q", row.Type)
+}
+
+// getCachedDestinationItemCount caches per-destination LibraryItemCount
+// results (30s TTL). Errors are also cached briefly so a failing
+// destination doesn't get re-hit on every 12s dashboard poll.
+func (s *Server) getCachedDestinationItemCount(ctx context.Context, destID string, backend mediaserver.Backend) (int, error) {
+	s.destItemCountCache.mu.Lock()
+	if s.destItemCountCache.entries == nil {
+		s.destItemCountCache.entries = map[string]destCountEntry{}
+	}
+	if e, ok := s.destItemCountCache.entries[destID]; ok && time.Since(e.fetchedAt) < 30*time.Second {
+		s.destItemCountCache.mu.Unlock()
+		return e.count, e.err
+	}
+	s.destItemCountCache.mu.Unlock()
+
+	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	items, err := backend.LibraryItemCount(lookupCtx)
+	cancel()
+
+	s.destItemCountCache.mu.Lock()
+	s.destItemCountCache.entries[destID] = destCountEntry{count: items, fetchedAt: time.Now(), err: err}
+	s.destItemCountCache.mu.Unlock()
+	return items, err
 }
 
 // getCachedLibraryItemCount returns the cached item count if valid (< 30s old),
