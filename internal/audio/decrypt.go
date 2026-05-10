@@ -458,8 +458,16 @@ func (f *FFmpeg) SplitChapters(inputPath, outputDir string, chapters []ChapterMa
 		reencode = true
 	}
 
+	// Compute the minimum zero-pad width so a lexical sort of the output
+	// directory always matches playback order, even for books with 100+
+	// chapters (e.g. 3-digit padding for 100-999 chapters).
+	padWidth := len(fmt.Sprintf("%d", len(chapters)))
+	if padWidth < 2 {
+		padWidth = 2 // always at least "01" for readability
+	}
+
 	for i, ch := range chapters {
-		outputPath := fmt.Sprintf("%s/%02d - %s%s", outputDir, i+1, sanitizeFilename(ch.Title), ext)
+		outputPath := fmt.Sprintf("%s/%0*d - %s%s", outputDir, padWidth, i+1, sanitizeFilename(ch.Title), ext)
 		chapterMeta := meta
 		if strings.TrimSpace(ch.Title) != "" {
 			chapterMeta.Title = ch.Title

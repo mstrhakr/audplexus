@@ -242,8 +242,9 @@ func (dm *DownloadManager) convertMP3ToM4B(parentCtx, ctx context.Context, book 
 	if len(mp3Files) == 0 {
 		return fmt.Errorf("no mp3 files found in %s", bookDir)
 	}
-	// Filenames are zero-padded by the splitter so a lexical sort matches
-	// playback order (e.g. "01 - ...", "02 - ...").
+	// Filenames are zero-padded by the splitter with a width derived from
+	// the total chapter count, so a lexical sort always matches playback
+	// order regardless of how many chapters the book has.
 	sort.Strings(mp3Files)
 
 	// Stage the concat output in the download dir so a failure leaves the
