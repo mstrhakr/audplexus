@@ -338,3 +338,37 @@ func (m *reconcileMockDB) ListDevices(ctx context.Context) ([]database.Device, e
 }
 func (m *reconcileMockDB) DeleteDevice(ctx context.Context, id int64) error { return nil }
 
+// Library destinations + book destinations (introduced PR-B). Test mock
+// returns zero values; tests that exercise these methods will replace the
+// mock with a richer fake.
+func (m *reconcileMockDB) CreateLibraryDestination(ctx context.Context, d *database.LibraryDestination) error {
+	return nil
+}
+func (m *reconcileMockDB) GetLibraryDestination(ctx context.Context, id string) (*database.LibraryDestination, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) ListLibraryDestinations(ctx context.Context) ([]database.LibraryDestination, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) ListEnabledLibraryDestinations(ctx context.Context) ([]database.LibraryDestination, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) UpdateLibraryDestination(ctx context.Context, d *database.LibraryDestination) error {
+	return nil
+}
+func (m *reconcileMockDB) DeleteLibraryDestination(ctx context.Context, id string) error {
+	return nil
+}
+func (m *reconcileMockDB) UpsertBookDestination(ctx context.Context, bd *database.BookDestination) error {
+	return nil
+}
+func (m *reconcileMockDB) GetBookDestinations(ctx context.Context, bookID int64) ([]database.BookDestination, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) GetBookDestination(ctx context.Context, bookID int64, destID string) (*database.BookDestination, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) ListBookDestinationsBy(ctx context.Context, destID string, state *database.BookDestinationSyncState) ([]database.BookDestination, error) {
+	return nil, nil
+}
+

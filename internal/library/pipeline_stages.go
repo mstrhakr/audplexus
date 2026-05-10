@@ -12,6 +12,8 @@ import (
 
 	"github.com/mstrhakr/audplexus/internal/audnexus"
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/logging"
+	"github.com/mstrhakr/audplexus/internal/mediaserver"
 )
 
 // downloadStallTimeout is how long the download stage may go without seeing
@@ -526,12 +528,7 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 			}
 
 			asinLog.Info().Str("path", finalPath).Msg("pipeline complete (chapter-split)")
-			if dm.mediaServer != nil {
-				dm.mediaServer.TriggerScanForBook(finalPath)
-				if enriched != nil {
-					dm.mediaServer.EnsureBookInSeriesCollection(enriched.Series(), enriched.Title())
-				}
-			}
+			dm.fanOutPostOrganize(ctx, asinLog, book, enriched, finalPath)
 			dm.emit(DownloadEvent{
 				ASIN:     item.ASIN,
 				BookID:   item.BookID,
@@ -617,7 +614,16 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 	// Clean up intermediate files
 	dm.cleanupDownloadFiles(item.ASIN)
 
-	// Mark queue item complete only after the entire pipeline succeeds.
+	// Run media-server post-organize work BEFORE marking the download complete.
+	// Multi-destination fan-out: every enabled library_destinations row has its
+	// backend's OnBookOrganized invoked concurrently (bounded). Falls back to
+	// the legacy single-backend mediaServer when destinations isn't wired or
+	// no enabled rows exist (codex P1 — without this fallback, existing v0.2.x
+	// Plex installs that never set media_server_type lose post-download work).
+	dm.fanOutPostOrganize(ctx, asinLog, book, enriched, finalPath)
+
+	// Mark queue item complete only after the entire pipeline (including
+	// media-server post-organize work) has run.
 	now := time.Now()
 	if item.DownloadItem != nil {
 		item.DownloadItem.Status = database.DownloadStatusComplete
@@ -630,12 +636,6 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 	}
 
 	asinLog.Info().Str("path", finalPath).Msg("pipeline complete")
-	if dm.mediaServer != nil {
-		dm.mediaServer.TriggerScanForBook(finalPath)
-		if enriched != nil {
-			dm.mediaServer.EnsureBookInSeriesCollection(enriched.Series(), enriched.Title())
-		}
-	}
 
 	dm.emit(DownloadEvent{
 		ASIN:     item.ASIN,
@@ -646,6 +646,85 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 		Progress: 1.0,
 	})
 }
+
+// fanOutPostOrganize runs OnBookOrganized across every enabled destination
+// (multi-dest path) or falls back to the legacy single mediaServer when
+// destinations isn't wired or returned zero results. Shared by the standard
+// download path, the chapter-split path, and the convert m4b<->mp3 paths.
+func (dm *DownloadManager) fanOutPostOrganize(ctx context.Context, asinLog *logging.Logger, book *database.Book, enriched *audnexus.EnrichedBook, finalPath string) {
+	organizedBook := mediaserver.OrganizedBook{
+		BookID:      book.ID,
+		ASIN:        book.ASIN,
+		Title:       book.Title,
+		Author:      book.Author,
+		LocalPath:   finalPath,
+		OrganizedAt: time.Now(),
+	}
+	if enriched != nil {
+		organizedBook.Title = enriched.Title()
+		organizedBook.Author = enriched.Author()
+		organizedBook.Series = enriched.Series()
+		organizedBook.SeriesPosition = enriched.SeriesPosition()
+	}
+	coverCandidate := filepath.Join(filepath.Dir(finalPath), "folder.jpg")
+	if _, statErr := os.Stat(coverCandidate); statErr == nil {
+		organizedBook.CoverPath = coverCandidate
+	}
+
+	ranFanOut := false
+	if dm.destinations != nil {
+		results := dm.destinations.FanOut(ctx, organizedBook)
+		for _, r := range results {
+			logBookOutcomes(asinLog, "destination:"+r.Destination.DisplayName, book.ID, r.Outcomes)
+		}
+		ranFanOut = len(results) > 0
+	}
+	if !ranFanOut && dm.mediaServer != nil {
+		outcomes := dm.mediaServer.OnBookOrganized(ctx, organizedBook)
+		logBookOutcomes(asinLog, "legacy:"+dm.mediaServer.Name(), book.ID, outcomes)
+	}
+}
+
+// logBookOutcomes emits a structured log line per backend outcome. Counts
+// per-status give an at-a-glance picture; per-failure detail aids debugging.
+func logBookOutcomes(asinLog *logging.Logger, backend string, bookID int64, outcomes []mediaserver.Outcome) {
+	if len(outcomes) == 0 {
+		return
+	}
+	var ok, failed, skipped, deferred, unsupported int
+	for _, o := range outcomes {
+		switch o.Status {
+		case mediaserver.OutcomeSucceeded:
+			ok++
+		case mediaserver.OutcomeFailed:
+			failed++
+			asinLog.Warn().
+				Str("backend", backend).
+				Int64("book_id", bookID).
+				Str("op", o.Operation).
+				Err(o.Err).
+				Str("detail", o.Detail).
+				Int64("duration_ms", o.DurationMs).
+				Msg("media-server op failed")
+		case mediaserver.OutcomeSkippedExisting, mediaserver.OutcomeSkippedNotConfigured:
+			skipped++
+		case mediaserver.OutcomeDeferred:
+			deferred++
+		case mediaserver.OutcomeUnsupported:
+			unsupported++
+		}
+	}
+	asinLog.Info().
+		Str("backend", backend).
+		Int64("book_id", bookID).
+		Int("ok", ok).
+		Int("failed", failed).
+		Int("skipped", skipped).
+		Int("deferred", deferred).
+		Int("unsupported", unsupported).
+		Msg("media-server post-organize outcomes")
+}
+
 
 func (dm *DownloadManager) startMetadataPrefetch(ctx context.Context, item *pipelineItem) {
 	if item.EnrichDone != nil {
@@ -675,22 +754,5 @@ func (dm *DownloadManager) startMetadataPrefetch(ctx context.Context, item *pipe
 		}
 		item.Enriched = enriched
 	}()
-}
-
-func emitProcessingProgress(dm *DownloadManager, item *pipelineItem, progress float64) {
-	if progress < 0 {
-		progress = 0
-	}
-	if progress > 1 {
-		progress = 1
-	}
-	dm.emit(DownloadEvent{
-		ASIN:     item.ASIN,
-		BookID:   item.BookID,
-		Title:    item.Title,
-		Type:     "progress",
-		Stage:    "processing",
-		Progress: progress,
-	})
 }
 

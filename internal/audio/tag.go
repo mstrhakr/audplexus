@@ -23,14 +23,30 @@ type Metadata struct {
 	Genre       string
 	Year        string
 	Comment     string // Description
-	Track       string // Series position
+	Track       string // Series position (numeric, also written as `series-part` in audiobook-rich profile)
 	Disc        string
 	CoverPath   string // Path to cover image to embed
+
+	// Audiobook-rich-only fields. Populated unconditionally by callers; emitted
+	// into the file only when Profile == TagProfileAudiobookRich.
+	Series     string // Series name (book.Series)
+	SeriesPart string // Series position as a freeform string (book.SeriesPosition)
+	ASIN       string // Audible identifier; lets audiobook servers match by ID
+
+	// Profile selects which set of atoms gets emitted. Defaults to
+	// TagProfileBasic (the historical Audplexus tag set).
+	Profile TagProfile
 }
 
 // EmbedMetadata writes metadata tags to an M4B/M4A file using FFmpeg.
 func (f *FFmpeg) EmbedMetadata(inputPath, outputPath string, meta Metadata) error {
-	tagLog.Info().Str("input", inputPath).Str("title", meta.Title).Str("author", meta.Author).Msg("embedding metadata")
+	tagLog.Info().Str("input", inputPath).Str("title", meta.Title).Str("author", meta.Author).Str("profile", string(meta.Profile)).Msg("embedding metadata")
+	return f.run(embedArgs(inputPath, outputPath, meta)...)
+}
+
+// embedArgs builds the full ffmpeg arg list for EmbedMetadata. Extracted
+// for testability — the actual ffmpeg invocation is in EmbedMetadata.
+func embedArgs(inputPath, outputPath string, meta Metadata) []string {
 	args := []string{
 		"-i", inputPath,
 	}
@@ -47,13 +63,23 @@ func (f *FFmpeg) EmbedMetadata(inputPath, outputPath string, meta Metadata) erro
 
 	args = append(args, "-c", "copy")
 
+	// AudiobookRich profile writes freeform tags (series, series-part, asin)
+	// into the file. ffmpeg's mp4 muxer drops unknown -metadata keys unless
+	// `use_metadata_tags` is set — which switches to the QuickTime `mdta`
+	// metadata format. Tested ffmpeg 6.1.1: with this flag the keys round-
+	// trip cleanly through ffprobe (which is what Audiobookshelf reads).
+	// Without it, the tags vanish silently — verified empirically.
+	if meta.Profile == TagProfileAudiobookRich {
+		args = append(args, "-movflags", "use_metadata_tags")
+	}
+
 	// Build metadata options
 	metaArgs := buildMetadataArgs(meta)
 	args = append(args, metaArgs...)
 
 	args = append(args, "-y", outputPath)
 
-	return f.run(args...)
+	return args
 }
 
 func buildMetadataArgs(meta Metadata) []string {
@@ -81,6 +107,18 @@ func buildMetadataArgs(meta Metadata) []string {
 
 	// Media type = Audiobook (for iTunes/iOS)
 	add("media_type", "2")
+
+	// Audiobook-rich profile: emit freeform iTunes atoms for series and ASIN.
+	// ffmpeg writes unknown -metadata keys as ----:com.apple.iTunes:<key>
+	// freeform atoms in MP4 output, which is exactly what Audiobookshelf
+	// reads via ffprobe for series auto-grouping. The album field stays
+	// at meta.Album (the title) — the Plex album-collapse workaround is
+	// preserved.
+	if meta.Profile == TagProfileAudiobookRich {
+		add("series", meta.Series)
+		add("series-part", meta.SeriesPart)
+		add("asin", meta.ASIN)
+	}
 
 	return args
 }

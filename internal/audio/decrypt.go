@@ -165,6 +165,9 @@ func (f *FFmpeg) buildDecryptArgs(inputPath, outputPath, activationBytes, key, i
 	}
 
 	args = append(args, "-c", "copy")
+
+	// movflags: combine faststart (always) + use_metadata_tags (AudiobookRich only).
+	//
 	// +faststart relocates the MP4 moov atom (the index) to the front of
 	// the output file. Audible delivers AAX/AAXC with moov at the END,
 	// and stream-copy preserves that layout. Any downstream ffmpeg
@@ -174,7 +177,19 @@ func (f *FFmpeg) buildDecryptArgs(inputPath, outputPath, activationBytes, key, i
 	// extra pass over the file during decrypt (still seconds on stream
 	// copy speeds) and makes everything afterwards constant-memory.
 	// Helps Plex/Emby metadata scans too.
-	args = append(args, "-movflags", "+faststart")
+	//
+	// use_metadata_tags is required when AudiobookRich profile writes
+	// freeform tags (series/series-part/asin). ffmpeg's mp4 muxer drops
+	// unknown -metadata keys unless this flag is set — verified
+	// empirically against ffmpeg 6.1.1. Without it the freeform atoms
+	// vanish silently and ABS can't auto-detect series. The standalone
+	// EmbedMetadata path also sets this flag for the same reason.
+	movflags := "+faststart"
+	if meta.Profile == TagProfileAudiobookRich {
+		movflags += "+use_metadata_tags"
+	}
+	args = append(args, "-movflags", movflags)
+
 	args = append(args, buildMetadataArgs(meta)...)
 	args = append(args, "-y", outputPath)
 	return args

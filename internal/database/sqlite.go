@@ -20,7 +20,11 @@ type SQLiteDB struct {
 
 // NewSQLite opens a SQLite database at the given path and returns a Database.
 func NewSQLite(path string) (*SQLiteDB, error) {
-	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_foreign_keys=on")
+	// modernc.org/sqlite reads PRAGMAs via the ?_pragma= URI param. The older
+	// ?_foreign_keys=on syntax is silently ignored by this driver, so FK
+	// CASCADE actions never fired before — preventing book_library_destinations
+	// rows from being cleaned up on book delete (caught by PR-B's FK test).
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode%3DWAL&_pragma=foreign_keys%3DON")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}

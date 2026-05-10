@@ -105,15 +105,30 @@ func main() {
 	log.Info().Str("region", region).Msg("audnexus client initialized with region")
 	org := organizer.NewPlexOrganizer(db, ffmpeg, cfg.Paths.Audiobooks, cfg.Output.EmbedCover, cfg.Output.ChapterFile, cfg.Output.PlexMatchFile)
 
-	// Choose the active media-server backend (Plex or Emby) and pass it into
-	// the download pipeline. Selection is via the `media_server_type` setting
-	// or MEDIA_SERVER env var; defaults to Plex for backwards compatibility.
+	// First-boot synthesis: if library_destinations is empty AND legacy
+	// single-backend settings are present (MEDIA_SERVER + per-type config),
+	// create one library_destinations row from them. No-op once destinations
+	// exist. After this, the per-download fan-out reads from
+	// library_destinations directly.
+	if err := library.SynthesizeLibraryDestinationsIfEmpty(context.Background(), db); err != nil {
+		log.Warn().Err(err).Msg("first-boot library_destinations synthesis failed; continuing")
+	}
+
+	// Legacy single-backend selection — still used by Settings UI rendering,
+	// reconcile, and diagnostics until those paths read from
+	// library_destinations directly. The DOWNLOAD pipeline, however, fans
+	// out via DestinationManager (multi-destination) below.
 	mediaServerType := mediaserver.Resolve(context.Background(), db)
 	mediaSvr, err := mediaserver.New(mediaServerType, db, anClient, cfg.Paths.Audiobooks)
 	if err != nil {
 		log.Fatal().Err(err).Str("type", string(mediaServerType)).Msg("failed to construct media server backend")
 	}
-	log.Info().Str("backend", string(mediaServerType)).Msg("media server backend selected")
+	log.Info().Str("backend", string(mediaServerType)).Msg("legacy single-backend resolved (fallback only — fan-out via DestinationManager when destinations are configured)")
+
+	// Multi-destination fan-out for per-book post-organize work. Reads from
+	// library_destinations, runs each destination concurrently (bounded),
+	// records per-destination outcomes in book_library_destinations.
+	destinations := library.NewDestinationManager(db, anClient, cfg.Paths.Audiobooks, 0)
 
 	dlMgr := library.NewDownloadManager(
 		db,
@@ -129,6 +144,7 @@ func main() {
 		cfg.Download.DecryptConcurrency,
 		cfg.Download.ProcessConcurrency,
 		mediaSvr,
+		destinations,
 	)
 
 	// Start download manager

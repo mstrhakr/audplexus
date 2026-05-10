@@ -248,6 +248,11 @@ func (e *EnrichedBook) ToAudioMetadata() audio.Metadata {
 		year = e.Book.ReleaseDate.Format("2006")
 	}
 
+	asin := ""
+	if e.Book != nil {
+		asin = e.Book.ASIN
+	}
+
 	return audio.Metadata{
 		Title:       e.Title(),
 		Author:      e.Author(),
@@ -262,6 +267,14 @@ func (e *EnrichedBook) ToAudioMetadata() audio.Metadata {
 		Year:        year,
 		Comment:     e.Description(),
 		Track:       e.SeriesPosition(),
+		// Always populated. Whether they're emitted into the m4b is
+		// gated by audio.Metadata.Profile in buildMetadataArgs.
+		Series:     e.Series(),
+		SeriesPart: e.SeriesPosition(),
+		ASIN:       asin,
+		// Caller sets Profile after ToAudioMetadata returns. Defaults to
+		// TagProfileBasic (zero value), which preserves today's behavior
+		// for any caller that doesn't opt into a profile.
 	}
 }
 

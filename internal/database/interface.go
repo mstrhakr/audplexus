@@ -43,6 +43,24 @@ type Database interface {
 	SaveDevice(ctx context.Context, device *Device) error
 	ListDevices(ctx context.Context) ([]Device, error)
 	DeleteDevice(ctx context.Context, id int64) error
+
+	// Library destinations (multi-destination model — replaces single-active
+	// MEDIA_SERVER selector). Multiple destinations of the same type are
+	// allowed.
+	CreateLibraryDestination(ctx context.Context, d *LibraryDestination) error
+	GetLibraryDestination(ctx context.Context, id string) (*LibraryDestination, error)
+	ListLibraryDestinations(ctx context.Context) ([]LibraryDestination, error)
+	ListEnabledLibraryDestinations(ctx context.Context) ([]LibraryDestination, error)
+	UpdateLibraryDestination(ctx context.Context, d *LibraryDestination) error
+	DeleteLibraryDestination(ctx context.Context, id string) error
+
+	// Per-(book, destination) state. Used by the post-organize fan-out
+	// (recording outcomes) and reconcile (matching server-side items back
+	// to local books).
+	UpsertBookDestination(ctx context.Context, bd *BookDestination) error
+	GetBookDestinations(ctx context.Context, bookID int64) ([]BookDestination, error)
+	GetBookDestination(ctx context.Context, bookID int64, destinationID string) (*BookDestination, error)
+	ListBookDestinationsBy(ctx context.Context, destinationID string, state *BookDestinationSyncState) ([]BookDestination, error)
 }
 
 // BookFilter defines parameters for listing books.

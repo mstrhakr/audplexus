@@ -22,11 +22,25 @@ type PlexBackend struct {
 	db         database.Database
 	libraryDir string
 	clientID   string
+
+	// destination, if set, overrides the settings-table lookup so multiple
+	// Plex destinations can have independent config. Settings-table fallback
+	// preserves the legacy single-backend code path.
+	destination *database.LibraryDestination
 }
 
 // NewPlex constructs a Plex backend. clientID is auto-derived from hostname.
 func NewPlex(db database.Database, libraryDir string) *PlexBackend {
 	return &PlexBackend{db: db, libraryDir: libraryDir, clientID: buildPlexClientID()}
+}
+
+// WithDestination binds the backend to a specific library_destinations row.
+// settings() reads URL/Token/SectionID from the row instead of the settings
+// table, so two Plex destinations can have independent config. Returns the
+// receiver so callers can chain.
+func (p *PlexBackend) WithDestination(d *database.LibraryDestination) *PlexBackend {
+	p.destination = d
+	return p
 }
 
 func buildPlexClientID() string {
@@ -40,10 +54,16 @@ func buildPlexClientID() string {
 
 func (p *PlexBackend) Name() string { return string(TypePlex) }
 
-// TagItem is a no-op for Plex: the Plex equivalent of grouping is a
-// collection (which we already create per series), and Plex does not expose
-// a clean per-item tag concept comparable to Emby's.
-func (p *PlexBackend) TagItem(ctx context.Context, serverItemID string, tags []string) {
+// Capabilities — Plex supports library scan, per-item refresh (via section
+// refresh with a path filter), and series grouping (via collections). It
+// does NOT support per-item tagging, image upload, or franchise tags.
+func (p *PlexBackend) Capabilities() CapabilitySet {
+	return NewCapabilitySet(
+		CapTriggerScan,
+		CapPerItemRefresh,
+		CapSeriesGrouping,
+		CapItemCount,
+	)
 }
 
 func (p *PlexBackend) Configured(ctx context.Context) bool {
@@ -52,6 +72,14 @@ func (p *PlexBackend) Configured(ctx context.Context) bool {
 }
 
 func (p *PlexBackend) settings(ctx context.Context) (string, string, string) {
+	// Destination-row binding wins. Lets multiple Plex destinations have
+	// independent URL/token/section.
+	if p.destination != nil {
+		return strings.TrimSpace(p.destination.URL),
+			strings.TrimSpace(p.destination.PlexToken),
+			strings.TrimSpace(p.destination.PlexSectionID)
+	}
+	// Legacy single-backend path: settings table + env-var fallback.
 	u, _ := p.db.GetSetting(ctx, "plex_url")
 	t, _ := p.db.GetSetting(ctx, "plex_token")
 	s, _ := p.db.GetSetting(ctx, "plex_section_id")
@@ -67,67 +95,66 @@ func (p *PlexBackend) settings(ctx context.Context) (string, string, string) {
 	return strings.TrimSpace(u), strings.TrimSpace(t), strings.TrimSpace(s)
 }
 
-// TriggerScanForBook asks Plex to scan the folder containing finalPath.
-func (p *PlexBackend) TriggerScanForBook(finalPath string) {
-	if strings.TrimSpace(finalPath) == "" {
-		return
+// OnBookOrganized runs the per-book post-organize work synchronously and
+// returns one Outcome per logical operation. Operations are idempotent:
+// scan triggers tolerate repeats, collection-add is a no-op when the album
+// already belongs to the collection.
+func (p *PlexBackend) OnBookOrganized(ctx context.Context, book OrganizedBook) []Outcome {
+	plexURL, plexToken, sectionID := p.settings(ctx)
+	if plexURL == "" || plexToken == "" || sectionID == "" {
+		return []Outcome{SkippedConfigured(OpScanTrigger)}
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
+	outcomes := make([]Outcome, 0, 3)
 
-		plexURL, plexToken, sectionID := p.settings(ctx)
-		if plexURL == "" || plexToken == "" || sectionID == "" {
-			return
-		}
-
-		localScanPath := filepath.Dir(finalPath)
-		scanPath, ok := p.resolveScanPath(ctx, plexURL, plexToken, sectionID, localScanPath)
-		if !ok {
-			msLog.Warn().
-				Str("backend", "plex").
-				Str("local_path", localScanPath).
-				Str("section_id", sectionID).
-				Msg("skipping per-book plex scan; section path unavailable")
-			return
-		}
-
-		if err := p.triggerSectionScan(ctx, plexURL, plexToken, sectionID, scanPath); err != nil {
-			msLog.Warn().Err(err).Str("scan_path", scanPath).Msg("plex scan trigger failed")
-			return
-		}
-		msLog.Info().Str("scan_path", scanPath).Str("section_id", sectionID).Msg("plex scan triggered for completed book")
-	}()
-}
-
-// EnsureBookInSeriesCollection adds the book to a series collection in Plex.
-func (p *PlexBackend) EnsureBookInSeriesCollection(series, bookTitle string) {
-	if strings.TrimSpace(series) == "" {
-		return
+	// 1. Scan trigger
+	scanCtx, scanCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer scanCancel()
+	scanStart := time.Now()
+	// Short-circuit on empty LocalPath. Calling resolveScanPath with
+	// filepath.Dir("") would yield "." and trigger an unnecessary Plex
+	// section-path fetch + cache write for a request that's going to fail
+	// anyway. Copilot review caught this. Evaluating LocalPath up-front
+	// also keeps the failure outcome's detail self-explanatory.
+	if strings.TrimSpace(book.LocalPath) == "" {
+		outcomes = append(outcomes, Failed(OpScanTrigger, fmt.Errorf("empty local path"), "no path to scan"))
+	} else if scanPath, scanPathOK := p.resolveScanPath(scanCtx, plexURL, plexToken, sectionID, filepath.Dir(book.LocalPath)); !scanPathOK {
+		outcomes = append(outcomes, Failed(OpScanTrigger, fmt.Errorf("section path unavailable"), "plex section path could not be resolved"))
+	} else if err := p.triggerSectionScan(scanCtx, plexURL, plexToken, sectionID, scanPath); err != nil {
+		outcomes = append(outcomes, Failed(OpScanTrigger, err, "plex returned non-2xx on /refresh"))
+	} else {
+		outcomes = append(outcomes, Succeeded(OpScanTrigger, "section scan triggered for "+scanPath, "", time.Since(scanStart)))
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
+	// 2 + 3: only if the book has a series. Otherwise nothing further to do.
+	if strings.TrimSpace(book.Series) == "" {
+		return outcomes
+	}
 
-		plexURL, plexToken, sectionID := p.settings(ctx)
-		if plexURL == "" || plexToken == "" || sectionID == "" {
-			return
-		}
+	// Item match. Plex needs the book indexed before we can add it to a
+	// collection; this waits up to ~90s for the album to appear.
+	matchCtx, matchCancel := context.WithTimeout(ctx, 120*time.Second)
+	defer matchCancel()
+	matchStart := time.Now()
+	albumKey, err := p.waitForAlbum(matchCtx, plexURL, plexToken, sectionID, book.Title)
+	if err != nil {
+		outcomes = append(outcomes,
+			Failed(OpItemMatch, err, "album not found in plex within retry window"),
+			Outcome{Operation: OpSeriesGrouping, Status: OutcomeDeferred,
+				Detail: "skipped: depends on item_match", Err: err})
+		return outcomes
+	}
+	outcomes = append(outcomes, Succeeded(OpItemMatch, "matched plex album by title", albumKey, time.Since(matchStart)))
 
-		albumKey, err := p.waitForAlbum(ctx, plexURL, plexToken, sectionID, bookTitle)
-		if err != nil {
-			msLog.Warn().Err(err).Str("series", series).Str("book", bookTitle).Msg("plex: failed to add book to series collection")
-			return
-		}
+	// Series grouping (Plex collection).
+	groupStart := time.Now()
+	if err := p.ensureBookInCollectionWithKey(matchCtx, plexURL, plexToken, sectionID, book.Series, albumKey); err != nil {
+		outcomes = append(outcomes, Failed(OpSeriesGrouping, err, "could not add album to series collection"))
+		return outcomes
+	}
+	outcomes = append(outcomes, Succeeded(OpSeriesGrouping, "album added to series collection \""+book.Series+"\"", albumKey, time.Since(groupStart)))
 
-		if err := p.ensureBookInCollectionWithKey(ctx, plexURL, plexToken, sectionID, series, albumKey); err != nil {
-			msLog.Warn().Err(err).Str("series", series).Str("book", bookTitle).Msg("plex: failed to add book to series collection")
-		} else {
-			msLog.Info().Str("series", series).Str("book", bookTitle).Msg("plex: book added to series collection")
-		}
-	}()
+	return outcomes
 }
 
 // ReconcileLibrary fetches all Plex albums, matches to local books, and
@@ -217,7 +244,7 @@ func (p *PlexBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 			return ctx.Err()
 		}
 
-		collectionID, err := p.findOrCreateCollection(ctx, plexURL, plexToken, sectionID, series, machineID)
+		collectionID, err := p.findOrCreateCollection(ctx, plexURL, plexToken, sectionID, series)
 		if err != nil {
 			msLog.Warn().Err(err).Str("series", series).Msg("plex: failed to find/create collection during reconciliation")
 			seriesProcessed++
@@ -305,6 +332,25 @@ func (p *PlexBackend) TriggerLibraryScan(ctx context.Context) (int, error) {
 // --- internal helpers (verbatim port of internal/library/plex_*.go) ---
 
 func (p *PlexBackend) resolveScanPath(ctx context.Context, plexURL, plexToken, sectionID, localScanPath string) (string, bool) {
+	// Per-destination path mapping (codex P2): when the backend is bound
+	// to a destination row that carries explicit AudiobookPath /
+	// DestinationPath, those win over the global libraryDir +
+	// plex_section_path settings. Lets multi-dest installs route to
+	// different mounts (household Plex on /audiobooks vs parents' Plex
+	// on /mnt/exports/audiobooks) without colliding on a single global.
+	if p.destination != nil {
+		audiobookPath := strings.TrimSpace(p.destination.AudiobookPath)
+		destPath := strings.TrimSpace(p.destination.DestinationPath)
+		if audiobookPath != "" && destPath != "" {
+			scanPath, ok := translateScanPath(localScanPath, audiobookPath, destPath)
+			if !ok {
+				msLog.Warn().Str("local_path", localScanPath).Str("audiobook_path", audiobookPath).Str("destination_path", destPath).Msg("plex: per-destination path translation failed")
+				return "", false
+			}
+			return scanPath, true
+		}
+	}
+
 	plexPath, _ := p.db.GetSetting(ctx, "plex_section_path")
 	plexPath = strings.TrimSpace(plexPath)
 
@@ -511,7 +557,7 @@ func (p *PlexBackend) ensureBookInCollectionWithKey(ctx context.Context, plexURL
 	if err != nil {
 		return fmt.Errorf("get machine identifier: %w", err)
 	}
-	collectionID, err := p.findOrCreateCollection(ctx, plexURL, token, sectionID, series, machineID)
+	collectionID, err := p.findOrCreateCollection(ctx, plexURL, token, sectionID, series)
 	if err != nil {
 		return fmt.Errorf("find/create collection %q: %w", series, err)
 	}
@@ -560,7 +606,7 @@ func (p *PlexBackend) machineIdentifier(ctx context.Context, plexURL, token stri
 	return id, nil
 }
 
-func (p *PlexBackend) findOrCreateCollection(ctx context.Context, plexURL, token, sectionID, seriesName, machineID string) (string, error) {
+func (p *PlexBackend) findOrCreateCollection(ctx context.Context, plexURL, token, sectionID, seriesName string) (string, error) {
 	collections, err := p.listCollections(ctx, plexURL, token, sectionID)
 	if err != nil {
 		return "", fmt.Errorf("list collections: %w", err)

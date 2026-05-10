@@ -209,10 +209,7 @@ func (dm *DownloadManager) convertM4BToMP3(parentCtx, ctx context.Context, book 
 	})
 
 	asinLog.Info().Str("path", finalPath).Msg("convert m4b→mp3 complete")
-	if dm.mediaServer != nil {
-		dm.mediaServer.TriggerScanForBook(finalPath)
-		dm.mediaServer.EnsureBookInSeriesCollection(enriched.Series(), enriched.Title())
-	}
+	dm.fanOutPostOrganize(ctx, asinLog, book, enriched, finalPath)
 	dm.emit(DownloadEvent{
 		ASIN:     book.ASIN,
 		BookID:   book.ID,
@@ -302,10 +299,7 @@ func (dm *DownloadManager) convertMP3ToM4B(parentCtx, ctx context.Context, book 
 	}
 
 	asinLog.Info().Str("path", finalPath).Msg("convert mp3→m4b complete")
-	if dm.mediaServer != nil {
-		dm.mediaServer.TriggerScanForBook(finalPath)
-		dm.mediaServer.EnsureBookInSeriesCollection(enriched.Series(), enriched.Title())
-	}
+	dm.fanOutPostOrganize(parentCtx, asinLog, book, enriched, finalPath)
 	dm.emit(DownloadEvent{
 		ASIN:     book.ASIN,
 		BookID:   book.ID,

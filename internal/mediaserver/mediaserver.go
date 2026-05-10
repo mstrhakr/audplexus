@@ -23,32 +23,44 @@ import (
 type Type string
 
 const (
-	TypePlex Type = "plex"
-	TypeEmby Type = "emby"
+	TypePlex     Type = "plex"
+	TypeEmby     Type = "emby"
+	TypeJellyfin Type = "jellyfin"
+	TypeABS      Type = "abs"
 )
 
 // SettingKeyType is the DB setting key that stores the active backend type.
 const SettingKeyType = "media_server_type"
 
-// Backend is the abstraction the download pipeline calls into. All async
-// methods log errors instead of returning them so the calling pipeline stays
-// simple — failure to update the media server should never fail a download.
+// Backend is the abstraction the download pipeline calls into. The contract
+// is synchronous and typed: every operation reports back via Outcome rather
+// than swallowing errors in a goroutine. Idempotent — repeat calls for the
+// same book are safe and return SkippedExisting on subsequent invocations.
 type Backend interface {
 	// Name returns a stable identifier ("plex", "emby") used in logs and UI.
 	Name() string
 
 	// Configured reports whether the backend has all required settings (URL,
-	// auth, library selection). Pipeline calls into it are no-ops when false.
+	// auth, library selection). Callers can short-circuit when false; backends
+	// also self-check and return SkippedNotConfigured outcomes when called
+	// while not configured.
 	Configured(ctx context.Context) bool
 
-	// TriggerScanForBook asks the server to re-index the folder containing the
-	// just-organized book file. Fire-and-forget; logs errors.
-	TriggerScanForBook(finalPath string)
+	// Capabilities returns the operations this backend supports. Used by the
+	// UI to hide affordances that don't apply per-destination (e.g. hiding
+	// the "franchise tagging" toggle on Plex). Advisory — runtime contract
+	// remains the typed Outcome.
+	Capabilities() CapabilitySet
 
-	// EnsureBookInSeriesCollection waits for the book to appear in the server's
-	// index, then ensures a collection named `series` exists and contains it.
-	// Fire-and-forget; empty series is a no-op.
-	EnsureBookInSeriesCollection(series, bookTitle string)
+	// OnBookOrganized runs the per-book post-organize work synchronously.
+	// Each logical step (scan trigger, item match, series grouping, tagging,
+	// image upload, etc.) returns one Outcome. The slice is non-nil but may
+	// be empty if the backend is not configured.
+	//
+	// MUST honor the caller's context (timeouts, cancellation). MUST be
+	// idempotent — repeat invocations for the same OrganizedBook are safe
+	// and report SkippedExisting for already-applied operations.
+	OnBookOrganized(ctx context.Context, book OrganizedBook) []Outcome
 
 	// ReconcileLibrary walks the server's library, records each matched book's
 	// server-side ID on the local row, and ensures all series collections are
@@ -63,13 +75,6 @@ type Backend interface {
 	// TriggerLibraryScan kicks off a server-side library refresh and returns
 	// the post-scan item count. Used by the periodic sync flow.
 	TriggerLibraryScan(ctx context.Context) (int, error)
-
-	// TagItem applies the given tags to a server-side item (e.g. attaching
-	// a series and franchise label so the user can filter the audiobook
-	// library by them directly). Tags are additive in spirit but the
-	// implementation may replace any tags this app previously set. Backends
-	// without a useful tag concept may no-op. Best-effort; logs errors.
-	TagItem(ctx context.Context, serverItemID string, tags []string)
 }
 
 // Resolve picks the active backend from the DB setting (falling back to the
@@ -99,6 +104,10 @@ func New(t Type, db database.Database, audnexusClient *audnexus.Client, libraryD
 		return NewPlex(db, libraryDir), nil
 	case TypeEmby:
 		return NewEmby(db, audnexusClient, libraryDir), nil
+	case TypeJellyfin:
+		return NewJellyfin(db, audnexusClient, libraryDir), nil
+	case TypeABS:
+		return NewABS(db, libraryDir), nil
 	default:
 		return nil, fmt.Errorf("unknown media server type: %q", t)
 	}

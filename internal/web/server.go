@@ -25,6 +25,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/render"
 	"github.com/microcosm-cc/bluemonday"
+	"github.com/mstrhakr/audplexus/internal/audio"
 	"github.com/mstrhakr/audplexus/internal/audnexus"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
@@ -56,12 +57,19 @@ type Server struct {
 	audiobooksPath string
 	downloadsPath  string
 	configPath     string
-	itemCountCache struct {
-		mu        sync.Mutex
-		key       string
-		count     int
-		fetchedAt time.Time
+	// destItemCountCache caches per-destination LibraryItemCount results
+	// (30s TTL) so the dashboard's 12s poll doesn't hammer remote servers.
+	// Keyed by destination ID; entries expire independently.
+	destItemCountCache struct {
+		mu      sync.Mutex
+		entries map[string]destCountEntry
 	}
+}
+
+type destCountEntry struct {
+	count     int
+	fetchedAt time.Time
+	err       error
 }
 
 // NewServer creates a new web server with all handlers registered.
@@ -97,24 +105,68 @@ func NewServer(
 		configPath:     configPath,
 	}
 
-	// Wire up the media-server sync callbacks. They dispatch on the active
-	// backend so Plex users keep their existing scan-and-wait flow while
-	// Emby (or any future backend) goes through the abstraction.
+	// Wire up the media-server sync callbacks. With multi-destination, the
+	// Library Scan phase fans out to every enabled destination instead of
+	// only running against the active MEDIA_SERVER backend. Falls back to
+	// the legacy single-backend path when no destinations are wired
+	// (early boot before first-boot synthesis).
 	syncSvc.SetPlexSyncCallback(func(ctx context.Context) (int, error) {
+		// Modern path: fan out to enabled destinations.
+		if dm := dlMgr.Destinations(); dm != nil {
+			total, results := dm.TriggerScanAll(ctx)
+			if len(results) > 0 {
+				for _, r := range results {
+					errMsg := ""
+					if r.Err != nil {
+						errMsg = r.Err.Error()
+					}
+					s.recordDestinationHealth(ctx, r.Destination.ID, r.Err == nil, errMsg)
+				}
+				webLog.Info().Int("destinations", len(results)).Int("total_items", total).Msg("library scan: fan-out complete")
+				return total, nil
+			}
+		}
+		// Legacy fallback — fan-out returned no destinations OR manager
+		// isn't wired. This happens for fresh upgrades from v0.2.x where
+		// MEDIA_SERVER was never set explicitly (Plex was the silent
+		// default). Codex P1 finding.
 		backend := dlMgr.MediaServer()
 		if backend == nil {
-			return 0, fmt.Errorf("media server not configured")
+			return 0, fmt.Errorf("no destinations configured")
 		}
-		// Plex has a richer scan-completion polling flow; preserve it.
 		if backend.Name() == "plex" {
 			return s.plexSyncForSync(ctx)
 		}
 		return backend.TriggerLibraryScan(ctx)
 	})
 	syncSvc.SetPlexReconcileCallback(func(ctx context.Context, progressFn func(current, total int)) error {
+		if dm := dlMgr.Destinations(); dm != nil {
+			results := dm.ReconcileAll(ctx, progressFn)
+			if len(results) > 0 {
+				okN, failN := 0, 0
+				for _, r := range results {
+					errMsg := ""
+					if r.Err != nil {
+						errMsg = r.Err.Error()
+						failN++
+					} else {
+						okN++
+					}
+					s.recordDestinationHealth(ctx, r.Destination.ID, r.Err == nil, errMsg)
+				}
+				webLog.Info().Int("destinations", len(results)).Int("succeeded", okN).Int("failed", failN).Msg("reconcile: fan-out complete")
+				if okN == 0 && failN > 0 {
+					return fmt.Errorf("all %d destination reconciles failed", failN)
+				}
+				return nil
+			}
+		}
+		// Legacy fallback (codex P1) — fires when fan-out returned no
+		// destinations, e.g. fresh upgrades where MEDIA_SERVER was never
+		// set and Plex was the silent default.
 		backend := dlMgr.MediaServer()
 		if backend == nil {
-			return fmt.Errorf("media server not configured")
+			return fmt.Errorf("no destinations configured")
 		}
 		return backend.ReconcileLibrary(ctx, progressFn)
 	})
@@ -269,9 +321,29 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/auth/plex/section", s.handlePlexSectionSelect)
 	s.router.POST("/auth/plex/scan", s.handlePlexScan)
 	s.router.POST("/auth/plex/check", s.handlePlexCheck)
-	s.router.POST("/auth/emby/configure", s.handleEmbyConfigure)
-	s.router.POST("/auth/emby/scan", s.handleEmbyScan)
-	s.router.POST("/auth/media-server/select", s.handleMediaServerSelect)
+	// Legacy /auth/emby/* and /auth/media-server/select removed: the UI
+	// surfaces that posted to them (the dedicated Emby panel + Active
+	// Media Server radio) are gone in favor of /destinations/* CRUD.
+	s.router.POST("/settings/tag-profile", s.handleTagProfileSelect)
+
+	// Library destinations CRUD (multi-destination model). Two-page flow
+	// for add (type picker → type-specific form) and delete (GET confirm
+	// → POST with confirm=1) keeps the UI JS-free + back-button-safe.
+	s.router.GET("/destinations/new", s.handleDestinationsNewPicker)
+	s.router.POST("/destinations/new", s.handleDestinationsNewForm)
+	s.router.POST("/destinations/create", s.handleDestinationsCreate)
+	// Test connection — runs a live LibraryItemCount probe with current
+	// form values. HTMX-targeted; renders a small HTML fragment.
+	s.router.POST("/destinations/test", s.handleDestinationTest)
+	s.router.POST("/destinations/:id/test", s.handleDestinationTest)
+	s.router.GET("/destinations/:id/edit", s.handleDestinationEditForm)
+	s.router.POST("/destinations/:id", s.handleDestinationUpdate)
+	s.router.POST("/destinations/:id/toggle", s.handleDestinationToggle)
+	// Delete is POST-only — destructive actions must not be safe GETs (per
+	// RFC 9110 + WCAG link-purpose semantics for destructive controls).
+	// The same endpoint serves both: confirm=1 actually deletes;
+	// otherwise the confirmation page is rendered.
+	s.router.POST("/destinations/:id/delete", s.handleDestinationDelete)
 
 	// API / HTMX endpoints
 	api := s.router.Group("/api")
@@ -427,64 +499,6 @@ func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
 
 	lastSync, _ := s.db.GetLastSync(ctx)
 
-	// Resolve the active backend so the dashboard reports the right label
-	// and item count regardless of which media server the user picked.
-	mediaServerType := mediaserver.Resolve(ctx, s.db)
-	backendLabel, backendDisplay := mediaServerLabel(mediaServerType)
-
-	mediaServerConfigured := false
-	libraryItems := 0
-	libraryItemsAvailable := false
-	libraryCoverage := 0
-	libraryCoverageAvailable := false
-	libraryDetail := ""
-
-	if backend := s.downloads.MediaServer(); backend != nil && backend.Configured(ctx) {
-		mediaServerConfigured = true
-		// Use cached item count (30s TTL). Avoids hammering the backend
-		// when the dashboard polls every ~12s.
-		items, err := s.getCachedLibraryItemCount(ctx, backend)
-		if err != nil {
-			webLog.Debug().Err(err).Str("backend", backendLabel).Msg("dashboard: media server item count failed")
-		} else {
-			libraryItems = items
-			libraryItemsAvailable = true
-			if completeBooks > 0 {
-				coverage := int(math.Round((float64(items) / float64(completeBooks)) * 100))
-				if coverage < 0 {
-					coverage = 0
-				}
-				// A media server may report more items than we have books on
-				// disk (re-imports, alternate formats, manual additions). Cap
-				// at 100% so the dashboard reads sensibly.
-				if coverage > 100 {
-					coverage = 100
-				}
-				libraryCoverage = coverage
-				libraryCoverageAvailable = true
-			}
-		}
-
-		// Backend-specific status detail for the inline summary line.
-		switch mediaServerType {
-		case mediaserver.TypePlex:
-			plexSectionTitle, _ := s.db.GetSetting(ctx, "plex_section_title")
-			libraryDetail = strings.TrimSpace(plexSectionTitle)
-		case mediaserver.TypeEmby:
-			path, _ := s.db.GetSetting(ctx, "emby_library_path")
-			libraryDetail = strings.TrimSpace(path)
-		}
-	}
-
-	// Plex-specific dashboard fields kept in place so Plex users see no UI
-	// regression. They are populated only when Plex is the active backend.
-	plexConfigured := false
-	plexSectionTitleVal := ""
-	if mediaServerType == mediaserver.TypePlex {
-		plexConfigured = mediaServerConfigured
-		plexSectionTitleVal = libraryDetail
-	}
-
 	return gin.H{
 		"TotalBooks":    totalBooks,
 		"CompleteBooks": completeBooks,
@@ -494,24 +508,10 @@ func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
 		"FailedDL":      len(failedDownloads),
 		"LastSync":      lastSync,
 
-		// Backend-agnostic media server status (preferred in templates).
-		"MediaServerType":       string(mediaServerType),
-		"MediaServerLabel":      backendLabel,
-		"MediaServerDisplay":    backendDisplay,
-		"MediaServerConfigured": mediaServerConfigured,
-		"LibraryItems":          libraryItems,
-		"LibraryItemsSet":       libraryItemsAvailable,
-		"LibraryCoverage":       libraryCoverage,
-		"LibraryCoverageSet":    libraryCoverageAvailable,
-		"LibraryDetail":         libraryDetail,
-
-		// Legacy Plex-specific fields (only populated for Plex backend).
-		"PlexConfigured":  plexConfigured,
-		"PlexSection":     plexSectionTitleVal,
-		"PlexItems":       libraryItems,
-		"PlexItemsSet":    libraryItemsAvailable && mediaServerType == mediaserver.TypePlex,
-		"PlexCoverage":    libraryCoverage,
-		"PlexCoverageSet": libraryCoverageAvailable && mediaServerType == mediaserver.TypePlex,
+		// Per-destination summary cards. Replaces the legacy
+		// single-active-backend stat cards. Empty slice means "no
+		// destinations configured yet" — template shows a CTA.
+		"DestinationSummaries": s.destinationSummaries(ctx, completeBooks),
 	}
 }
 
@@ -526,41 +526,142 @@ func mediaServerLabel(t mediaserver.Type) (string, string) {
 	}
 }
 
-// getCachedLibraryItemCount returns the cached item count if valid (< 30s old),
-// otherwise queries the backend and updates the cache.
-func (s *Server) getCachedLibraryItemCount(ctx context.Context, backend mediaserver.Backend) (int, error) {
-	if backend == nil {
-		return 0, fmt.Errorf("backend not available")
+// destinationSummaryView is the per-destination card rendered on the
+// dashboard. Sensitive fields are intentionally absent; only display info.
+type destinationSummaryView struct {
+	ID            string
+	DisplayName   string
+	Type          string
+	TypeLabel     string
+	Enabled       bool
+	Configured    bool
+	ItemCount     int
+	ItemCountSet  bool
+	Coverage      int
+	CoverageSet   bool
+	Health        string // "healthy" | "failed" | "never" | "not_configured"
+	HealthDetail  string // for failed: shorter human message
+	LastCheckedAt *time.Time
+}
+
+// destinationSummaries computes per-destination summary cards for the
+// dashboard. Item counts are cached at 30s TTL per destination so the
+// 12s dashboard poll doesn't hammer remote servers.
+//
+// Per a11y-lead: badges are role="status" so SR users hear destination
+// state changes (Healthy → Failed) without per-tick count chatter.
+func (s *Server) destinationSummaries(ctx context.Context, completeBooks int) []destinationSummaryView {
+	rows, err := s.db.ListLibraryDestinations(ctx)
+	if err != nil {
+		webLog.Warn().Err(err).Msg("dashboard: list destinations failed")
+		return nil
+	}
+	if len(rows) == 0 {
+		return nil
 	}
 
-	// Create cache key from backend type.
-	cacheKey := string(mediaserver.Resolve(ctx, s.db))
+	out := make([]destinationSummaryView, 0, len(rows))
+	for _, r := range rows {
+		row := r
+		v := destinationSummaryView{
+			ID:            row.ID,
+			DisplayName:   row.DisplayName,
+			Type:          string(row.Type),
+			TypeLabel:     destinationTypeLabel(row.Type),
+			Enabled:       row.Enabled,
+			Configured:    destinationConfigured(&row),
+			Health:        summarizeHealth(&row),
+			LastCheckedAt: row.LastHealthCheckAt,
+		}
 
-	s.itemCountCache.mu.Lock()
-	if s.itemCountCache.key == cacheKey && time.Since(s.itemCountCache.fetchedAt) < 30*time.Second {
-		count := s.itemCountCache.count
-		s.itemCountCache.mu.Unlock()
-		return count, nil
+		if !v.Enabled || !v.Configured {
+			out = append(out, v)
+			continue
+		}
+
+		// Construct a backend instance bound to this destination row so
+		// LibraryItemCount uses the row's URL/api_key, not the legacy
+		// settings table.
+		backend, err := s.buildDestinationBackend(&row)
+		if err != nil {
+			v.HealthDetail = err.Error()
+			out = append(out, v)
+			continue
+		}
+
+		count, err := s.getCachedDestinationItemCount(ctx, row.ID, backend)
+		if err != nil {
+			webLog.Debug().Err(err).Str("destination_id", row.ID).Str("destination_name", row.DisplayName).Msg("dashboard: destination item count failed")
+			v.Health = "failed"
+			v.HealthDetail = err.Error()
+		} else {
+			v.ItemCount = count
+			v.ItemCountSet = true
+			if completeBooks > 0 {
+				cov := int(math.Round((float64(count) / float64(completeBooks)) * 100))
+				if cov < 0 {
+					cov = 0
+				}
+				if cov > 100 {
+					cov = 100
+				}
+				v.Coverage = cov
+				v.CoverageSet = true
+			}
+		}
+		out = append(out, v)
 	}
-	s.itemCountCache.mu.Unlock()
+	return out
+}
 
-	// Cache miss or expired; query the backend with a timeout.
+// buildDestinationBackend delegates to DestinationManager.BuildBackend
+// when the manager is available (multi-destination installs), so the
+// type-dispatch lives in exactly one place. Falls back to direct
+// construction only when no DownloadManager has been wired up — which
+// shouldn't happen in normal operation but keeps server.go boot-safe.
+func (s *Server) buildDestinationBackend(row *database.LibraryDestination) (mediaserver.Backend, error) {
+	if s.downloads != nil {
+		if dm := s.downloads.Destinations(); dm != nil {
+			return dm.BuildBackend(row)
+		}
+	}
+	switch row.Type {
+	case database.LibraryDestinationTypePlex:
+		return mediaserver.NewPlex(s.db, s.audiobooksPath).WithDestination(row), nil
+	case database.LibraryDestinationTypeEmby:
+		return mediaserver.NewEmby(s.db, s.audnexus, s.audiobooksPath).WithDestination(row), nil
+	case database.LibraryDestinationTypeJellyfin:
+		return mediaserver.NewJellyfin(s.db, s.audnexus, s.audiobooksPath).WithDestination(row), nil
+	case database.LibraryDestinationTypeABS:
+		return mediaserver.NewABS(s.db, s.audiobooksPath).WithDestination(row), nil
+	}
+	return nil, fmt.Errorf("unsupported destination type: %q", row.Type)
+}
+
+// getCachedDestinationItemCount caches per-destination LibraryItemCount
+// results (30s TTL). Errors are also cached briefly so a failing
+// destination doesn't get re-hit on every 12s dashboard poll.
+func (s *Server) getCachedDestinationItemCount(ctx context.Context, destID string, backend mediaserver.Backend) (int, error) {
+	s.destItemCountCache.mu.Lock()
+	if s.destItemCountCache.entries == nil {
+		s.destItemCountCache.entries = map[string]destCountEntry{}
+	}
+	if e, ok := s.destItemCountCache.entries[destID]; ok && time.Since(e.fetchedAt) < 30*time.Second {
+		s.destItemCountCache.mu.Unlock()
+		return e.count, e.err
+	}
+	s.destItemCountCache.mu.Unlock()
+
 	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	items, err := backend.LibraryItemCount(lookupCtx)
 	cancel()
-	if err != nil {
-		return 0, err
-	}
 
-	// Update cache.
-	s.itemCountCache.mu.Lock()
-	s.itemCountCache.key = cacheKey
-	s.itemCountCache.count = items
-	s.itemCountCache.fetchedAt = time.Now()
-	s.itemCountCache.mu.Unlock()
-
-	return items, nil
+	s.destItemCountCache.mu.Lock()
+	s.destItemCountCache.entries[destID] = destCountEntry{count: items, fetchedAt: time.Now(), err: err}
+	s.destItemCountCache.mu.Unlock()
+	return items, err
 }
+
 
 func (s *Server) getDashboardDownloadsData(ctx context.Context) gin.H {
 	failedStatus := database.DownloadStatusFailed
@@ -703,11 +804,22 @@ func (s *Server) handleDownloads(c *gin.Context) {
 	failed, _ := s.db.ListDownloads(ctx, &failedStatus)
 	queueState := s.downloads.QueueState()
 
+	// Build title lookup so the Pipeline tab's tables show book titles
+	// instead of ASINs in the Title column. Pre-existing bug: the
+	// downloads.html template had <td>{{.ASIN}}</td> in the Title
+	// column for both Complete and (likely) other tables.
+	rowsForTitles := make([]database.DownloadQueue, 0, len(active)+len(pending)+len(complete)+len(failed))
+	rowsForTitles = append(rowsForTitles, active...)
+	rowsForTitles = append(rowsForTitles, pending...)
+	rowsForTitles = append(rowsForTitles, complete...)
+	rowsForTitles = append(rowsForTitles, failed...)
+
 	c.HTML(http.StatusOK, "downloads.html", gin.H{
 		"Active":           active,
 		"Pending":          pending,
 		"Complete":         complete,
 		"Failed":           failed,
+		"DownloadTitles":   s.getDownloadTitles(ctx, rowsForTitles),
 		"QueuePaused":      queueState.Paused,
 		"QueuePauseReason": queueState.Reason,
 		"QueuePausedAt":    queueState.PausedAt,
@@ -762,6 +874,24 @@ func (s *Server) handleSettings(c *gin.Context) {
 	c.HTML(http.StatusOK, "settings.html", data)
 }
 
+// handleTagProfileSelect persists the active tag profile. Strict validation
+// at this boundary — the user picked something explicitly, so silent
+// fallback to Basic on a typo would hide a real form bug or stale browser tab.
+func (s *Server) handleTagProfileSelect(c *gin.Context) {
+	parsed, ok := audio.ParseTagProfileStrict(c.PostForm("tag_profile"))
+	if !ok {
+		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": "Unknown tag profile."})
+		return
+	}
+	if err := s.db.SetSetting(c.Request.Context(), audio.SettingKeyTagProfile, string(parsed)); err != nil {
+		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to set tag profile: " + err.Error()})
+		return
+	}
+	s.renderAuthPage(c, http.StatusOK, gin.H{
+		"Success": "Tag profile set to \"" + parsed.Label() + "\". Applied to subsequent downloads — already-organized books are unchanged.",
+	})
+}
+
 func (s *Server) settingsPageData(ctx context.Context) gin.H {
 	authData := s.authBaseData(ctx)
 
@@ -802,11 +932,16 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 
 	devices, _ := s.db.ListDevices(ctx)
 
-	// Active media server backend (for the type-selector and Emby panel).
-	mediaServerType := string(mediaserver.Resolve(ctx, s.db))
-	embyURL, embyAPIKey, embyLibraryID := s.embySettings(ctx)
-	embyLibraryPath, _ := s.db.GetSetting(ctx, "emby_library_path")
-	embyConfigured := embyURL != "" && embyAPIKey != "" && embyLibraryID != ""
+	// Tag profile selector (PR-A): which set of metadata atoms to embed.
+	tagProfile := audio.ResolveTagProfile(ctx, s.db)
+	tagProfiles := make([]gin.H, 0, len(audio.AllTagProfiles()))
+	for _, p := range audio.AllTagProfiles() {
+		tagProfiles = append(tagProfiles, gin.H{
+			"Value":       string(p),
+			"Label":       p.Label(),
+			"Description": p.Description(),
+		})
+	}
 
 	data := gin.H{
 		"SyncSchedule":         syncSchedule,
@@ -828,13 +963,12 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 		"DownloadsPath":        s.downloadsPath,
 		"ConfigPath":           s.configPath,
 
-		// Media server selector + Emby panel
-		"MediaServerType": mediaServerType,
-		"EmbyURL":         embyURL,
-		"EmbyAPIKey":      embyAPIKey,
-		"EmbyLibraryID":   embyLibraryID,
-		"EmbyLibraryPath": embyLibraryPath,
-		"EmbyConfigured":  embyConfigured,
+		// Tag profile selector (PR-A)
+		"TagProfile":  string(tagProfile),
+		"TagProfiles": tagProfiles,
+
+		// Library destinations (PR-C UI). Sensitive fields stripped.
+		"Destinations": s.destinationsForView(ctx),
 	}
 
 	for k, v := range authData {

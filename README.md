@@ -17,39 +17,56 @@ Built on [go-audible](https://github.com/mstrhakr/go-audible), the Audible auth 
 - Triggers media-server library scans and creates series collections automatically.
 - Supports queue controls, retries, diagnostics, and scheduled sync.
 
-## Media Server Integrations
+## Library Destinations
 
-Audplexus drives various media server software through a backend abstraction. Pick one with the `MEDIA_SERVER` env var (or via Settings &rarr; Media Server in the UI):
+Audplexus pushes each downloaded book to one or more **library destinations** &mdash; the servers where your audiobook library lives. Multiple destinations of the same type are allowed (household Plex + parents&apos; Plex; or Emby for the home + ABS for the phone).
 
-| Backend | `MEDIA_SERVER` | Status |
+| Backend | Type | What Audplexus does |
 | --- | --- | --- |
-| Plex | `plex` (default) | Full support: plex.tv OAuth login, section scans, `.plexmatch` hints, collection management |
-| Emby | `emby` | Full support: API-key auth, library refresh, BoxSet collection management, automatic library-path detection |
+| Plex | `plex` | Section scan triggers, `.plexmatch` hints, collection management for series |
+| Emby | `emby` | Library refresh, BoxSet collection management, series + franchise tagging, BoxSet covers, author images |
+| Jellyfin | `jellyfin` | Same shape as Emby with the proper `Authorization: MediaBrowser Token` header and `IncludeItemTypes=AudioBook` filter |
+| Audiobookshelf | `abs` | Bearer-token auth, library scan trigger, ASIN-based item matching, native series via metadata |
 
-Switching backends requires a container restart. The DB keeps backend settings, so flipping back is non-destructive.
+After each download finishes Audplexus fans out post-organize work concurrently to every enabled destination (bounded to 3 in flight, 2-min per-destination timeout) and records per-(book, destination) state in `book_library_destinations`. One destination&apos;s outage doesn&apos;t prevent the others from indexing the new book.
 
-### Emby Setup
+### Adding a destination
 
-1. Create an API key in Emby (Settings &rarr; Advanced &rarr; API Keys &rarr; New API Key).
-2. Find your audiobook library&apos;s ItemId &mdash; either via the UI (Settings &rarr; Media Server &rarr; Emby panel will let you paste it), or via the API:
+In the web UI: **Settings &rarr; Library Destinations &rarr; Add destination**. Pick a type, fill in URL + API key (or Plex token) + library ID, click **Test Connection** to verify, then **Save**. Per-field instructions (where to find each value) live in the form itself.
 
-   ```bash
-   curl -s "http://your-emby:8096/emby/Library/MediaFolders?api_key=YOUR_KEY" | jq '.Items[] | select(.CollectionType=="audiobooks") | {Id, Name}'
-   ```
+For headless setup, env vars at first boot synthesize one destination of the matching type:
 
-3. Set env vars (or fill in the Settings UI panel):
+```bash
+# Plex
+MEDIA_SERVER=plex   # optional; inferred from the variables below
+PLEX_URL=http://plex.lan:32400
+PLEX_TOKEN=...
+PLEX_SECTION_ID=5
 
-   ```bash
-   MEDIA_SERVER=emby
-   EMBY_URL=http://your-emby:8096
-   EMBY_API_KEY=...
-   EMBY_LIBRARY_ID=87111
-   ```
+# Emby
+MEDIA_SERVER=emby
+EMBY_URL=http://emby.lan:8096
+EMBY_API_KEY=...
+EMBY_LIBRARY_ID=87111
 
-4. After the first download (or via Settings &rarr; Trigger Test Library Refresh) Audplexus will:
-   - Trigger a refresh of the configured library.
-   - For each downloaded book, locate its item in Emby and add it to a BoxSet collection named after the series.
-   - Run a periodic reconcile that walks Emby&apos;s library and ensures every series with matched books has a populated collection.
+# Jellyfin
+MEDIA_SERVER=jellyfin
+JELLYFIN_URL=http://jellyfin.lan:8096
+JELLYFIN_API_KEY=...
+JELLYFIN_LIBRARY_ID=...
+
+# Audiobookshelf
+MEDIA_SERVER=abs
+ABS_URL=http://abs.lan
+ABS_API_KEY=...   # admin-scope token from Settings &rarr; Users &rarr; API Keys
+ABS_LIBRARY_ID=...
+```
+
+After first boot, additional destinations are added through the web UI; `MEDIA_SERVER` becomes a deprecated bootstrap shim.
+
+### Tag profiles
+
+The **Audiobook-rich** tag profile (Settings &rarr; Tag Profile) writes `series`, `series-part`, and `asin` freeform iTunes atoms into each m4b. Audiobookshelf reads these via `ffprobe` for native series auto-detection &mdash; no additional API calls required to group books into series. Default is **Basic** (preserves v0.2.x behavior); opt in once and every subsequent download writes the richer set.
 
 ## Quick Start
 
@@ -112,7 +129,7 @@ Key environment variables:
 | `DOWNLOAD_CONCURRENCY` | `0` | Concurrent downloads (0 = auto-detect based on CPU) |
 | `DECRYPT_CONCURRENCY` | `0` | Concurrent decrypt workers (0 = auto-detect) |
 | `PROCESS_CONCURRENCY` | `0` | Concurrent process workers (0 = auto-detect) |
-| `MEDIA_SERVER` | `plex` | Active backend for your media server integration |
+| `MEDIA_SERVER` | `plex` | First-boot synthesis hint &mdash; type of the destination to create from per-type env vars on a fresh install. Ignored once any destination exists in the DB. |
 | `PLEX_URL` | | Server URL for library scan triggers |
 | `PLEX_TOKEN` | | Authentication token |
 | `EMBY_URL` | | Server URL (e.g. `http://emby:8096`) |

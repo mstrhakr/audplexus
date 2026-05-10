@@ -1,5 +1,5 @@
 {{define "content"}}
-<h1>Pipline</h1>
+<h1>Pipeline</h1>
 
 <div class="actions-bar">
     <button hx-post="/api/downloads/retry-all" hx-target="#dl-status" hx-swap="innerHTML" class="btn btn-danger">Retry All Failed</button>
@@ -25,7 +25,8 @@
     {{range .Active}}
     <div class="download-card" id="pipe-{{.ASIN}}">
         <div class="dl-info">
-            <strong>{{.ASIN}}</strong>
+            <strong>{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</strong>
+            <span class="muted" style="font-size:.85em;margin-left:.5rem">{{.ASIN}}</span>
             <span class="badge badge-warning">downloading {{printf "%.0f" (mul .Progress 100)}}%</span>
         </div>
         <div class="progress-bar">
@@ -61,7 +62,7 @@
     {{range .Complete}}
     <tr>
         <td>{{.ASIN}}</td>
-        <td>{{.ASIN}}</td>
+        <td>{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</td>
         <td>{{if .CompletedAt}}{{formatDate (deref .CompletedAt)}}{{end}}</td>
     </tr>
     {{else}}

@@ -33,6 +33,10 @@ type EmbyBackend struct {
 
 	adminMu     sync.Mutex
 	adminUserID string // cached id of an administrator user, used for item updates
+
+	// destination, if set, overrides the settings-table lookup so multiple
+	// Emby destinations can have independent config.
+	destination *database.LibraryDestination
 }
 
 // NewEmby constructs an Emby backend. audnexusClient may be nil to disable
@@ -41,7 +45,30 @@ func NewEmby(db database.Database, audnexusClient *audnexus.Client, libraryDir s
 	return &EmbyBackend{db: db, audnexus: audnexusClient, libraryDir: libraryDir}
 }
 
+// WithDestination binds the backend to a specific library_destinations row.
+func (e *EmbyBackend) WithDestination(d *database.LibraryDestination) *EmbyBackend {
+	e.destination = d
+	return e
+}
+
 func (e *EmbyBackend) Name() string { return string(TypeEmby) }
+
+// Capabilities — Emby is the most-capable backend: scan, per-item refresh,
+// BoxSet-based series grouping, per-item tags (used for franchise + series
+// library facets), image uploads (BoxSet covers + author primary images),
+// and item count.
+func (e *EmbyBackend) Capabilities() CapabilitySet {
+	return NewCapabilitySet(
+		CapTriggerScan,
+		CapPerItemRefresh,
+		CapSeriesGrouping,
+		CapFranchiseTag,
+		CapImageUpload,
+		CapItemCount,
+		CapAuthorImages,
+		CapBoxSetCovers,
+	)
+}
 
 func (e *EmbyBackend) Configured(ctx context.Context) bool {
 	u, k, l := e.settings(ctx)
@@ -50,6 +77,11 @@ func (e *EmbyBackend) Configured(ctx context.Context) bool {
 
 // settings returns (baseURL, apiKey, libraryID).
 func (e *EmbyBackend) settings(ctx context.Context) (string, string, string) {
+	if e.destination != nil {
+		return strings.TrimSpace(e.destination.URL),
+			strings.TrimSpace(e.destination.APIKey),
+			strings.TrimSpace(e.destination.LibraryID)
+	}
 	u, _ := e.db.GetSetting(ctx, "emby_url")
 	k, _ := e.db.GetSetting(ctx, "emby_api_key")
 	l, _ := e.db.GetSetting(ctx, "emby_library_id")
@@ -67,7 +99,17 @@ func (e *EmbyBackend) settings(ctx context.Context) (string, string, string) {
 
 // libraryServerPath returns the path the Emby server uses to read the library
 // (cached in DB; populated on first scan or via VirtualFolders lookup).
+//
+// Per-destination row binding (codex P2): when the backend is bound to
+// a destination row that carries an explicit DestinationPath, that
+// wins over cached/env values. Lets multi-dest installs route to
+// different mounts per destination.
 func (e *EmbyBackend) libraryServerPath(ctx context.Context, baseURL, apiKey, libraryID string) string {
+	if e.destination != nil {
+		if dp := strings.TrimSpace(e.destination.DestinationPath); dp != "" {
+			return dp
+		}
+	}
 	cached, _ := e.db.GetSetting(ctx, "emby_library_path")
 	cached = strings.TrimSpace(cached)
 	if cached != "" {
@@ -90,102 +132,117 @@ func (e *EmbyBackend) libraryServerPath(ctx context.Context, baseURL, apiKey, li
 // TriggerScanForBook asks Emby to refresh the folder containing finalPath.
 // Strategy: refresh the parent folder's BaseItem if we can resolve it by
 // path, else fall back to a full library refresh.
-func (e *EmbyBackend) TriggerScanForBook(finalPath string) {
-	if strings.TrimSpace(finalPath) == "" {
-		return
+// OnBookOrganized runs the per-book post-organize work synchronously and
+// returns one Outcome per logical operation: scan_trigger, then for books
+// with a series, item_match → series_grouping → franchise_tag. Idempotent —
+// repeat calls report SkippedExisting where applicable.
+func (e *EmbyBackend) OnBookOrganized(ctx context.Context, book OrganizedBook) []Outcome {
+	baseURL, apiKey, libraryID := e.settings(ctx)
+	if baseURL == "" || apiKey == "" || libraryID == "" {
+		return []Outcome{SkippedConfigured(OpScanTrigger)}
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+	outcomes := make([]Outcome, 0, 4)
 
-		baseURL, apiKey, libraryID := e.settings(ctx)
-		if baseURL == "" || apiKey == "" || libraryID == "" {
-			return
+	// 1. Scan trigger — try targeted folder refresh, fall back to full library refresh.
+	scanCtx, scanCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer scanCancel()
+	scanStart := time.Now()
+	if strings.TrimSpace(book.LocalPath) == "" {
+		outcomes = append(outcomes, Failed(OpScanTrigger, fmt.Errorf("empty local path"), "no path to scan"))
+	} else {
+		localFolder := filepath.Dir(book.LocalPath)
+		serverPath := e.libraryServerPath(scanCtx, baseURL, apiKey, libraryID)
+		// Per-destination AudiobookPath wins over the global libraryDir
+		// for path translation (codex P2). Required for multi-dest
+		// installs where each destination has its own mount mapping.
+		localRoot := strings.TrimSpace(e.libraryDir)
+		if e.destination != nil {
+			if ap := strings.TrimSpace(e.destination.AudiobookPath); ap != "" {
+				localRoot = ap
+			}
 		}
-
-		// Translate local path → server-visible path.
-		localFolder := filepath.Dir(finalPath)
-		serverPath := e.libraryServerPath(ctx, baseURL, apiKey, libraryID)
-		scanPath, ok := translateScanPath(localFolder, strings.TrimSpace(e.libraryDir), serverPath)
+		scanPath, ok := translateScanPath(localFolder, localRoot, serverPath)
 		if !ok {
-			msLog.Debug().Str("local_path", localFolder).Str("server_path", serverPath).Msg("emby: path translation failed; falling back to library refresh")
-			if err := e.refreshLibrary(ctx, baseURL, apiKey, libraryID); err != nil {
-				msLog.Warn().Err(err).Msg("emby: library refresh failed")
-				return
+			// Fallback: refresh whole library. Still counts as a successful
+			// scan trigger from the caller's perspective; just less targeted.
+			if err := e.refreshLibrary(scanCtx, baseURL, apiKey, libraryID); err != nil {
+				outcomes = append(outcomes, Failed(OpScanTrigger, err, "path translation failed and full library refresh failed"))
+			} else {
+				outcomes = append(outcomes, Succeeded(OpScanTrigger, "full library refresh (path translation failed)", "", time.Since(scanStart)))
 			}
-			msLog.Info().Str("library_id", libraryID).Msg("emby: full library refresh triggered")
-			return
-		}
-
-		// Try to find the BaseItem for the parent folder and refresh it
-		// specifically. Falling back to a library-wide refresh on lookup miss.
-		itemID, err := e.findItemByPath(ctx, baseURL, apiKey, libraryID, scanPath)
-		if err != nil || itemID == "" {
-			msLog.Debug().Err(err).Str("server_path", scanPath).Msg("emby: no BaseItem for folder; refreshing whole library")
-			if err := e.refreshLibrary(ctx, baseURL, apiKey, libraryID); err != nil {
-				msLog.Warn().Err(err).Msg("emby: library refresh failed")
-				return
+		} else {
+			itemID, err := e.findItemByPath(scanCtx, baseURL, apiKey, libraryID, scanPath)
+			if err != nil || itemID == "" {
+				if err := e.refreshLibrary(scanCtx, baseURL, apiKey, libraryID); err != nil {
+					outcomes = append(outcomes, Failed(OpScanTrigger, err, "folder not indexed and full library refresh failed"))
+				} else {
+					outcomes = append(outcomes, Succeeded(OpScanTrigger, "full library refresh (folder not yet indexed)", "", time.Since(scanStart)))
+				}
+			} else if err := e.refreshItem(scanCtx, baseURL, apiKey, itemID); err != nil {
+				outcomes = append(outcomes, Failed(OpScanTrigger, err, "targeted folder refresh failed"))
+			} else {
+				outcomes = append(outcomes, Succeeded(OpScanTrigger, "targeted folder refresh "+scanPath, itemID, time.Since(scanStart)))
 			}
-			msLog.Info().Str("server_path", scanPath).Msg("emby: full library refresh triggered (folder not yet indexed)")
-			return
 		}
-
-		if err := e.refreshItem(ctx, baseURL, apiKey, itemID); err != nil {
-			msLog.Warn().Err(err).Str("item_id", itemID).Msg("emby: item refresh failed")
-			return
-		}
-		msLog.Info().Str("item_id", itemID).Str("server_path", scanPath).Msg("emby: targeted folder refresh triggered")
-	}()
-}
-
-// EnsureBookInSeriesCollection waits for Emby to index the book, then ensures
-// a BoxSet collection named `series` exists and contains the book's item.
-func (e *EmbyBackend) EnsureBookInSeriesCollection(series, bookTitle string) {
-	if strings.TrimSpace(series) == "" {
-		return
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-		defer cancel()
+	// 2-4: only if the book has a series.
+	if strings.TrimSpace(book.Series) == "" {
+		return outcomes
+	}
 
-		baseURL, apiKey, libraryID := e.settings(ctx)
-		if baseURL == "" || apiKey == "" || libraryID == "" {
-			return
-		}
+	// 2. Item match — wait for Emby to index the book.
+	matchCtx, matchCancel := context.WithTimeout(ctx, 180*time.Second)
+	defer matchCancel()
+	matchStart := time.Now()
+	itemID, err := e.waitForItem(matchCtx, baseURL, apiKey, libraryID, book.Title)
+	if err != nil {
+		outcomes = append(outcomes,
+			Failed(OpItemMatch, err, "item not found in emby within retry window"),
+			Outcome{Operation: OpSeriesGrouping, Status: OutcomeDeferred, Detail: "skipped: depends on item_match", Err: err},
+			Outcome{Operation: OpFranchiseTag, Status: OutcomeDeferred, Detail: "skipped: depends on item_match", Err: err})
+		return outcomes
+	}
+	outcomes = append(outcomes, Succeeded(OpItemMatch, "matched emby item by title", itemID, time.Since(matchStart)))
 
-		itemID, err := e.waitForItem(ctx, baseURL, apiKey, libraryID, bookTitle)
-		if err != nil {
-			msLog.Warn().Err(err).Str("series", series).Str("book", bookTitle).Msg("emby: failed to add book to series collection")
-			return
-		}
+	// 3. Series grouping (BoxSet collection).
+	groupStart := time.Now()
+	collectionID, err := e.findOrCreateCollection(matchCtx, baseURL, apiKey, book.Series, itemID)
+	if err != nil {
+		outcomes = append(outcomes,
+			Failed(OpSeriesGrouping, err, "find/create boxset failed"),
+			Outcome{Operation: OpFranchiseTag, Status: OutcomeDeferred, Detail: "skipped: depends on series_grouping", Err: err})
+		return outcomes
+	}
+	if err := e.addToCollection(matchCtx, baseURL, apiKey, collectionID, itemID); err != nil {
+		outcomes = append(outcomes, Failed(OpSeriesGrouping, err, "add to boxset failed"))
+		// Continue to franchise tag regardless; tagging the item doesn't depend on collection membership.
+	} else {
+		outcomes = append(outcomes, Succeeded(OpSeriesGrouping, "book added to boxset \""+book.Series+"\"", collectionID, time.Since(groupStart)))
+	}
 
-		collectionID, err := e.findOrCreateCollection(ctx, baseURL, apiKey, series, itemID)
-		if err != nil {
-			msLog.Warn().Err(err).Str("series", series).Msg("emby: failed to find/create collection")
-			return
+	// 4. Franchise tag (and series tag for library facet filtering). Best-effort.
+	tagStart := time.Now()
+	tags := []string{book.Series}
+	if f := franchiseFromSeries(book.Series); f != "" {
+		tags = append(tags, f)
+	}
+	adminID, adminErr := e.resolveAdminUserID(matchCtx, baseURL, apiKey)
+	switch {
+	case adminErr != nil:
+		outcomes = append(outcomes, Failed(OpFranchiseTag, adminErr, "no admin user resolved"))
+	case adminID == "":
+		outcomes = append(outcomes, Failed(OpFranchiseTag, fmt.Errorf("empty admin id"), "admin user resolved but empty"))
+	default:
+		if err := e.applyTags(matchCtx, baseURL, apiKey, adminID, itemID, tags); err != nil {
+			outcomes = append(outcomes, Failed(OpFranchiseTag, err, "tag write failed"))
+		} else {
+			outcomes = append(outcomes, Succeeded(OpFranchiseTag, "tagged with series + franchise", itemID, time.Since(tagStart)))
 		}
+	}
 
-		if err := e.addToCollection(ctx, baseURL, apiKey, collectionID, itemID); err != nil {
-			msLog.Warn().Err(err).Str("series", series).Str("book", bookTitle).Msg("emby: failed to add book to collection")
-			return
-		}
-		msLog.Info().Str("series", series).Str("book", bookTitle).Msg("emby: book added to series collection")
-
-		// Tag the book with its series (and franchise, when one is implied
-		// by the naming convention) so the user can filter the audiobook
-		// library by them directly. Best-effort; logged on failure.
-		if adminID, adminErr := e.resolveAdminUserID(ctx, baseURL, apiKey); adminErr == nil && adminID != "" {
-			tags := []string{series}
-			if f := franchiseFromSeries(series); f != "" {
-				tags = append(tags, f)
-			}
-			if err := e.applyTags(ctx, baseURL, apiKey, adminID, itemID, tags); err != nil {
-				msLog.Debug().Err(err).Str("item_id", itemID).Strs("tags", tags).Msg("emby: tag write failed")
-			}
-		}
-	}()
+	return outcomes
 }
 
 // ReconcileLibrary walks the Emby library, recording each indexed item's
@@ -457,50 +514,6 @@ func (e *EmbyBackend) TriggerLibraryScan(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return e.LibraryItemCount(ctx)
-}
-
-// TagItem applies the given tags to an Emby item so the user can filter the
-// audiobook library by them directly. Best-effort: failure is logged and not
-// surfaced to the caller — losing tags should never fail a download.
-//
-// Implementation: GET the item's full BaseItemDto via an admin user, set
-// `TagItems` to the desired list, lock the `Tags` field so a future metadata
-// refresh doesn't strip them, then POST the modified DTO back. Empty tag
-// lists are a no-op (we don't actively clear tags the user may have set).
-func (e *EmbyBackend) TagItem(ctx context.Context, serverItemID string, tags []string) {
-	if strings.TrimSpace(serverItemID) == "" {
-		return
-	}
-	cleaned := make([]string, 0, len(tags))
-	for _, t := range tags {
-		t = strings.TrimSpace(t)
-		if t != "" {
-			cleaned = append(cleaned, t)
-		}
-	}
-	if len(cleaned) == 0 {
-		return
-	}
-
-	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		baseURL, apiKey, _ := e.settings(bgCtx)
-		if baseURL == "" || apiKey == "" {
-			return
-		}
-		adminID, err := e.resolveAdminUserID(bgCtx, baseURL, apiKey)
-		if err != nil || adminID == "" {
-			msLog.Debug().Err(err).Str("item_id", serverItemID).Msg("emby: skipping tag write; no admin user resolved")
-			return
-		}
-		if err := e.applyTags(bgCtx, baseURL, apiKey, adminID, serverItemID, cleaned); err != nil {
-			msLog.Warn().Err(err).Str("item_id", serverItemID).Strs("tags", cleaned).Msg("emby: tag write failed")
-			return
-		}
-		msLog.Debug().Str("item_id", serverItemID).Strs("tags", cleaned).Msg("emby: tags applied")
-	}()
 }
 
 // resolveAdminUserID finds the first administrator user and caches the id.
