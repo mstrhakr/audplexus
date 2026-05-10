@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -135,53 +134,9 @@ func (dm *DownloadManager) runConvert(parentCtx, ctx context.Context, book *data
 	}
 	return nil
 }
-
-// moveFileCrossFS moves src to dst, falling back to copy+delete if Rename
-// returns an EXDEV (cross-device) error. PlexOrganizer uses the same pattern
-// for its primary move; we replicate it here so convert works when downloads
-// and library are on different filesystems.
-func moveFileCrossFS(src, dst string) error {
-	if err := os.Rename(src, dst); err == nil {
-		return nil
-	} else if !isCrossDeviceErr(err) {
-		return err
-	}
-
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(dst)
-		return err
-	}
-	if err := out.Close(); err != nil {
-		os.Remove(dst)
-		return err
-	}
-	return os.Remove(src)
-}
-
-// isCrossDeviceErr reports whether err is the "invalid cross-device link"
-// (EXDEV) error returned by os.Rename when src and dst live on different
-// filesystems. We string-match because the syscall errno isn't exposed
-// portably across Linux/Windows.
-func isCrossDeviceErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "cross-device") || strings.Contains(msg, "different drive") || strings.Contains(msg, "EXDEV")
-}
-
 func (dm *DownloadManager) convertM4BToMP3(parentCtx, ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, bookDir string, asinLog *logging.Logger) error {
+	_ = parentCtx
+	_ = bookDir
 	chapters := enriched.ChapterMarks()
 	meta := enriched.ToAudioMetadata()
 	if len(chapters) == 0 {
@@ -225,71 +180,20 @@ func (dm *DownloadManager) convertM4BToMP3(parentCtx, ctx context.Context, book 
 		return fmt.Errorf("split chapters: %w", err)
 	}
 
-	// Move staged mp3 files into the existing book directory; on success
-	// remove the source m4b and any sibling .chapters.txt that named it.
-	entries, err := os.ReadDir(stageDir)
+	// Reuse organizer multi-file flow so mp3 conversion gets the same
+	// companion metadata (.plexmatch/.chapters.txt) and DB update behavior
+	// as pipeline chapter-split output.
+	finalPath, err := dm.organizer.OrganizeMultiFile(ctx, book, enriched, stageDir, nil)
 	if err != nil {
-		return fmt.Errorf("read stage dir: %w", err)
-	}
-
-	moved := make([]string, 0, len(entries))
-	var totalBytes int64
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		// Honor user cancel between chapters so a stuck or slow move
-		// can be aborted without waiting for the whole loop.
-		if err := ctx.Err(); err != nil {
-			for _, m := range moved {
-				_ = os.Remove(m)
-			}
-			if errors.Is(err, context.Canceled) {
-				return fmt.Errorf("cancelled by user")
-			}
-			return err
-		}
-		src := filepath.Join(stageDir, e.Name())
-		dst := filepath.Join(bookDir, e.Name())
-		if err := moveFileCrossFS(src, dst); err != nil {
-			// Roll back any files already moved into the book dir.
-			for _, m := range moved {
-				_ = os.Remove(m)
-			}
-			return fmt.Errorf("move chapter %q: %w", e.Name(), err)
-		}
-		moved = append(moved, dst)
-		if fi, err := os.Stat(dst); err == nil {
-			totalBytes += fi.Size()
-		}
-	}
-
-	// Commit the new layout to the DB BEFORE removing the source m4b.
-	// Two reasons:
-	//   1) If the user cancels right here, the m4b is still on disk and
-	//      DB still references it — recoverable in-place state.
-	//   2) The diagnostics scanner runs against book.FilePath; if we
-	//      delete the m4b first then crash before UpsertBook, the book
-	//      shows up as "missing on disk" until the next reconcile.
-	// Use a detached context so neither user-cancel of the per-item ctx
-	// nor parent shutdown can break the commit and leave the DB
-	// pointing at a deleted file. We've already done the work; the
-	// final write must land.
-	finalizeCtx := context.WithoutCancel(parentCtx)
-	book.FilePath = bookDir
-	book.FileSize = totalBytes
-	book.Status = database.BookStatusComplete
-	if err := dm.db.UpsertBook(finalizeCtx, book); err != nil {
-		// Roll back the chapter file moves so the original m4b layout
-		// is intact for the next attempt.
-		for _, m := range moved {
-			_ = os.Remove(m)
-		}
-		return fmt.Errorf("update book record: %w", err)
+		return fmt.Errorf("organize chapter files: %w", err)
 	}
 
 	if err := os.Remove(srcM4B); err != nil && !os.IsNotExist(err) {
 		asinLog.Warn().Err(err).Str("path", srcM4B).Msg("failed to remove original m4b after convert")
+	}
+	chaptersPath := strings.TrimSuffix(srcM4B, filepath.Ext(srcM4B)) + ".chapters.txt"
+	if err := os.Remove(chaptersPath); err != nil && !os.IsNotExist(err) {
+		asinLog.Warn().Err(err).Str("path", chaptersPath).Msg("failed to remove stale chapters metadata after convert")
 	}
 
 	dm.emit(DownloadEvent{
@@ -301,9 +205,9 @@ func (dm *DownloadManager) convertM4BToMP3(parentCtx, ctx context.Context, book 
 		Progress: 1.0,
 	})
 
-	asinLog.Info().Str("path", bookDir).Int("chapters", len(moved)).Msg("convert m4b→mp3 complete")
+	asinLog.Info().Str("path", finalPath).Msg("convert m4b→mp3 complete")
 	if dm.mediaServer != nil {
-		dm.mediaServer.TriggerScanForBook(bookDir)
+		dm.mediaServer.TriggerScanForBook(finalPath)
 		dm.mediaServer.EnsureBookInSeriesCollection(enriched.Series(), enriched.Title())
 	}
 	dm.emit(DownloadEvent{
