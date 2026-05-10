@@ -23,8 +23,10 @@ import (
 type Type string
 
 const (
-	TypePlex Type = "plex"
-	TypeEmby Type = "emby"
+	TypePlex     Type = "plex"
+	TypeEmby     Type = "emby"
+	TypeJellyfin Type = "jellyfin"
+	TypeABS      Type = "abs"
 )
 
 // SettingKeyType is the DB setting key that stores the active backend type.
@@ -102,6 +104,10 @@ func New(t Type, db database.Database, audnexusClient *audnexus.Client, libraryD
 		return NewPlex(db, libraryDir), nil
 	case TypeEmby:
 		return NewEmby(db, audnexusClient, libraryDir), nil
+	case TypeJellyfin:
+		return NewJellyfin(db, audnexusClient, libraryDir), nil
+	case TypeABS:
+		return NewABS(db, libraryDir), nil
 	default:
 		return nil, fmt.Errorf("unknown media server type: %q", t)
 	}

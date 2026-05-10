@@ -173,28 +173,21 @@ func (m *DestinationManager) recordOutcomes(ctx context.Context, bookID int64, d
 }
 
 func summarizeOutcomesState(outcomes []mediaserver.Outcome) database.BookDestinationSyncState {
-	// "synced" iff every NON-deferred and NON-skipped-existing op succeeded
-	// or was the right kind of skip. Any failure → "failed".
-	allOK := true
-	hadAny := false
-	for _, o := range outcomes {
-		switch o.Status {
-		case mediaserver.OutcomeFailed:
-			return database.BookDestSyncFailed
-		case mediaserver.OutcomeSucceeded, mediaserver.OutcomeSkippedExisting, mediaserver.OutcomeUnsupported, mediaserver.OutcomeDeferred:
-			hadAny = true
-		case mediaserver.OutcomeSkippedNotConfigured:
-			// Pretend like nothing happened — destination wasn't ready to receive.
-			allOK = false
-		default:
-			allOK = false
-		}
-	}
-	if !hadAny {
+	// any Failed                  -> failed
+	// any SkippedNotConfigured    -> failed (destination not ready)
+	// no outcomes at all          -> pending
+	// otherwise                   -> synced (succeeded / skipped_existing /
+	//                                unsupported / deferred — all terminal)
+	if len(outcomes) == 0 {
 		return database.BookDestSyncPending
 	}
-	if !allOK {
-		return database.BookDestSyncFailed
+	for _, o := range outcomes {
+		if o.Status == mediaserver.OutcomeFailed {
+			return database.BookDestSyncFailed
+		}
+		if o.Status == mediaserver.OutcomeSkippedNotConfigured {
+			return database.BookDestSyncFailed
+		}
 	}
 	return database.BookDestSyncSynced
 }
@@ -257,17 +250,20 @@ func encodePerOpOutcomes(outcomes []mediaserver.Outcome, at time.Time) string {
 }
 
 // buildBackend constructs a mediaserver.Backend instance for a single
-// destination row. For now this routes to the existing per-type
-// constructors (NewPlex, NewEmby) which still read settings from the
-// settings table. PR-D/E will add NewJellyfin and NewABS, and a future
-// PR will make backends read directly from the destination row instead
-// of the settings table.
+// destination row. Backends still read settings from the settings table
+// in this iteration — a future commit moves them to read from the
+// destination row directly so multiple destinations of the same type
+// can have independent config.
 func (m *DestinationManager) buildBackend(row *database.LibraryDestination) (mediaserver.Backend, error) {
 	switch row.Type {
 	case database.LibraryDestinationTypePlex:
 		return mediaserver.NewPlex(m.db, m.libraryDir), nil
 	case database.LibraryDestinationTypeEmby:
 		return mediaserver.NewEmby(m.db, m.audnexus, m.libraryDir), nil
+	case database.LibraryDestinationTypeJellyfin:
+		return mediaserver.NewJellyfin(m.db, m.audnexus, m.libraryDir), nil
+	case database.LibraryDestinationTypeABS:
+		return mediaserver.NewABS(m.db, m.libraryDir), nil
 	default:
 		return nil, fmt.Errorf("unsupported destination type: %q", row.Type)
 	}
