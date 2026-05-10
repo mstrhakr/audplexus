@@ -20,6 +20,19 @@
             {{if eq (printf "%s" .Book.Status) "new"}}
             <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" class="btn btn-primary">Queue Download</button>
             {{end}}
+            {{if and (eq (printf "%s" .Book.Status) "complete") .Book.FilePath}}
+                {{if hasSuffix .Book.FilePath ".m4b"}}
+                <button hx-post="/api/books/{{.Book.ID}}/convert?format=mp3"
+                        hx-confirm="Split this book into per-chapter MP3 files? The original M4B will be removed."
+                        hx-swap="none"
+                        class="btn btn-secondary">Convert to MP3 (chapters)</button>
+                {{else}}
+                <button hx-post="/api/books/{{.Book.ID}}/convert?format=m4b"
+                        hx-confirm="Reassemble chapter MP3s into a single M4B? The chapter files will be removed."
+                        hx-swap="none"
+                        class="btn btn-secondary">Convert to M4B (single file)</button>
+                {{end}}
+            {{end}}
         </div>
 
         {{if .Book.Description}}

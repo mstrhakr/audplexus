@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/mstrhakr/audplexus/internal/logging"
 )
@@ -164,6 +165,16 @@ func (f *FFmpeg) buildDecryptArgs(inputPath, outputPath, activationBytes, key, i
 	}
 
 	args = append(args, "-c", "copy")
+	// +faststart relocates the MP4 moov atom (the index) to the front of
+	// the output file. Audible delivers AAX/AAXC with moov at the END,
+	// and stream-copy preserves that layout. Any downstream ffmpeg
+	// invocation that opens the m4b then has to scan the whole file
+	// trying to find the index — observed ffmpeg RSS climbing to 7+ GB
+	// when SplitChapters opened a 573 MB book. Faststart costs us one
+	// extra pass over the file during decrypt (still seconds on stream
+	// copy speeds) and makes everything afterwards constant-memory.
+	// Helps Plex/Emby metadata scans too.
+	args = append(args, "-movflags", "+faststart")
 	args = append(args, buildMetadataArgs(meta)...)
 	args = append(args, "-y", outputPath)
 	return args
@@ -358,7 +369,7 @@ func (f *FFmpeg) ConvertToMP3(inputPath, outputPath string, bitrate string) erro
 		bitrate = "128k"
 	}
 	decryptLog.Info().Str("input", inputPath).Str("output", outputPath).Str("bitrate", bitrate).Msg("converting to MP3")
-	return f.run(
+	return f.runTranscode(
 		"-i", inputPath,
 		"-codec:a", "libmp3lame",
 		"-b:a", bitrate,
@@ -367,30 +378,170 @@ func (f *FFmpeg) ConvertToMP3(inputPath, outputPath string, bitrate string) erro
 	)
 }
 
+// ConcatToM4B concatenates a list of audio files (in order) into a single
+// M4B output, transcoding to AAC. Used when reassembling chapter-split files
+// back into a single audiobook container.
+func (f *FFmpeg) ConcatToM4B(inputPaths []string, outputPath, bitrate string, meta Metadata) error {
+	if len(inputPaths) == 0 {
+		return fmt.Errorf("concat: no input files")
+	}
+	if bitrate == "" {
+		bitrate = "128k"
+	}
+
+	// Build a concat list file in the same directory as the output.
+	listPath := outputPath + ".concat.txt"
+	lf, err := os.Create(listPath)
+	if err != nil {
+		return fmt.Errorf("create concat list: %w", err)
+	}
+	for _, p := range inputPaths {
+		// ffmpeg concat demuxer requires single-quoted absolute paths with
+		// internal quotes escaped per its grammar.
+		escaped := strings.ReplaceAll(p, `'`, `'\''`)
+		if _, err := fmt.Fprintf(lf, "file '%s'\n", escaped); err != nil {
+			lf.Close()
+			os.Remove(listPath)
+			return fmt.Errorf("write concat list: %w", err)
+		}
+	}
+	if err := lf.Close(); err != nil {
+		os.Remove(listPath)
+		return fmt.Errorf("close concat list: %w", err)
+	}
+	defer os.Remove(listPath)
+
+	decryptLog.Info().Int("inputs", len(inputPaths)).Str("output", outputPath).Msg("concatenating chapters into m4b")
+	metaArgs := buildMetadataArgs(meta)
+
+	args := []string{
+		"-f", "concat",
+		"-safe", "0",
+		"-i", listPath,
+	}
+	if meta.CoverPath != "" {
+		args = append(args,
+			"-i", meta.CoverPath,
+			"-map", "0:a",
+			"-map", "1:v",
+			"-c:v", "copy",
+			"-disposition:v:0", "attached_pic",
+		)
+	} else {
+		args = append(args, "-vn")
+	}
+	args = append(args,
+		"-codec:a", "aac",
+		"-b:a", bitrate,
+	)
+	args = append(args, metaArgs...)
+	args = append(args, "-y", outputPath)
+
+	return f.runTranscode(args...)
+}
+
 // SplitChapters splits an audio file into separate chapter files.
-func (f *FFmpeg) SplitChapters(inputPath, outputDir string, chapters []ChapterMark, format string) error {
+//
+// For "m4b" output the call is a stream copy (cheap). For "mp3" output
+// each chapter is re-encoded with libmp3lame.
+//
+// onChapter, when non-nil, is invoked after each chapter finishes encoding
+// with (1-based-index, total) so callers can report progress to the UI.
+func (f *FFmpeg) SplitChapters(inputPath, outputDir string, chapters []ChapterMark, format string, meta Metadata, onChapter func(done, total int)) error {
 	decryptLog.Info().Str("input", inputPath).Int("chapters", len(chapters)).Str("format", format).Msg("splitting chapters")
 	ext := ".m4b"
 	codec := []string{"-c", "copy"}
+	reencode := false
 	if format == "mp3" {
 		ext = ".mp3"
 		codec = []string{"-codec:a", "libmp3lame", "-b:a", "128k"}
+		reencode = true
+	}
+
+	// Compute the minimum zero-pad width so a lexical sort of the output
+	// directory always matches playback order, even for books with 100+
+	// chapters (e.g. 3-digit padding for 100-999 chapters).
+	padWidth := len(fmt.Sprintf("%d", len(chapters)))
+	if padWidth < 2 {
+		padWidth = 2 // always at least "01" for readability
 	}
 
 	for i, ch := range chapters {
-		outputPath := fmt.Sprintf("%s/%02d - %s%s", outputDir, i+1, sanitizeFilename(ch.Title), ext)
+		outputPath := fmt.Sprintf("%s/%0*d - %s%s", outputDir, padWidth, i+1, sanitizeFilename(ch.Title), ext)
+		chapterMeta := meta
+		if strings.TrimSpace(ch.Title) != "" {
+			chapterMeta.Title = ch.Title
+		}
+		chapterMeta.Track = fmt.Sprintf("%d/%d", i+1, len(chapters))
+		if chapterMeta.Album == "" {
+			chapterMeta.Album = meta.Title
+		}
+		// -ss/-to MUST come before -i so ffmpeg uses input-side fast seek
+		// (jumps to the byte offset via the container index). Output-side
+		// seek decodes-and-discards from the start of the file, which on a
+		// 10-hour audiobook means buffering hours of audio in the muxer
+		// queue before emitting the first output byte.
 		args := []string{
-			"-i", inputPath,
 			"-ss", formatDuration(ch.StartMs),
 		}
 		if ch.EndMs > 0 {
 			args = append(args, "-to", formatDuration(ch.EndMs))
 		}
+		args = append(args, "-i", inputPath)
+		if chapterMeta.CoverPath != "" {
+			args = append(args,
+				"-i", chapterMeta.CoverPath,
+				"-map", "0:a",
+				"-map", "1:v",
+			)
+		}
 		args = append(args, codec...)
+		if chapterMeta.CoverPath != "" {
+			if format == "mp3" {
+				args = append(args,
+					"-c:v", "mjpeg",
+					"-disposition:v:0", "attached_pic",
+					"-id3v2_version", "3",
+					"-metadata:s:v", "title=Album cover",
+					"-metadata:s:v", "comment=Cover (front)",
+				)
+			} else {
+				args = append(args,
+					"-c:v", "copy",
+					"-disposition:v:0", "attached_pic",
+				)
+			}
+		}
+		args = append(args, buildMetadataArgs(chapterMeta)...)
 		args = append(args, "-y", outputPath)
 
-		if err := f.run(args...); err != nil {
+		chapterStart := time.Now()
+		decryptLog.Info().
+			Int("chapter", i+1).
+			Int("of", len(chapters)).
+			Str("title", ch.Title).
+			Int("start_ms", ch.StartMs).
+			Int("end_ms", ch.EndMs).
+			Msg("encoding chapter")
+
+		var err error
+		if reencode {
+			err = f.runTranscode(args...)
+		} else {
+			err = f.run(args...)
+		}
+		if err != nil {
 			return fmt.Errorf("split chapter %d (%s): %w", i+1, ch.Title, err)
+		}
+
+		decryptLog.Info().
+			Int("chapter", i+1).
+			Int("of", len(chapters)).
+			Str("elapsed", time.Since(chapterStart).Round(time.Second).String()).
+			Msg("chapter encoded")
+
+		if onChapter != nil {
+			onChapter(i+1, len(chapters))
 		}
 	}
 	return nil

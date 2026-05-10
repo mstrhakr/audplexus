@@ -38,11 +38,26 @@
         var maxReconnectDelay = 15000;
         var stageRateState = {};
 
+        // escHTML escapes a string for safe interpolation into innerHTML.
+        // ASINs, titles, and stage names come from upstream services; we
+        // never trust them in markup without escaping.
+        function escHTML(s) {
+            if (s == null) return '';
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         var badgeClass = {
             'downloading': 'badge-warning',
             'decrypting':  'badge-warning',
             'processing':  'badge-warning',
             'moving':      'badge-warning',
+            'converting':  'badge-warning',
+            'transcoding': 'badge-warning',
             'waiting_decrypt': 'badge-info',
             'waiting_moving':  'badge-info',
             'queued':      'badge-info',
@@ -55,6 +70,8 @@
             if (stage === 'moving') return 'moving file';
             if (stage === 'waiting_decrypt') return 'waiting for decrypt worker';
             if (stage === 'waiting_moving') return 'waiting for moving worker';
+            if (stage === 'converting') return 'converting';
+            if (stage === 'transcoding') return 'transcoding chapters';
             return stage || '';
         }
 
@@ -63,6 +80,8 @@
                 stage === 'decrypting' ||
                 stage === 'processing' ||
                 stage === 'moving' ||
+                stage === 'converting' ||
+                stage === 'transcoding' ||
                 stage === 'waiting_decrypt' ||
                 stage === 'waiting_moving';
         }
@@ -414,11 +433,25 @@
 
                     var bClass = badgeClass[stage] || 'badge-warning';
                     var isWaiting = (stage === 'waiting_decrypt' || stage === 'waiting_moving');
-                    card.innerHTML = '<div class="dl-info"><strong>' + label + '</strong>' +
-                        '<span class="badge ' + bClass + '">' + stageText +
+                    var cancellable = (stage === 'downloading' || stage === 'decrypting' || stage === 'processing' || stage === 'moving' || stage === 'converting' || stage === 'transcoding');
+
+                    // Once the user has clicked Cancel we mark the card so
+                    // subsequent SSE redraws don't restore the active button
+                    // (which would let them click it again before the server
+                    // catches up). The card sticks around until the failed/
+                    // complete event arrives.
+                    if (card && card.getAttribute('data-cancelling') === '1') {
+                        return;
+                    }
+
+                    var cancelBtn = cancellable
+                        ? '<button class="btn btn-small btn-danger pipe-cancel" data-asin="' + escHTML(d.asin) + '">Cancel</button>'
+                        : '';
+                    card.innerHTML = '<div class="dl-info"><strong>' + escHTML(label) + '</strong>' +
+                        '<span class="badge ' + bClass + '">' + escHTML(stageText) +
                         (!isWaiting && pct > 0 ? ' ' + pct + '%' : '') +
-                        '</span></div>' + details +
-                        ((stage === 'downloading' || stage === 'decrypting' || stage === 'processing' || stage === 'moving' || stage === 'waiting_decrypt' || stage === 'waiting_moving') ? '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div>' : '');
+                        '</span>' + cancelBtn + '</div>' + details +
+                        ((stage === 'downloading' || stage === 'decrypting' || stage === 'processing' || stage === 'moving' || stage === 'converting' || stage === 'transcoding' || stage === 'waiting_decrypt' || stage === 'waiting_moving') ? '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div>' : '');
                 } else if (d.type === 'complete') {
                     clearStageRateState(d.asin);
                     if (card) card.remove();
@@ -518,6 +551,30 @@
         window.addEventListener('beforeunload', function() {
             closeEventSource();
             clearReconnectTimer();
+        });
+
+        // Delegated handler for the Cancel button on active pipeline cards.
+        document.addEventListener('click', function(ev) {
+            var btn = ev.target.closest && ev.target.closest('.pipe-cancel');
+            if (!btn) return;
+            var asin = btn.getAttribute('data-asin');
+            if (!asin) return;
+            if (!confirm('Cancel this in-flight pipeline item?')) return;
+            btn.disabled = true;
+            btn.textContent = 'Cancelling…';
+            // Mark the card so the SSE redraw loop doesn't recreate a
+            // fresh active Cancel button on the next progress event.
+            var card = document.getElementById('pipe-' + asin);
+            if (card) card.setAttribute('data-cancelling', '1');
+            fetch('/api/downloads/cancel-active/' + encodeURIComponent(asin), { method: 'POST' })
+                .catch(function() {
+                    // Request failed to reach the server (network error, etc.) so
+                    // the server never cancelled the item. Roll back the frozen state
+                    // so SSE progress events resume updating the card normally.
+                    if (card) card.removeAttribute('data-cancelling');
+                    btn.disabled = false;
+                    btn.textContent = 'Cancel';
+                });
         });
 
         connectEventSource();
