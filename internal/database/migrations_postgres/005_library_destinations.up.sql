@@ -20,11 +20,16 @@ CREATE TABLE library_destinations (
     last_health_check_ok  BOOLEAN,
     last_health_check_err TEXT,
 
+    -- length(trim(coalesce(...,''))) > 0 enforces non-empty AND non-NULL.
+    -- Bare length(trim(col))>0 evaluates to NULL when col is NULL, and
+    -- SQL CHECK passes on NULL — so the coalesce is load-bearing.
+    -- Copilot review flagged the original IS NOT NULL form as letting
+    -- empty-string through.
     CHECK (
-        (type = 'plex'     AND url IS NOT NULL AND plex_token IS NOT NULL AND plex_section_id IS NOT NULL) OR
-        (type = 'emby'     AND url IS NOT NULL AND api_key IS NOT NULL    AND library_id IS NOT NULL)      OR
-        (type = 'jellyfin' AND url IS NOT NULL AND api_key IS NOT NULL    AND library_id IS NOT NULL)      OR
-        (type = 'abs'      AND url IS NOT NULL AND api_key IS NOT NULL    AND library_id IS NOT NULL)
+        (type = 'plex'     AND length(trim(coalesce(url,''))) > 0 AND length(trim(coalesce(plex_token,''))) > 0 AND length(trim(coalesce(plex_section_id,''))) > 0) OR
+        (type = 'emby'     AND length(trim(coalesce(url,''))) > 0 AND length(trim(coalesce(api_key,'')))    > 0 AND length(trim(coalesce(library_id,'')))      > 0) OR
+        (type = 'jellyfin' AND length(trim(coalesce(url,''))) > 0 AND length(trim(coalesce(api_key,'')))    > 0 AND length(trim(coalesce(library_id,'')))      > 0) OR
+        (type = 'abs'      AND length(trim(coalesce(url,''))) > 0 AND length(trim(coalesce(api_key,'')))    > 0 AND length(trim(coalesce(library_id,'')))      > 0)
     )
 );
 

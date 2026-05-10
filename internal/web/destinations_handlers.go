@@ -385,6 +385,12 @@ func (s *Server) destinationFromForm(c *gin.Context, existingType string) (*data
 		return nil, errors.New("URL is required")
 	}
 
+	// On create (existingType == "") secrets must be present — otherwise
+	// nullableStr would persist NULL and the DB CHECK constraint would
+	// reject with a generic 500. We want a clear 400 with a user-facing
+	// reason. On edit (existingType != "") the caller carries the saved
+	// secret over when the form leaves it blank, so we don't gate here.
+	creating := existingType == ""
 	switch d.Type {
 	case database.LibraryDestinationTypePlex:
 		d.PlexToken = strings.TrimSpace(c.PostForm("plex_token"))
@@ -392,14 +398,18 @@ func (s *Server) destinationFromForm(c *gin.Context, existingType string) (*data
 		if d.PlexSectionID == "" {
 			return nil, errors.New("Plex section ID is required")
 		}
-		// PlexToken may be empty on edit — caller carries it over.
+		if creating && d.PlexToken == "" {
+			return nil, errors.New("Plex token is required")
+		}
 	case database.LibraryDestinationTypeEmby, database.LibraryDestinationTypeJellyfin, database.LibraryDestinationTypeABS:
 		d.APIKey = strings.TrimSpace(c.PostForm("api_key"))
 		d.LibraryID = strings.TrimSpace(c.PostForm("library_id"))
 		if d.LibraryID == "" {
 			return nil, errors.New("Library ID is required")
 		}
-		// APIKey may be empty on edit — caller carries it over.
+		if creating && d.APIKey == "" {
+			return nil, errors.New("API key is required")
+		}
 	}
 	return d, nil
 }

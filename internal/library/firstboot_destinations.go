@@ -116,7 +116,13 @@ func buildSynthesizedDestination(ctx context.Context, db database.Database, t da
 		d.URL = settingOrEnv(ctx, db, "plex_url", "PLEX_URL")
 		d.PlexToken = settingOrEnv(ctx, db, "plex_token", "PLEX_TOKEN")
 		d.PlexSectionID = settingOrEnv(ctx, db, "plex_section_id", "PLEX_SECTION_ID")
-		d.AudiobookPath = settingOrEnv(ctx, db, "plex_section_path", "")
+		// plex_section_path is the SERVER-SIDE library path (target of path
+		// translation in PlexBackend.resolveScanPath), not the audplexus-side
+		// path. Persist it as DestinationPath; leave AudiobookPath empty so
+		// the global libraryDir is the source. Copilot review caught this
+		// inversion — flipping the fields would have shown up wrong in the
+		// "Audplexus-side audiobook path" Settings field for upgrades.
+		d.DestinationPath = settingOrEnv(ctx, db, "plex_section_path", "")
 		// Required-fields gate so the CHECK constraint doesn't reject the row.
 		if d.URL == "" || d.PlexToken == "" || d.PlexSectionID == "" {
 			return nil, nil
@@ -126,7 +132,10 @@ func buildSynthesizedDestination(ctx context.Context, db database.Database, t da
 		d.URL = settingOrEnv(ctx, db, "emby_url", "EMBY_URL")
 		d.APIKey = settingOrEnv(ctx, db, "emby_api_key", "EMBY_API_KEY")
 		d.LibraryID = settingOrEnv(ctx, db, "emby_library_id", "EMBY_LIBRARY_ID")
-		d.AudiobookPath = settingOrEnv(ctx, db, "emby_library_path", "EMBY_LIBRARY_PATH")
+		// emby_library_path is the SERVER-SIDE library path (used by
+		// EmbyBackend.libraryServerPath as the translation target), same
+		// inversion as plex_section_path above. Goes to DestinationPath.
+		d.DestinationPath = settingOrEnv(ctx, db, "emby_library_path", "EMBY_LIBRARY_PATH")
 		if d.URL == "" || d.APIKey == "" || d.LibraryID == "" {
 			return nil, nil
 		}

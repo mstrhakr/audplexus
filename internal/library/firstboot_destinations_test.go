@@ -60,6 +60,7 @@ func TestFirstBootSynthesisCreatesPlexFromLegacySettings(t *testing.T) {
 	_ = db.SetSetting(ctx, "plex_url", "http://plex.lan:32400")
 	_ = db.SetSetting(ctx, "plex_token", "tok")
 	_ = db.SetSetting(ctx, "plex_section_id", "5")
+	_ = db.SetSetting(ctx, "plex_section_path", "/data/audiobooks")
 
 	if err := SynthesizeLibraryDestinationsIfEmpty(ctx, db); err != nil {
 		t.Fatalf("Synthesize: %v", err)
@@ -72,6 +73,15 @@ func TestFirstBootSynthesisCreatesPlexFromLegacySettings(t *testing.T) {
 	if all[0].Type != database.LibraryDestinationTypePlex || all[0].URL != "http://plex.lan:32400" || all[0].PlexToken != "tok" || all[0].PlexSectionID != "5" {
 		t.Errorf("synthesized plex destination wrong: %+v", all[0])
 	}
+	// Server-side path semantics: plex_section_path is the Plex-side library
+	// path (translation target), not the audplexus-side source path. Must
+	// land in DestinationPath, not AudiobookPath. Copilot review caught this.
+	if all[0].DestinationPath != "/data/audiobooks" {
+		t.Errorf("plex_section_path must synthesize into DestinationPath (server-side); got %q", all[0].DestinationPath)
+	}
+	if all[0].AudiobookPath != "" {
+		t.Errorf("AudiobookPath must remain empty so global libraryDir is the source; got %q", all[0].AudiobookPath)
+	}
 }
 
 func TestFirstBootSynthesisCreatesEmbyFromLegacySettings(t *testing.T) {
@@ -82,6 +92,7 @@ func TestFirstBootSynthesisCreatesEmbyFromLegacySettings(t *testing.T) {
 	_ = db.SetSetting(ctx, "emby_url", "http://emby.lan:8096")
 	_ = db.SetSetting(ctx, "emby_api_key", "key")
 	_ = db.SetSetting(ctx, "emby_library_id", "lib1")
+	_ = db.SetSetting(ctx, "emby_library_path", "/media/audiobooks")
 
 	if err := SynthesizeLibraryDestinationsIfEmpty(ctx, db); err != nil {
 		t.Fatalf("Synthesize: %v", err)
@@ -93,6 +104,13 @@ func TestFirstBootSynthesisCreatesEmbyFromLegacySettings(t *testing.T) {
 	}
 	if all[0].URL != "http://emby.lan:8096" || all[0].APIKey != "key" || all[0].LibraryID != "lib1" {
 		t.Errorf("emby destination synthesis wrong: %+v", all[0])
+	}
+	// Same server-side semantics as plex_section_path.
+	if all[0].DestinationPath != "/media/audiobooks" {
+		t.Errorf("emby_library_path must synthesize into DestinationPath (server-side); got %q", all[0].DestinationPath)
+	}
+	if all[0].AudiobookPath != "" {
+		t.Errorf("AudiobookPath must remain empty so global libraryDir is the source; got %q", all[0].AudiobookPath)
 	}
 }
 

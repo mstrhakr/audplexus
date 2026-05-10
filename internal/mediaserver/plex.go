@@ -111,18 +111,19 @@ func (p *PlexBackend) OnBookOrganized(ctx context.Context, book OrganizedBook) [
 	scanCtx, scanCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer scanCancel()
 	scanStart := time.Now()
-	scanPath, scanPathOK := p.resolveScanPath(scanCtx, plexURL, plexToken, sectionID, filepath.Dir(book.LocalPath))
-	switch {
-	case strings.TrimSpace(book.LocalPath) == "":
+	// Short-circuit on empty LocalPath. Calling resolveScanPath with
+	// filepath.Dir("") would yield "." and trigger an unnecessary Plex
+	// section-path fetch + cache write for a request that's going to fail
+	// anyway. Copilot review caught this. Evaluating LocalPath up-front
+	// also keeps the failure outcome's detail self-explanatory.
+	if strings.TrimSpace(book.LocalPath) == "" {
 		outcomes = append(outcomes, Failed(OpScanTrigger, fmt.Errorf("empty local path"), "no path to scan"))
-	case !scanPathOK:
+	} else if scanPath, scanPathOK := p.resolveScanPath(scanCtx, plexURL, plexToken, sectionID, filepath.Dir(book.LocalPath)); !scanPathOK {
 		outcomes = append(outcomes, Failed(OpScanTrigger, fmt.Errorf("section path unavailable"), "plex section path could not be resolved"))
-	default:
-		if err := p.triggerSectionScan(scanCtx, plexURL, plexToken, sectionID, scanPath); err != nil {
-			outcomes = append(outcomes, Failed(OpScanTrigger, err, "plex returned non-2xx on /refresh"))
-		} else {
-			outcomes = append(outcomes, Succeeded(OpScanTrigger, "section scan triggered for "+scanPath, "", time.Since(scanStart)))
-		}
+	} else if err := p.triggerSectionScan(scanCtx, plexURL, plexToken, sectionID, scanPath); err != nil {
+		outcomes = append(outcomes, Failed(OpScanTrigger, err, "plex returned non-2xx on /refresh"))
+	} else {
+		outcomes = append(outcomes, Succeeded(OpScanTrigger, "section scan triggered for "+scanPath, "", time.Since(scanStart)))
 	}
 
 	// 2 + 3: only if the book has a series. Otherwise nothing further to do.

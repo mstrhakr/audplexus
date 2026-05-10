@@ -92,6 +92,32 @@ func TestCreatePlexDestinationRejectsMissingRequired(t *testing.T) {
 	}
 }
 
+// TestCreateRejectsWhitespaceOnlyValues guards the post-Copilot CHECK
+// constraint tightening: bare length(trim(col))>0 would silently accept
+// NULL columns because SQL CHECK passes on NULL. The coalesce(...,'')
+// wrapping is what makes "  " and NULL both fail the constraint.
+func TestCreateRejectsWhitespaceOnlyValues(t *testing.T) {
+	db := newTestSQLite(t)
+	ctx := context.Background()
+
+	// All required fields present but URL is whitespace-only — CHECK
+	// must still reject. nullableStr trims to "" → NULL → coalesce(NULL,'')
+	// → length(trim('')) = 0 → constraint fails. If anyone replaces
+	// nullableStr with a passthrough later, this test is the tripwire.
+	d := &LibraryDestination{
+		ID:            uuid.NewString(),
+		DisplayName:   "Whitespace URL",
+		Type:          LibraryDestinationTypePlex,
+		Enabled:       true,
+		URL:           "   ",
+		PlexToken:     "tok",
+		PlexSectionID: "5",
+	}
+	if err := db.CreateLibraryDestination(ctx, d); err == nil {
+		t.Fatal("expected CHECK to reject whitespace-only URL; got nil")
+	}
+}
+
 func TestUpdateLibraryDestination(t *testing.T) {
 	db := newTestSQLite(t)
 	ctx := context.Background()
