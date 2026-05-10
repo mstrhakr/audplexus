@@ -68,6 +68,10 @@ func resolveLegacyMediaServerType(ctx context.Context, db database.Database) dat
 		return database.LibraryDestinationTypePlex
 	case database.LibraryDestinationTypeEmby:
 		return database.LibraryDestinationTypeEmby
+	case database.LibraryDestinationTypeJellyfin:
+		return database.LibraryDestinationTypeJellyfin
+	case database.LibraryDestinationTypeABS:
+		return database.LibraryDestinationTypeABS
 	default:
 		// Be conservative: don't synthesize a destination for an unknown
 		// legacy value. Worst case the user adds one via Settings.
@@ -99,6 +103,22 @@ func buildSynthesizedDestination(ctx context.Context, db database.Database, t da
 		d.APIKey = settingOrEnv(ctx, db, "emby_api_key", "EMBY_API_KEY")
 		d.LibraryID = settingOrEnv(ctx, db, "emby_library_id", "EMBY_LIBRARY_ID")
 		d.AudiobookPath = settingOrEnv(ctx, db, "emby_library_path", "EMBY_LIBRARY_PATH")
+		if d.URL == "" || d.APIKey == "" || d.LibraryID == "" {
+			return nil, nil
+		}
+	case database.LibraryDestinationTypeJellyfin:
+		d.DisplayName = "Jellyfin"
+		d.URL = settingOrEnv(ctx, db, "jellyfin_url", "JELLYFIN_URL")
+		d.APIKey = settingOrEnv(ctx, db, "jellyfin_api_key", "JELLYFIN_API_KEY")
+		d.LibraryID = settingOrEnv(ctx, db, "jellyfin_library_id", "JELLYFIN_LIBRARY_ID")
+		if d.URL == "" || d.APIKey == "" || d.LibraryID == "" {
+			return nil, nil
+		}
+	case database.LibraryDestinationTypeABS:
+		d.DisplayName = "Audiobookshelf"
+		d.URL = settingOrEnv(ctx, db, "abs_url", "ABS_URL")
+		d.APIKey = settingOrEnv(ctx, db, "abs_api_key", "ABS_API_KEY")
+		d.LibraryID = settingOrEnv(ctx, db, "abs_library_id", "ABS_LIBRARY_ID")
 		if d.URL == "" || d.APIKey == "" || d.LibraryID == "" {
 			return nil, nil
 		}

@@ -123,7 +123,7 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Str("type", string(mediaServerType)).Msg("failed to construct media server backend")
 	}
-	log.Info().Str("backend", string(mediaServerType)).Msg("legacy single-backend selected for reconcile / diagnostics")
+	log.Info().Str("backend", string(mediaServerType)).Msg("legacy single-backend resolved (fallback only — fan-out via DestinationManager when destinations are configured)")
 
 	// Multi-destination fan-out for per-book post-organize work. Reads from
 	// library_destinations, runs each destination concurrently (bounded),

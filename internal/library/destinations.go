@@ -26,11 +26,6 @@ type DestinationManager struct {
 	audnexus       *audnexus.Client
 	libraryDir     string
 	maxConcurrency int
-
-	// Cache of constructed Backends keyed by destination ID. Currently
-	// rebuilt every fan-out call to keep the code small; can switch to
-	// invalidate-on-update if construction becomes expensive.
-	mu sync.Mutex
 }
 
 // NewDestinationManager builds a manager. maxConcurrency caps the number
@@ -60,7 +55,7 @@ func (m *DestinationManager) ListEnabled(ctx context.Context) []DestinationBacke
 	out := make([]DestinationBackend, 0, len(rows))
 	for _, r := range rows {
 		row := r
-		b, err := m.buildBackend(&row)
+		b, err := m.BuildBackend(&row)
 		if err != nil {
 			dlLog.Warn().Err(err).Str("destination_id", row.ID).Str("type", string(row.Type)).Msg("destinations: build backend failed; skipping")
 			continue
@@ -109,6 +104,11 @@ func (m *DestinationManager) FanOut(ctx context.Context, book mediaserver.Organi
 			defer cancel()
 
 			outcomes := d.Backend.OnBookOrganized(perDestCtx, book)
+			// Intentionally pass the OUTER ctx (not perDestCtx) here:
+			// state recording must succeed even if the per-destination
+			// timeout has fired (we still want to persist the failure
+			// outcome in book_library_destinations so reconcile can see
+			// it). perDestCtx is for the network calls, not for our DB.
 			m.recordOutcomes(ctx, book.BookID, &d.Row, outcomes)
 			results <- DestinationFanOutResult{Destination: d.Row, Outcomes: outcomes}
 		}(db)
@@ -347,12 +347,16 @@ func encodePerOpOutcomes(outcomes []mediaserver.Outcome, at time.Time) string {
 	return string(b)
 }
 
-// buildBackend constructs a mediaserver.Backend instance for a single
+// BuildBackend constructs a mediaserver.Backend instance for a single
 // destination row. Each backend is bound to its row via WithDestination,
 // so the row's URL/api_key/library_id columns drive the runtime config —
 // settings-table fallback only kicks in for the legacy single-backend
 // code path that doesn't pass through here.
-func (m *DestinationManager) buildBackend(row *database.LibraryDestination) (mediaserver.Backend, error) {
+//
+// Exported so other callers (web server's dashboard summary, the
+// destination Test endpoint) can construct backends from a row without
+// duplicating the type-dispatch.
+func (m *DestinationManager) BuildBackend(row *database.LibraryDestination) (mediaserver.Backend, error) {
 	switch row.Type {
 	case database.LibraryDestinationTypePlex:
 		return mediaserver.NewPlex(m.db, m.libraryDir).WithDestination(row), nil

@@ -601,10 +601,17 @@ func (s *Server) destinationSummaries(ctx context.Context, completeBooks int) []
 	return out
 }
 
-// buildDestinationBackend constructs a Backend bound to the given row.
-// Same shape as DestinationManager.buildBackend; duplicated here because
-// the dashboard handler doesn't go through the download manager.
+// buildDestinationBackend delegates to DestinationManager.BuildBackend
+// when the manager is available (multi-destination installs), so the
+// type-dispatch lives in exactly one place. Falls back to direct
+// construction only when no DownloadManager has been wired up — which
+// shouldn't happen in normal operation but keeps server.go boot-safe.
 func (s *Server) buildDestinationBackend(row *database.LibraryDestination) (mediaserver.Backend, error) {
+	if s.downloads != nil {
+		if dm := s.downloads.Destinations(); dm != nil {
+			return dm.BuildBackend(row)
+		}
+	}
 	switch row.Type {
 	case database.LibraryDestinationTypePlex:
 		return mediaserver.NewPlex(s.db, s.audiobooksPath).WithDestination(row), nil
