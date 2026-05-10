@@ -31,19 +31,19 @@ func TestDestinationManagerFanOutRecordsPerDestinationState(t *testing.T) {
 		t.Fatalf("UpsertBook: %v", err)
 	}
 
-	// Create two destinations: one Plex, one Emby. Both have placeholder
-	// config (no live server reachable), so each backend's OnBookOrganized
-	// should report SkippedNotConfigured (because the backend's settings()
-	// call reads from the DB settings table, not the destination row, until
-	// we wire that in a future PR — for now configured-check is settings-table
-	// based).
+	// Create two destinations with placeholder URLs that DON'T resolve.
+	// Backends now read URL/token/library_id from the destination row
+	// (PR-F's WithDestination binding), so they'll attempt the call and
+	// fail at the DNS/dial layer — outcome is "failed", not "skipped".
+	// That's the correct new contract: row populated → backend tries
+	// → typed Outcome reports the real error.
 	dest1 := &database.LibraryDestination{
 		ID: "dest-plex", DisplayName: "Plex", Type: database.LibraryDestinationTypePlex,
-		Enabled: true, URL: "http://plex", PlexToken: "t", PlexSectionID: "5",
+		Enabled: true, URL: "http://plex.invalid", PlexToken: "t", PlexSectionID: "5",
 	}
 	dest2 := &database.LibraryDestination{
 		ID: "dest-emby", DisplayName: "Emby", Type: database.LibraryDestinationTypeEmby,
-		Enabled: true, URL: "http://emby", APIKey: "k", LibraryID: "1",
+		Enabled: true, URL: "http://emby.invalid", APIKey: "k", LibraryID: "1",
 	}
 	for _, d := range []*database.LibraryDestination{dest1, dest2} {
 		if err := db.CreateLibraryDestination(ctx, d); err != nil {
@@ -80,13 +80,15 @@ func TestDestinationManagerFanOutRecordsPerDestinationState(t *testing.T) {
 		if bd.PerOpOutcomes == "" {
 			t.Errorf("dest=%s per_op_outcomes should be a non-empty JSON object", bd.DestinationID)
 		}
-		if !strings.Contains(bd.PerOpOutcomes, "skipped_not_configured") {
-			// Backends read settings from the DB settings table, which is
-			// empty here, so they fall through to SkippedNotConfigured.
-			// This is the behavior we expect; if it ever becomes
-			// "succeeded" we know we accidentally let the test go to a
-			// real Plex/Emby.
-			t.Errorf("dest=%s expected skipped_not_configured in per_op_outcomes, got %q", bd.DestinationID, bd.PerOpOutcomes)
+		if !strings.Contains(bd.PerOpOutcomes, "\"failed\"") {
+			// Backends now read URL from the destination row. With an
+			// invalid hostname, the scan trigger fails at DNS/dial — that
+			// is the exact contract we want: typed outcome reports the
+			// real failure rather than silently no-op'ing.
+			t.Errorf("dest=%s expected failed status in per_op_outcomes, got %q", bd.DestinationID, bd.PerOpOutcomes)
+		}
+		if bd.SyncState != database.BookDestSyncFailed {
+			t.Errorf("dest=%s expected sync_state=failed, got %q", bd.DestinationID, bd.SyncState)
 		}
 	}
 }

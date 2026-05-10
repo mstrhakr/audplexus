@@ -250,20 +250,20 @@ func encodePerOpOutcomes(outcomes []mediaserver.Outcome, at time.Time) string {
 }
 
 // buildBackend constructs a mediaserver.Backend instance for a single
-// destination row. Backends still read settings from the settings table
-// in this iteration — a future commit moves them to read from the
-// destination row directly so multiple destinations of the same type
-// can have independent config.
+// destination row. Each backend is bound to its row via WithDestination,
+// so the row's URL/api_key/library_id columns drive the runtime config —
+// settings-table fallback only kicks in for the legacy single-backend
+// code path that doesn't pass through here.
 func (m *DestinationManager) buildBackend(row *database.LibraryDestination) (mediaserver.Backend, error) {
 	switch row.Type {
 	case database.LibraryDestinationTypePlex:
-		return mediaserver.NewPlex(m.db, m.libraryDir), nil
+		return mediaserver.NewPlex(m.db, m.libraryDir).WithDestination(row), nil
 	case database.LibraryDestinationTypeEmby:
-		return mediaserver.NewEmby(m.db, m.audnexus, m.libraryDir), nil
+		return mediaserver.NewEmby(m.db, m.audnexus, m.libraryDir).WithDestination(row), nil
 	case database.LibraryDestinationTypeJellyfin:
-		return mediaserver.NewJellyfin(m.db, m.audnexus, m.libraryDir), nil
+		return mediaserver.NewJellyfin(m.db, m.audnexus, m.libraryDir).WithDestination(row), nil
 	case database.LibraryDestinationTypeABS:
-		return mediaserver.NewABS(m.db, m.libraryDir), nil
+		return mediaserver.NewABS(m.db, m.libraryDir).WithDestination(row), nil
 	default:
 		return nil, fmt.Errorf("unsupported destination type: %q", row.Type)
 	}

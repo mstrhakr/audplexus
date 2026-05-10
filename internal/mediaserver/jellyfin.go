@@ -43,6 +43,8 @@ type JellyfinBackend struct {
 
 	adminMu     sync.Mutex
 	adminUserID string
+
+	destination *database.LibraryDestination
 }
 
 // NewJellyfin constructs a Jellyfin backend. audnexusClient may be nil to
@@ -56,6 +58,12 @@ func NewJellyfin(db database.Database, audnexusClient *audnexus.Client, libraryD
 		db: db, audnexus: audnexusClient, libraryDir: libraryDir,
 		clientID: "audplexus-" + strings.ToLower(strings.TrimSpace(hostname)),
 	}
+}
+
+// WithDestination binds the backend to a specific library_destinations row.
+func (j *JellyfinBackend) WithDestination(d *database.LibraryDestination) *JellyfinBackend {
+	j.destination = d
+	return j
 }
 
 func (j *JellyfinBackend) Name() string { return string(TypeJellyfin) }
@@ -82,6 +90,11 @@ func (j *JellyfinBackend) Configured(ctx context.Context) bool {
 }
 
 func (j *JellyfinBackend) settings(ctx context.Context) (string, string, string) {
+	if j.destination != nil {
+		return strings.TrimSpace(j.destination.URL),
+			strings.TrimSpace(j.destination.APIKey),
+			strings.TrimSpace(j.destination.LibraryID)
+	}
 	u, _ := j.db.GetSetting(ctx, "jellyfin_url")
 	k, _ := j.db.GetSetting(ctx, "jellyfin_api_key")
 	l, _ := j.db.GetSetting(ctx, "jellyfin_library_id")

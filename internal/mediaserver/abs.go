@@ -27,12 +27,20 @@ import (
 type ABSBackend struct {
 	db         database.Database
 	libraryDir string
+
+	destination *database.LibraryDestination
 }
 
 // NewABS constructs an ABS backend. audnexus client is not used by ABS
 // (ABS does its own Audnexus enrichment internally via /api/items/{id}/match).
 func NewABS(db database.Database, libraryDir string) *ABSBackend {
 	return &ABSBackend{db: db, libraryDir: libraryDir}
+}
+
+// WithDestination binds the backend to a specific library_destinations row.
+func (a *ABSBackend) WithDestination(d *database.LibraryDestination) *ABSBackend {
+	a.destination = d
+	return a
 }
 
 func (a *ABSBackend) Name() string { return string(TypeABS) }
@@ -56,6 +64,11 @@ func (a *ABSBackend) Configured(ctx context.Context) bool {
 }
 
 func (a *ABSBackend) settings(ctx context.Context) (string, string, string) {
+	if a.destination != nil {
+		return strings.TrimSpace(a.destination.URL),
+			strings.TrimSpace(a.destination.APIKey),
+			strings.TrimSpace(a.destination.LibraryID)
+	}
 	u, _ := a.db.GetSetting(ctx, "abs_url")
 	k, _ := a.db.GetSetting(ctx, "abs_api_key")
 	l, _ := a.db.GetSetting(ctx, "abs_library_id")

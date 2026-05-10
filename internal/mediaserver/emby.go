@@ -33,12 +33,22 @@ type EmbyBackend struct {
 
 	adminMu     sync.Mutex
 	adminUserID string // cached id of an administrator user, used for item updates
+
+	// destination, if set, overrides the settings-table lookup so multiple
+	// Emby destinations can have independent config.
+	destination *database.LibraryDestination
 }
 
 // NewEmby constructs an Emby backend. audnexusClient may be nil to disable
 // audnexus-sourced enrichment (author images).
 func NewEmby(db database.Database, audnexusClient *audnexus.Client, libraryDir string) *EmbyBackend {
 	return &EmbyBackend{db: db, audnexus: audnexusClient, libraryDir: libraryDir}
+}
+
+// WithDestination binds the backend to a specific library_destinations row.
+func (e *EmbyBackend) WithDestination(d *database.LibraryDestination) *EmbyBackend {
+	e.destination = d
+	return e
 }
 
 func (e *EmbyBackend) Name() string { return string(TypeEmby) }
@@ -67,6 +77,11 @@ func (e *EmbyBackend) Configured(ctx context.Context) bool {
 
 // settings returns (baseURL, apiKey, libraryID).
 func (e *EmbyBackend) settings(ctx context.Context) (string, string, string) {
+	if e.destination != nil {
+		return strings.TrimSpace(e.destination.URL),
+			strings.TrimSpace(e.destination.APIKey),
+			strings.TrimSpace(e.destination.LibraryID)
+	}
 	u, _ := e.db.GetSetting(ctx, "emby_url")
 	k, _ := e.db.GetSetting(ctx, "emby_api_key")
 	l, _ := e.db.GetSetting(ctx, "emby_library_id")

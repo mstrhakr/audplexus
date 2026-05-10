@@ -22,11 +22,25 @@ type PlexBackend struct {
 	db         database.Database
 	libraryDir string
 	clientID   string
+
+	// destination, if set, overrides the settings-table lookup so multiple
+	// Plex destinations can have independent config. Settings-table fallback
+	// preserves the legacy single-backend code path.
+	destination *database.LibraryDestination
 }
 
 // NewPlex constructs a Plex backend. clientID is auto-derived from hostname.
 func NewPlex(db database.Database, libraryDir string) *PlexBackend {
 	return &PlexBackend{db: db, libraryDir: libraryDir, clientID: buildPlexClientID()}
+}
+
+// WithDestination binds the backend to a specific library_destinations row.
+// settings() reads URL/Token/SectionID from the row instead of the settings
+// table, so two Plex destinations can have independent config. Returns the
+// receiver so callers can chain.
+func (p *PlexBackend) WithDestination(d *database.LibraryDestination) *PlexBackend {
+	p.destination = d
+	return p
 }
 
 func buildPlexClientID() string {
@@ -58,6 +72,14 @@ func (p *PlexBackend) Configured(ctx context.Context) bool {
 }
 
 func (p *PlexBackend) settings(ctx context.Context) (string, string, string) {
+	// Destination-row binding wins. Lets multiple Plex destinations have
+	// independent URL/token/section.
+	if p.destination != nil {
+		return strings.TrimSpace(p.destination.URL),
+			strings.TrimSpace(p.destination.PlexToken),
+			strings.TrimSpace(p.destination.PlexSectionID)
+	}
+	// Legacy single-backend path: settings table + env-var fallback.
 	u, _ := p.db.GetSetting(ctx, "plex_url")
 	t, _ := p.db.GetSetting(ctx, "plex_token")
 	s, _ := p.db.GetSetting(ctx, "plex_section_id")
