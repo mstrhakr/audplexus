@@ -244,6 +244,7 @@ func (s *Server) setupTemplates() {
 			}
 			return template.HTML(htmlPolicy.Sanitize(raw))
 		},
+		"hasSuffix": strings.HasSuffix,
 	}
 
 	// Parse the base layout once as a clonable template
@@ -358,6 +359,7 @@ func (s *Server) setupRoutes() {
 		api.POST("/downloads/queue-all", s.handleQueueAll)
 		api.POST("/downloads/queue/:asin", s.handleQueueBook)
 		api.POST("/downloads/cancel/:id", s.handleCancelDownload)
+		api.POST("/downloads/cancel-active/:asin", s.handleCancelActiveDownload)
 		api.POST("/downloads/retry/:id", s.handleRetryDownload)
 		api.POST("/downloads/retry-all", s.handleRetryAllDownloads)
 		api.POST("/downloads/pause", s.handlePauseDownloads)
@@ -376,6 +378,9 @@ func (s *Server) setupRoutes() {
 		api.GET("/diagnostics/plex-items", s.handleDiagnosticsPlexItems)
 		api.POST("/downloads/redownload/:asin", s.handleRedownload)
 		api.POST("/diagnostics/redownload-all", s.handleDiagnosticsRedownloadAll)
+
+		// Per-book conversion between m4b and chapter-split mp3.
+		api.POST("/books/:id/convert", s.handleConvertBook)
 	}
 }
 
@@ -1416,6 +1421,24 @@ func (s *Server) handleCancelDownload(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
 }
 
+// handleCancelActiveDownload aborts the in-flight pipeline stage for the
+// given ASIN (download/decrypt/process/convert). Use this when a normal
+// queue cancel can't help because the work is already running and possibly
+// stuck on a stalled network read.
+func (s *Server) handleCancelActiveDownload(c *gin.Context) {
+	asin := strings.TrimSpace(c.Param("asin"))
+	if asin == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing asin"})
+		return
+	}
+	if !s.downloads.CancelActiveDownload(asin) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no active pipeline item for that asin"})
+		return
+	}
+	webLog.Info().Str("asin", asin).Msg("cancelled active pipeline item via UI")
+	c.JSON(http.StatusOK, gin.H{"status": "cancelling"})
+}
+
 // handleRetryDownload resets a failed download back to pending.
 func (s *Server) handleRetryDownload(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -1532,7 +1555,10 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 		if strings.TrimSpace(current) == value {
 			return false
 		}
-		_ = s.db.SetSetting(ctx, key, value)
+		if err := s.db.SetSetting(ctx, key, value); err != nil {
+			webLog.Error().Err(err).Str("key", key).Msg("failed to persist setting")
+			return false
+		}
 		return true
 	}
 
@@ -1553,9 +1579,21 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 			restartRequired = true
 		}
 	}
-	if format := c.PostForm("output_format"); format != "" {
-		if setSetting("output_format", format) {
-			restartRequired = true
+	if raw := c.PostForm("output_format"); raw != "" {
+		// Normalize and reject anything that isn't a supported format so we
+		// never persist a value the runtime will silently ignore.
+		format := strings.ToLower(strings.TrimSpace(raw))
+		if format != "m4b" && format != "mp3" {
+			webLog.Warn().Str("value", raw).Msg("ignoring invalid output_format")
+		} else {
+			current, _ := s.db.GetSetting(ctx, "output_format")
+			if strings.TrimSpace(current) == format {
+				s.downloads.SetOutputFormat(format)
+			} else if err := s.db.SetSetting(ctx, "output_format", format); err != nil {
+				webLog.Error().Err(err).Str("key", "output_format").Msg("failed to persist setting")
+			} else {
+				s.downloads.SetOutputFormat(format)
+			}
 		}
 	}
 	if _, ok := c.GetPostForm("download_concurrency"); ok {
@@ -1607,6 +1645,50 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 		return
 	}
 	c.Redirect(http.StatusSeeOther, "/settings")
+}
+
+// removeBookPath deletes the stored book path regardless of whether it points
+// to a single file or a directory of chapter files. It also removes the parent
+// directory when it becomes empty (but never removes the library root).
+func (s *Server) removeBookPath(path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			webLog.Warn().Err(err).Str("path", path).Msg("failed to stat old book path")
+		}
+		return
+	}
+
+	if fi.IsDir() {
+		if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
+			webLog.Warn().Err(err).Str("path", path).Msg("failed to remove old book directory")
+			return
+		}
+	} else {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			webLog.Warn().Err(err).Str("path", path).Msg("failed to remove old book file")
+			return
+		}
+	}
+
+	parentDir := filepath.Dir(filepath.Clean(path))
+	rootDir := filepath.Clean(s.audiobooksPath)
+	if parentDir == "" || parentDir == rootDir {
+		return
+	}
+	entries, err := os.ReadDir(parentDir)
+	if err == nil && len(entries) == 0 {
+		if err := os.Remove(parentDir); err != nil {
+			webLog.Warn().Err(err).Str("path", parentDir).Msg("failed to remove empty directory")
+		} else {
+			webLog.Info().Str("path", parentDir).Msg("removed empty directory")
+		}
+	}
 }
 
 // handleRestart requests process shutdown so the container/service can restart it.
@@ -2143,27 +2225,8 @@ func (s *Server) handleRedownload(c *gin.Context) {
 		return
 	}
 
-	// Delete the old file and folder if they exist
-	if book.FilePath != "" {
-		// First remove the file itself
-		if err := os.Remove(book.FilePath); err != nil && !os.IsNotExist(err) {
-			webLog.Warn().Err(err).Str("path", book.FilePath).Msg("failed to remove old file")
-		}
-
-		// Then check if the parent folder is empty and remove it
-		parentDir := filepath.Dir(book.FilePath)
-		if parentDir != "" && parentDir != s.audiobooksPath {
-			entries, err := os.ReadDir(parentDir)
-			if err == nil && len(entries) == 0 {
-				// Directory is empty, remove it
-				if err := os.Remove(parentDir); err != nil {
-					webLog.Warn().Err(err).Str("path", parentDir).Msg("failed to remove empty directory")
-				} else {
-					webLog.Info().Str("path", parentDir).Msg("removed empty book directory")
-				}
-			}
-		}
-	}
+	// Delete the old file or directory tree if it exists.
+	s.removeBookPath(book.FilePath)
 
 	// Reset book status to "new" so it can be re-downloaded
 	book.Status = database.BookStatusNew
@@ -2195,6 +2258,51 @@ func (s *Server) handleRedownload(c *gin.Context) {
 	})
 }
 
+// handleConvertBook converts an existing book between single-file m4b and
+// chapter-split mp3 layouts in place.
+func (s *Server) handleConvertBook(c *gin.Context) {
+	// Convert is a long-running operation; detach from the HTTP request
+	// context so navigating away or closing the tab doesn't cancel the
+	// in-flight transcode. The user can still abort via the Cancel
+	// button which talks to a separate cancel endpoint.
+	ctx := context.Background()
+
+	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid book id"})
+		return
+	}
+
+	target := strings.TrimSpace(c.PostForm("format"))
+	if target == "" {
+		target = strings.TrimSpace(c.Query("format"))
+	}
+	if target == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing target format"})
+		return
+	}
+
+	if err := s.downloads.ConvertBook(ctx, id, target); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, library.ErrConvertInProgress) {
+			status = http.StatusConflict
+		}
+		webLog.Error().Err(err).Int64("book_id", id).Str("target", target).Msg("convert failed")
+		if c.GetHeader("HX-Request") == "true" {
+			c.HTML(status, "settings_saved.html", gin.H{"Message": "Convert failed: " + err.Error()})
+			return
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	if c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": fmt.Sprintf("Converted to %s", target)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "format": target})
+}
+
 // handleDiagnosticsRedownloadAll redownloads only the problem books shown on the diagnostics page.
 func (s *Server) handleDiagnosticsRedownloadAll(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -2221,19 +2329,8 @@ func (s *Server) handleDiagnosticsRedownloadAll(c *gin.Context) {
 			continue
 		}
 
-		// Delete old file if it exists
-		if book.FilePath != "" {
-			if err := os.Remove(book.FilePath); err != nil && !os.IsNotExist(err) {
-				webLog.Warn().Err(err).Str("path", book.FilePath).Msg("failed to remove old file")
-			}
-			parentDir := filepath.Dir(book.FilePath)
-			if parentDir != "" && parentDir != s.audiobooksPath {
-				entries, err := os.ReadDir(parentDir)
-				if err == nil && len(entries) == 0 {
-					_ = os.Remove(parentDir)
-				}
-			}
-		}
+		// Delete old file or directory tree if it exists.
+		s.removeBookPath(book.FilePath)
 
 		// Reset book status
 		book.Status = database.BookStatusNew

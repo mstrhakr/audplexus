@@ -22,7 +22,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /audplexus ./cmd/server
 
 # Runtime stage
-FROM alpine:3.19
+FROM alpine:3.23
 
 RUN apk add --no-cache ffmpeg ca-certificates tzdata su-exec
 

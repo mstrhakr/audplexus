@@ -48,7 +48,24 @@ func NewFFmpeg(configDir string) (*FFmpeg, error) {
 
 // run executes an ffmpeg command and returns combined output on error.
 func (f *FFmpeg) run(args ...string) error {
-	cmd := exec.Command(f.binPath, args...)
+	return f.runOptions(false, args...)
+}
+
+// runTranscode is run() with -hide_banner / -nostats / -loglevel error
+// added so ffmpeg's stderr stays quiet during long re-encodes. Without
+// these flags ffmpeg fires hundreds of progress lines per second and
+// the parent buffer accumulates into the gigabytes for a 10-hour book.
+func (f *FFmpeg) runTranscode(args ...string) error {
+	return f.runOptions(true, args...)
+}
+
+func (f *FFmpeg) runOptions(quiet bool, args ...string) error {
+	finalArgs := args
+	if quiet {
+		finalArgs = append([]string{"-hide_banner", "-nostats", "-loglevel", "error"}, args...)
+	}
+
+	cmd := exec.Command(f.binPath, finalArgs...)
 
 	// Log command with sensitive info redacted
 	safeArgs := make([]string, len(args))
@@ -62,14 +79,57 @@ func (f *FFmpeg) run(args ...string) error {
 	fullCmd := append([]string{f.binPath}, safeArgs...)
 	ffmpegLog.Debug().Strs("cmd", fullCmd).Msg("executing ffmpeg")
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		ffmpegLog.Error().Err(err).Str("output", strings.TrimSpace(string(output))).Msg("ffmpeg command failed")
-		return fmt.Errorf("ffmpeg failed: %w\noutput: %s", err, strings.TrimSpace(string(output)))
+	// Capture only the tail of stderr (up to 64 KB) on error rather than
+	// buffering the entire stream. ffmpeg's stderr can grow into the
+	// gigabytes during a long re-encode; we only need the last few KB
+	// for diagnostics. Stdout is discarded since these invocations
+	// don't write meaningful stdout (runWithProgress is the path that
+	// captures progress via -progress pipe:1).
+	tail := newTailWriter(64 * 1024)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = tail
+	if err := cmd.Run(); err != nil {
+		out := strings.TrimSpace(tail.String())
+		ffmpegLog.Error().Err(err).Str("output", out).Msg("ffmpeg command failed")
+		return fmt.Errorf("ffmpeg failed: %w\noutput: %s", err, out)
 	}
 	ffmpegLog.Trace().Msg("ffmpeg command succeeded")
 	return nil
 }
+
+// tailWriter is an io.Writer that retains only the last `size` bytes
+// written to it, dropping older bytes from the head. Used to capture a
+// bounded slice of ffmpeg stderr for error reporting without holding
+// the whole stream in memory.
+//
+// Not safe for concurrent Write calls. exec.Cmd serializes writes from
+// a single child's stderr pipe, so this is fine for our use; do not
+// share an instance across goroutines.
+type tailWriter struct {
+	buf []byte
+	max int
+}
+
+func newTailWriter(max int) *tailWriter {
+	return &tailWriter{max: max}
+}
+
+func (t *tailWriter) Write(p []byte) (int, error) {
+	if len(p) >= t.max {
+		// Single write bigger than the window — keep just the tail.
+		t.buf = append(t.buf[:0], p[len(p)-t.max:]...)
+		return len(p), nil
+	}
+	t.buf = append(t.buf, p...)
+	if over := len(t.buf) - t.max; over > 0 {
+		// Slide the window forward by `over` bytes.
+		copy(t.buf, t.buf[over:])
+		t.buf = t.buf[:t.max]
+	}
+	return len(p), nil
+}
+
+func (t *tailWriter) String() string { return string(t.buf) }
 
 // runWithProgress executes ffmpeg with `-progress pipe:1` and streams parsed progress.
 func (f *FFmpeg) runWithProgress(args []string, cb func(ProgressInfo)) error {
