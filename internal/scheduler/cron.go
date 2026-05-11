@@ -18,6 +18,7 @@ type Scheduler struct {
 	dlMgr     *library.DownloadManager
 	syncEntry cron.EntryID
 	syncMode  library.SyncMode
+	autoQueue bool
 }
 
 // New creates a new scheduler.
@@ -27,7 +28,14 @@ func New(syncSvc *library.SyncService, dlMgr *library.DownloadManager) *Schedule
 		syncSvc:  syncSvc,
 		dlMgr:    dlMgr,
 		syncMode: library.SyncModeFull, // default: full sync for backward compatibility
+		autoQueue: false,
 	}
+}
+
+// SetAutoQueueNew controls whether scheduled sync automatically queues new books.
+func (s *Scheduler) SetAutoQueueNew(enabled bool) {
+	s.autoQueue = enabled
+	schedLog.Info().Bool("enabled", enabled).Msg("scheduled auto-queue-new set")
 }
 
 // SetSyncMode sets the mode used for scheduled syncs (quick or full).
@@ -91,16 +99,13 @@ func (s *Scheduler) runSync() {
 	}
 	schedLog.Info().Int("added", added).Str("mode", string(s.syncMode)).Msg("scheduled sync complete")
 
-	if added > 0 {
-		// Queue new books in batches (2x download workers) to avoid overwhelming the system
-		// The remaining books will be queued as downloads complete
-		queueLimit := 12 // Assuming ~6 download workers, queue 12 at a time
-		queued, err := s.dlMgr.QueueNewBooksLimit(ctx, queueLimit)
+	if added > 0 && s.autoQueue {
+		queued, err := s.dlMgr.QueueNewBooks(ctx)
 		if err != nil {
 			schedLog.Error().Err(err).Msg("failed to queue new books after sync")
 			return
 		}
-		schedLog.Info().Int("queued", queued).Int("limit", queueLimit).Msg("queued new books after sync")
+		schedLog.Info().Int("queued", queued).Msg("queued new books after sync")
 	}
 }
 

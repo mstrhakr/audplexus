@@ -138,6 +138,7 @@ Key environment variables:
 | `EMBY_LIBRARY_PATH` | | Optional override of the path used to read the library; auto-detected via `VirtualFolders` on first scan |
 | `SYNC_SCHEDULE` | `0 */6 * * *` | Cron schedule for library sync |
 | `SYNC_MODE` | `full` | Scheduled sync mode (`quick` or `full`) |
+| `SYNC_AUTO_QUEUE_NEW` | `false` | Automatically append newly discovered books (`new` status) to the download queue after sync |
 | `PUID` | | Unraid-style runtime UID override (used when container starts as root) |
 | `PGID` | | Unraid-style runtime GID override (used when container starts as root) |
 | `TAKE_OWNERSHIP` | `false` | If `true`, recursively `chown`s mounted dirs on startup before dropping privileges |

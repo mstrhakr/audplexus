@@ -222,6 +222,16 @@
             </div>
 
             <div class="form-group">
+                <label for="sync_auto_queue_new">Auto-add New Books To Queue</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="sync_auto_queue_new" name="sync_auto_queue_new" value="true" {{if .SyncAutoQueueNew}}checked{{end}}>
+                    <span class="toggle-slider"></span>
+                </label>
+                <input type="hidden" name="sync_auto_queue_new_sent" value="1">
+                <small>When enabled, any book discovered with <code>new</code> status is automatically appended to the download queue after sync.</small>
+            </div>
+
+            <div class="form-group">
                 <label for="output_format">Output Format</label>
                 <select id="output_format" name="output_format">
                     <option value="m4b" {{if eq .OutputFormat "m4b"}}selected{{end}}>M4B (Single File)</option>
@@ -290,7 +300,7 @@
                 <small>0 = auto. Controls metadata/organize stage parallelism.</small>
             </div>
 
-            <p class="muted">Note: sync schedule/mode and worker concurrency changes are applied on next restart.</p>
+            <p class="muted">Note: sync schedule/mode, auto-queue-new, and worker concurrency changes are applied on next restart.</p>
 
             <button type="submit" class="btn btn-primary">Save Settings</button>
             <span id="save-status"></span>

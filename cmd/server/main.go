@@ -159,6 +159,7 @@ func main() {
 	if cfg.Sync.Mode != "" {
 		sched.SetSyncMode(cfg.Sync.Mode)
 	}
+	sched.SetAutoQueueNew(cfg.Sync.AutoQueueNew)
 	if cfg.Sync.Enabled && cfg.Sync.Schedule != "" {
 		if err := sched.SetSyncSchedule(cfg.Sync.Schedule); err != nil {
 			log.Error().Err(err).Str("schedule", cfg.Sync.Schedule).Msg("invalid sync schedule")
@@ -240,6 +241,7 @@ func applyDBSettings(db database.Database, cfg *config.Config) {
 	cfg.Sync.Schedule = resolveStringSetting(ctx, db, "sync_schedule", cfg.Sync.Schedule)
 	cfg.Sync.Enabled = resolveBoolSetting(ctx, db, "sync_enabled", cfg.Sync.Enabled)
 	cfg.Sync.Mode = resolveStringSetting(ctx, db, "sync_mode", cfg.Sync.Mode)
+	cfg.Sync.AutoQueueNew = resolveBoolSetting(ctx, db, library.SettingKeyAutoQueueNewBooks, cfg.Sync.AutoQueueNew)
 
 	cfg.Download.DownloadConcurrency = resolveIntSetting(ctx, db, "download_concurrency", cfg.Download.DownloadConcurrency)
 	cfg.Download.DecryptConcurrency = resolveIntSetting(ctx, db, "decrypt_concurrency", cfg.Download.DecryptConcurrency)

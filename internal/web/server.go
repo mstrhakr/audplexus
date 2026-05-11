@@ -912,6 +912,7 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 	syncSchedule, _ := s.db.GetSetting(ctx, "sync_schedule")
 	syncEnabled := s.settingBool(ctx, "sync_enabled", true)
 	syncMode := s.settingString(ctx, "sync_mode", "full")
+	syncAutoQueueNew := s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)
 	outputFormat, _ := s.db.GetSetting(ctx, "output_format")
 	if outputFormat == "" {
 		outputFormat = "m4b"
@@ -961,6 +962,7 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 		"SyncSchedule":         syncSchedule,
 		"SyncEnabled":          syncEnabled,
 		"SyncMode":             syncMode,
+		"SyncAutoQueueNew":     syncAutoQueueNew,
 		"OutputFormat":         outputFormat,
 		"NativeAudiobooksPath": hostPath,
 		"PlexSectionPath":      plexSectionPath,
@@ -1153,6 +1155,15 @@ func (s *Server) triggerSync(c *gin.Context, mode library.SyncMode) {
 			return
 		}
 		webLog.Info().Int("added", added).Str("mode", string(mode)).Msg("manual sync complete")
+
+		if added > 0 && s.settingBool(context.Background(), library.SettingKeyAutoQueueNewBooks, false) {
+			queued, qErr := s.downloads.QueueNewBooks(context.Background())
+			if qErr != nil {
+				webLog.Error().Err(qErr).Int("added", added).Msg("failed to auto-queue new books after manual sync")
+				return
+			}
+			webLog.Info().Int("added", added).Int("queued", queued).Msg("auto-queued new books after manual sync")
+		}
 	}()
 
 	if c.GetHeader("HX-Request") == "true" {
@@ -1588,6 +1599,12 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 			restartRequired = true
 		}
 	}
+	if _, ok := c.GetPostForm("sync_auto_queue_new_sent"); ok {
+		enabled := c.PostForm("sync_auto_queue_new") == "true"
+		if setSetting(library.SettingKeyAutoQueueNewBooks, strconv.FormatBool(enabled)) {
+			restartRequired = true
+		}
+	}
 	if mode := strings.TrimSpace(c.PostForm("sync_mode")); mode != "" {
 		if setSetting("sync_mode", mode) {
 			restartRequired = true
@@ -1717,6 +1734,14 @@ func (s *Server) handleRestart(c *gin.Context) {
 		if err := proc.Signal(syscall.SIGTERM); err != nil {
 			webLog.Warn().Err(err).Msg("restart SIGTERM failed, attempting interrupt")
 			_ = proc.Signal(os.Interrupt)
+		}
+		if added > 0 && s.settingBool(context.Background(), library.SettingKeyAutoQueueNewBooks, false) {
+			queued, qErr := s.downloads.QueueNewBooks(context.Background())
+			if qErr != nil {
+				webLog.Error().Err(qErr).Int("added", added).Msg("failed to auto-queue new books after manual sync")
+				return
+			}
+			webLog.Info().Int("added", added).Int("queued", queued).Msg("auto-queued new books after manual sync")
 		}
 	}()
 

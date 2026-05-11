@@ -54,9 +54,10 @@ type DownloadConfig struct {
 }
 
 type SyncConfig struct {
-	Schedule string `yaml:"schedule"`
-	Enabled  bool   `yaml:"enabled"`
-	Mode     string `yaml:"mode"` // "quick" or "full" — default "full" for scheduled syncs
+	Schedule     string `yaml:"schedule"`
+	Enabled      bool   `yaml:"enabled"`
+	Mode         string `yaml:"mode"`           // "quick" or "full" — default "full" for scheduled syncs
+	AutoQueueNew bool   `yaml:"auto_queue_new"` // queue all newly-discovered books after sync
 }
 
 type PlexConfig struct {
@@ -86,9 +87,10 @@ func DefaultConfig() *Config {
 			PlexMatchFile: true,
 		},
 		Sync: SyncConfig{
-			Schedule: "0 */6 * * *",
-			Enabled:  true,
-			Mode:     "full",
+			Schedule:     "0 */6 * * *",
+			Enabled:      true,
+			Mode:         "full",
+			AutoQueueNew: false,
 		},
 		Log: LogConfig{
 			Level: "info",
@@ -181,6 +183,14 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := os.Getenv("SYNC_MODE"); v != "" {
 		c.Sync.Mode = v
+	}
+	if v := os.Getenv("SYNC_AUTO_QUEUE_NEW"); v != "" {
+		switch v {
+		case "1", "true", "TRUE", "True":
+			c.Sync.AutoQueueNew = true
+		case "0", "false", "FALSE", "False":
+			c.Sync.AutoQueueNew = false
+		}
 	}
 }
 

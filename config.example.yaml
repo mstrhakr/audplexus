@@ -31,6 +31,7 @@ sync:
   schedule: "0 */6 * * *"  # every 6 hours
   enabled: true
   mode: full  # quick = Audible only; full = Audible + filesystem + Plex scan
+  auto_queue_new: false  # when true, queue every book discovered with new status after sync
 
 plex:
   url: ""
