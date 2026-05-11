@@ -26,8 +26,8 @@
     <div class="download-card" id="pipe-{{.ASIN}}">
         <div class="dl-info">
             <strong>{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</strong>
-            <span class="muted" style="font-size:.85em;margin-left:.5rem">{{.ASIN}}</span>
             <span class="badge badge-warning">downloading {{printf "%.0f" (mul .Progress 100)}}%</span>
+            <div class="dl-info-actions"></div>
         </div>
         <div class="progress-bar">
             <div class="progress-fill" style="width: {{printf "%.0f" (mul .Progress 100)}}%"></div>

@@ -445,8 +445,8 @@
                     }
 
                     var cancelBtn = cancellable
-                        ? '<button class="btn btn-small btn-danger pipe-cancel" data-asin="' + escHTML(d.asin) + '">Cancel</button>'
-                        : '';
+                        ? '<div class="dl-info-actions"><button class="btn btn-small btn-danger pipe-cancel" data-asin="' + escHTML(d.asin) + '">Cancel</button></div>'
+                        : '<div class="dl-info-actions"></div>';
                     card.innerHTML = '<div class="dl-info"><strong>' + escHTML(label) + '</strong>' +
                         '<span class="badge ' + bClass + '">' + escHTML(stageText) +
                         (!isWaiting && pct > 0 ? ' ' + pct + '%' : '') +
