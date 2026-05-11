@@ -2,10 +2,12 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	neturl "net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -246,6 +248,272 @@ func (s *Server) handleDestinationsDiscoverABS(c *gin.Context) {
 	}
 
 	renderDiscoverResult(c, libs, "")
+}
+
+// handleDestinationsPlexPinStart kicks off a plex.tv PIN sign-in flow on
+// behalf of the user. Returns an HTML fragment containing:
+//   - a "Sign in with Plex" button that opens the plex.tv auth URL in
+//     a popup (target="_blank")
+//   - a hidden poller div that re-POSTs to /destinations/plex/pin/poll
+//     every 2s until plex.tv returns an authToken, then swaps in JS
+//     that fills the plex_token form input
+//
+// Token never touches the URL — the popup is just an HTMX-targeted
+// container, and the page extracts the token from the poller response.
+func (s *Server) handleDestinationsPlexPinStart(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	pin, err := s.plexCreatePin(ctx)
+	if err != nil {
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusOK,
+			`<div class="info-box" style="border-color:var(--error);margin:.5rem 0" role="status" aria-live="polite">`+
+				`<strong>Could not start Plex sign-in.</strong> `+htmlEscape(err.Error())+`</div>`)
+		return
+	}
+	authURL := s.plexAuthURL(pin.Code)
+
+	// Render: success banner + popup-open button + self-polling div.
+	// The poller is the HTMX equivalent of the old setInterval — every 2s
+	// it POSTs to /destinations/plex/pin/poll and either replaces itself
+	// with another polling div (still pending) or with the autofill script
+	// (got token).
+	var sb strings.Builder
+	sb.WriteString(`<div class="info-box" style="border-color:var(--accent);margin:.5rem 0" role="status" aria-live="polite">`)
+	sb.WriteString(`<strong>Sign in with Plex.</strong> A new tab will open at plex.tv. After you approve access there, the token will fill in automatically.`)
+	sb.WriteString(`</div>`)
+	sb.WriteString(`<a href="`)
+	sb.WriteString(htmlEscape(authURL))
+	sb.WriteString(`" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" `)
+	sb.WriteString(`onclick="setTimeout(function(){window.focus();},200)">Open plex.tv sign-in</a>`)
+	sb.WriteString(` <span class="muted">— waiting for approval…</span>`)
+	sb.WriteString(renderPlexPollerDiv(pin.ID, pin.Code))
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, sb.String())
+}
+
+// renderPlexPollerDiv emits the self-replacing HTMX poller div. While
+// the PIN is still pending the poll re-renders this same div (HTMX
+// swap="outerHTML"), so the polling continues until the user approves.
+// On approval the response is a script + autofill fragment instead.
+func renderPlexPollerDiv(pinID int64, pinCode string) string {
+	return `<div hx-post="/destinations/plex/pin/poll" ` +
+		`hx-trigger="load delay:2s" ` +
+		`hx-swap="outerHTML" ` +
+		`hx-vals='{"pin_id":"` + strconv.FormatInt(pinID, 10) + `","pin_code":"` + htmlEscape(pinCode) + `"}' ` +
+		`style="display:none"></div>`
+}
+
+// handleDestinationsPlexPinPoll polls plex.tv for the PIN's authToken.
+// Three outcomes, each rendered as an HTML fragment:
+//
+//   - pending → another self-firing poller div (re-poll in 2s)
+//   - approved → autofill script + chained "discover servers" trigger
+//   - error → inline error box, polling stops
+func (s *Server) handleDestinationsPlexPinPoll(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	pinID, err := strconv.ParseInt(strings.TrimSpace(c.PostForm("pin_id")), 10, 64)
+	if err != nil || pinID <= 0 {
+		renderPlexPinError(c, "Invalid PIN ID — start sign-in again.")
+		return
+	}
+	pinCode := strings.TrimSpace(c.PostForm("pin_code"))
+	if pinCode == "" {
+		renderPlexPinError(c, "Missing PIN code — start sign-in again.")
+		return
+	}
+
+	pin, err := s.plexGetPin(ctx, pinID, pinCode)
+	if err != nil {
+		renderPlexPinError(c, "plex.tv error: "+err.Error())
+		return
+	}
+
+	if strings.TrimSpace(pin.AuthToken) == "" {
+		// Still pending — render another poller. HTMX will re-fire it in 2s.
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusOK, renderPlexPollerDiv(pinID, pinCode))
+		return
+	}
+
+	// Got the token. Render a tiny script that fills the form's plex_token
+	// input and then clicks the "Discover servers" button so the URL list
+	// populates in one shot. The script runs as the swapped-in HTML is
+	// parsed; the message replaces the "waiting…" status above.
+	token := pin.AuthToken
+	var sb strings.Builder
+	sb.WriteString(`<div class="info-box" style="border-color:var(--success);margin:.5rem 0" role="status" aria-live="polite">`)
+	sb.WriteString(`<strong>Connected to Plex.</strong> Token saved to the form. Loading your servers…`)
+	sb.WriteString(`</div>`)
+	sb.WriteString(`<script>(function(){`)
+	sb.WriteString(`var t=document.getElementById('plex_token');if(t){t.value=`)
+	sb.WriteString(jsString(token))
+	sb.WriteString(`;t.dispatchEvent(new Event('change',{bubbles:true}));}`)
+	sb.WriteString(`var b=document.getElementById('plex-discover-servers-btn');if(b){b.click();}`)
+	sb.WriteString(`})();</script>`)
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, sb.String())
+}
+
+func renderPlexPinError(c *gin.Context, msg string) {
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK,
+		`<div class="info-box" style="border-color:var(--error);margin:.5rem 0" role="status" aria-live="polite">`+
+			`<strong>Plex sign-in failed.</strong> `+htmlEscape(msg)+`</div>`)
+}
+
+// jsString returns a JSON-encoded JS string literal for safe inline embedding
+// inside a <script> tag. JSON-encoding handles quotes, backslashes, and
+// control chars; the manual <, >, & replacements close the </script>
+// injection path. plex.tv tokens are URL-safe base64 in practice, but
+// belt-and-braces.
+func jsString(s string) string {
+	b, _ := json.Marshal(s)
+	out := strings.ReplaceAll(string(b), `<`, `<`)
+	out = strings.ReplaceAll(out, `>`, `>`)
+	out = strings.ReplaceAll(out, `&`, `&`)
+	return out
+}
+
+// handleDestinationsPlexDiscoverServers calls plex.tv resources API to
+// list the user's owned/shared Plex servers, then renders a <select>
+// of connection URLs. Picking one fills the `url` input via inline
+// onchange (matching the ABS picker pattern).
+func (s *Server) handleDestinationsPlexDiscoverServers(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	token, err := s.resolvePlexTokenFromForm(c)
+	if err != nil {
+		renderPlexDiscoverError(c, err.Error())
+		return
+	}
+
+	servers, err := s.plexListServerOptions(ctx, token)
+	if err != nil {
+		renderPlexDiscoverError(c, "plex.tv error: "+err.Error())
+		return
+	}
+	if len(servers) == 0 {
+		renderPlexDiscoverWarning(c,
+			"No Plex servers visible to this token. Make sure you've claimed at least one server on this Plex account.")
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString(`<div class="info-box" style="border-color:var(--success);margin:.5rem 0" role="status" aria-live="polite">`)
+	sb.WriteString(fmt.Sprintf(`<strong>Found %d connection(s).</strong> Pick one — its URL will fill the URL field.`, len(servers)))
+	sb.WriteString(`</div>`)
+	sb.WriteString(`<label for="plex_server_picker" class="visually-hidden">Discovered Plex servers</label>`)
+	sb.WriteString(`<select id="plex_server_picker" class="form-control" style="margin:.25rem 0 .5rem 0" `)
+	sb.WriteString(`onchange="document.getElementById('url').value=this.value">`)
+	sb.WriteString(`<option value="">— pick a server —</option>`)
+	for _, sv := range servers {
+		label := sv.Name + " — " + sv.URL
+		if sv.Local {
+			label = "[LAN] " + label
+		}
+		sb.WriteString(`<option value="`)
+		sb.WriteString(htmlEscape(sv.URL))
+		sb.WriteString(`">`)
+		sb.WriteString(htmlEscape(label))
+		sb.WriteString(`</option>`)
+	}
+	sb.WriteString(`</select>`)
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, sb.String())
+}
+
+// handleDestinationsPlexDiscoverSections lists library sections on the
+// configured Plex server and renders a <select>. Picking one fills the
+// plex_section_id input.
+func (s *Server) handleDestinationsPlexDiscoverSections(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	token, err := s.resolvePlexTokenFromForm(c)
+	if err != nil {
+		renderPlexDiscoverError(c, err.Error())
+		return
+	}
+	urlStr := strings.TrimSpace(c.PostForm("url"))
+	if urlStr == "" {
+		renderPlexDiscoverError(c, "Enter the Plex server URL first (or pick one with Discover servers).")
+		return
+	}
+	if err := validateRemoteURL(urlStr); err != nil {
+		renderPlexDiscoverError(c, err.Error())
+		return
+	}
+
+	sections, err := s.plexListSections(ctx, urlStr, token)
+	if err != nil {
+		renderPlexDiscoverError(c, "Plex server error: "+err.Error())
+		return
+	}
+	if len(sections) == 0 {
+		renderPlexDiscoverWarning(c,
+			"This Plex server has no library sections visible to your token.")
+		return
+	}
+
+	// Plex's "audiobook" libraries are typically type=artist (music libraries
+	// configured for audiobooks). Show all sections so the user can pick
+	// the right one — filtering would hide a misconfigured library and
+	// leave the user stuck.
+	var sb strings.Builder
+	sb.WriteString(`<div class="info-box" style="border-color:var(--success);margin:.5rem 0" role="status" aria-live="polite">`)
+	sb.WriteString(fmt.Sprintf(`<strong>Found %d section(s).</strong> Pick the one that holds your audiobooks.`, len(sections)))
+	sb.WriteString(`</div>`)
+	sb.WriteString(`<label for="plex_section_picker" class="visually-hidden">Discovered Plex sections</label>`)
+	sb.WriteString(`<select id="plex_section_picker" class="form-control" style="margin:.25rem 0 .5rem 0" `)
+	sb.WriteString(`onchange="document.getElementById('plex_section_id').value=this.value">`)
+	sb.WriteString(`<option value="">— pick a section —</option>`)
+	for _, sec := range sections {
+		label := sec.Title + " (id=" + sec.ID + ", type=" + sec.Type + ")"
+		sb.WriteString(`<option value="`)
+		sb.WriteString(htmlEscape(sec.ID))
+		sb.WriteString(`">`)
+		sb.WriteString(htmlEscape(label))
+		sb.WriteString(`</option>`)
+	}
+	sb.WriteString(`</select>`)
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, sb.String())
+}
+
+// resolvePlexTokenFromForm reads the Plex token from the form, OR for
+// :id-bound routes, from the saved destination row when the form left it
+// blank. Mirrors the secret-carry-over trick in destinationForTest.
+func (s *Server) resolvePlexTokenFromForm(c *gin.Context) (string, error) {
+	token := strings.TrimSpace(c.PostForm("plex_token"))
+	if token != "" {
+		return token, nil
+	}
+	if id := c.Param("id"); id != "" {
+		row, err := s.db.GetLibraryDestination(c.Request.Context(), id)
+		if err == nil && row != nil && strings.TrimSpace(row.PlexToken) != "" {
+			return row.PlexToken, nil
+		}
+	}
+	return "", errors.New("Plex token is required — sign in with Plex or paste a token first.")
+}
+
+func renderPlexDiscoverError(c *gin.Context, msg string) {
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK,
+		`<div class="info-box" style="border-color:var(--error);margin:.5rem 0" role="status" aria-live="polite">`+
+			`<strong>Failed.</strong> `+htmlEscape(msg)+`</div>`)
+}
+
+func renderPlexDiscoverWarning(c *gin.Context, msg string) {
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK,
+		`<div class="info-box" style="border-color:var(--warning);margin:.5rem 0" role="status" aria-live="polite">`+
+			`<strong>Connected, but…</strong> `+htmlEscape(msg)+`</div>`)
 }
 
 // validateRemoteURL checks a user-supplied destination URL before the

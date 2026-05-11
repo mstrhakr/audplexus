@@ -331,7 +331,6 @@ func (s *Server) setupRoutes() {
 	// form values. HTMX-targeted; renders a small HTML fragment.
 	s.router.POST("/destinations/test", s.handleDestinationTest)
 	s.router.POST("/destinations/:id/test", s.handleDestinationTest)
-	s.router.POST("/destinations/discover/abs", s.handleDestinationsDiscoverABS)
 	s.router.GET("/destinations/:id/edit", s.handleDestinationEditForm)
 	s.router.POST("/destinations/:id", s.handleDestinationUpdate)
 	s.router.POST("/destinations/:id/toggle", s.handleDestinationToggle)
@@ -340,6 +339,20 @@ func (s *Server) setupRoutes() {
 	// The same endpoint serves both: confirm=1 actually deletes;
 	// otherwise the confirmation page is rendered.
 	s.router.POST("/destinations/:id/delete", s.handleDestinationDelete)
+
+	// Discovery / sign-in endpoints — per-destination affordances that
+	// auto-populate the form. All HTMX-targeted, all render HTML fragments
+	// with role="status" aria-live="polite" for SR parity.
+	s.router.POST("/destinations/discover/abs", s.handleDestinationsDiscoverABS)
+	s.router.POST("/destinations/plex/pin/start", s.handleDestinationsPlexPinStart)
+	s.router.POST("/destinations/plex/pin/poll", s.handleDestinationsPlexPinPoll)
+	s.router.POST("/destinations/plex/discover/servers", s.handleDestinationsPlexDiscoverServers)
+	s.router.POST("/destinations/plex/discover/sections", s.handleDestinationsPlexDiscoverSections)
+	// :id variants for the edit form — secrets carry over from the saved
+	// row when the form leaves them blank, so the user doesn't have to
+	// retype the API key just to discover.
+	s.router.POST("/destinations/:id/plex/discover/servers", s.handleDestinationsPlexDiscoverServers)
+	s.router.POST("/destinations/:id/plex/discover/sections", s.handleDestinationsPlexDiscoverSections)
 
 	// API / HTMX endpoints
 	api := s.router.Group("/api")
