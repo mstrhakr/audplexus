@@ -344,6 +344,7 @@ func (s *Server) setupRoutes() {
 	// auto-populate the form. All HTMX-targeted, all render HTML fragments
 	// with role="status" aria-live="polite" for SR parity.
 	s.router.POST("/destinations/discover/abs", s.handleDestinationsDiscoverABS)
+	s.router.POST("/destinations/discover/emby", s.handleDestinationsDiscoverEmby)
 	s.router.POST("/destinations/plex/pin/start", s.handleDestinationsPlexPinStart)
 	s.router.POST("/destinations/plex/pin/poll", s.handleDestinationsPlexPinPoll)
 	s.router.POST("/destinations/plex/discover/servers", s.handleDestinationsPlexDiscoverServers)
@@ -353,6 +354,7 @@ func (s *Server) setupRoutes() {
 	// retype the API key just to discover.
 	s.router.POST("/destinations/:id/plex/discover/servers", s.handleDestinationsPlexDiscoverServers)
 	s.router.POST("/destinations/:id/plex/discover/sections", s.handleDestinationsPlexDiscoverSections)
+	s.router.POST("/destinations/:id/discover/emby", s.handleDestinationsDiscoverEmby)
 
 	// API / HTMX endpoints
 	api := s.router.Group("/api")

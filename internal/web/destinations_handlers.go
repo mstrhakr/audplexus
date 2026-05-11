@@ -250,6 +250,159 @@ func (s *Server) handleDestinationsDiscoverABS(c *gin.Context) {
 	renderDiscoverResult(c, libs, "")
 }
 
+// handleDestinationsDiscoverEmby calls /emby/Library/MediaFolders and
+// renders a <select> picker for audiobook libraries. Same shape as the
+// ABS discover handler; filter is CollectionType="audiobooks".
+//
+// Two routes hit this handler:
+//   POST /destinations/discover/emby           — form values
+//   POST /destinations/:id/discover/emby       — saved row, api_key carried
+func (s *Server) handleDestinationsDiscoverEmby(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	urlStr := strings.TrimSpace(c.PostForm("url"))
+	apiKey, err := s.resolveAPIKeyFromForm(c)
+	if err != nil {
+		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", err.Error(), "")
+		return
+	}
+	if urlStr == "" {
+		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", "Enter the Emby URL first.", "")
+		return
+	}
+	if err := validateRemoteURL(urlStr); err != nil {
+		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", err.Error(), "")
+		return
+	}
+
+	libs, err := mediaserver.EmbyListLibraries(ctx, urlStr, apiKey)
+	if err != nil {
+		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", "Could not list libraries: "+err.Error(), "")
+		return
+	}
+	// Adapt EmbyLibrary -> generic shape.
+	rows := make([]mediaServerLibrary, 0, len(libs))
+	for _, l := range libs {
+		rows = append(rows, mediaServerLibrary{ID: l.ID, Name: l.Name, Kind: l.CollectionType, Path: l.Path})
+	}
+	renderEmbyLikeDiscover(c, rows, "audiobooks", "Emby", "emby_discover_picker", "", "")
+}
+
+// mediaServerLibrary is the generic row shape consumed by renderEmbyLikeDiscover.
+// Used to share rendering between Emby and Jellyfin (and any future
+// backend whose libraries have an id, a name, a kind, and an optional
+// on-disk path).
+type mediaServerLibrary struct {
+	ID   string
+	Name string
+	Kind string // CollectionType — "audiobooks" for Emby, "books" for Jellyfin
+	Path string
+}
+
+// renderEmbyLikeDiscover emits the picker fragment for any backend whose
+// libraries map to mediaServerLibrary. wantKind names the CollectionType
+// value that means "audiobook library" for this backend ("audiobooks"
+// for Emby, "books" for Jellyfin). When no library matches wantKind the
+// picker still renders all libraries so a misconfigured server doesn't
+// strand the user. errMsg is rendered as an inline failure box when
+// non-empty.
+func renderEmbyLikeDiscover(c *gin.Context, libs []mediaServerLibrary, wantKind, backendLabel, pickerID, errMsg, _ /*unused*/ string) {
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	if errMsg != "" {
+		c.String(http.StatusOK,
+			`<div class="info-box" style="border-color:var(--error);margin:.5rem 0" role="status" aria-live="polite">`+
+				`<strong>Failed.</strong> `+htmlEscape(errMsg)+`</div>`)
+		return
+	}
+	if len(libs) == 0 {
+		c.String(http.StatusOK,
+			`<div class="info-box" style="border-color:var(--warning);margin:.5rem 0" role="status" aria-live="polite">`+
+				`<strong>No libraries visible to this API key.</strong> `+
+				`Check that the key has access to at least one library on this `+htmlEscape(backendLabel)+` server.</div>`)
+		return
+	}
+
+	matching := make([]mediaServerLibrary, 0, len(libs))
+	for _, l := range libs {
+		if strings.EqualFold(l.Kind, wantKind) {
+			matching = append(matching, l)
+		}
+	}
+
+	// If no library has the expected CollectionType, show everything so
+	// the user can still pick a misconfigured-but-real audiobook library.
+	// Surface the mismatch as a warning so it's not silent.
+	showLibs := matching
+	warning := ""
+	if len(matching) == 0 {
+		showLibs = libs
+		warning = "No libraries on this server have CollectionType=" + wantKind + "; showing all libraries so you can still pick one."
+	}
+
+	var sb strings.Builder
+	banner := `<div class="info-box" style="border-color:var(--success);margin:.5rem 0" role="status" aria-live="polite">`
+	if warning != "" {
+		banner = `<div class="info-box" style="border-color:var(--warning);margin:.5rem 0" role="status" aria-live="polite">`
+	}
+	sb.WriteString(banner)
+	sb.WriteString(`<strong>Connected.</strong> Found `)
+	sb.WriteString(fmt.Sprintf("%d ", len(showLibs)))
+	if len(showLibs) == 1 {
+		sb.WriteString(`library`)
+	} else {
+		sb.WriteString(`libraries`)
+	}
+	if warning != "" {
+		sb.WriteString(`. `)
+		sb.WriteString(htmlEscape(warning))
+	} else {
+		sb.WriteString(`. Pick one — its ID will fill the Library ID field.`)
+	}
+	sb.WriteString(`</div>`)
+	sb.WriteString(`<label for="`)
+	sb.WriteString(htmlEscape(pickerID))
+	sb.WriteString(`" class="visually-hidden">Discovered libraries</label>`)
+	sb.WriteString(`<select id="`)
+	sb.WriteString(htmlEscape(pickerID))
+	sb.WriteString(`" class="form-control" style="margin:.25rem 0 .5rem 0" `)
+	sb.WriteString(`onchange="document.getElementById('library_id').value=this.value">`)
+	sb.WriteString(`<option value="">— pick a library —</option>`)
+	for _, l := range showLibs {
+		label := l.Name
+		if l.Kind != "" {
+			label += " (" + l.Kind + ")"
+		}
+		if l.Path != "" {
+			label += " — " + l.Path
+		}
+		sb.WriteString(`<option value="`)
+		sb.WriteString(htmlEscape(l.ID))
+		sb.WriteString(`">`)
+		sb.WriteString(htmlEscape(label))
+		sb.WriteString(`</option>`)
+	}
+	sb.WriteString(`</select>`)
+	c.String(http.StatusOK, sb.String())
+}
+
+// resolveAPIKeyFromForm reads the API key from the form, OR for :id-bound
+// routes, from the saved destination row when the form left it blank.
+// Mirrors resolvePlexTokenFromForm.
+func (s *Server) resolveAPIKeyFromForm(c *gin.Context) (string, error) {
+	key := strings.TrimSpace(c.PostForm("api_key"))
+	if key != "" {
+		return key, nil
+	}
+	if id := c.Param("id"); id != "" {
+		row, err := s.db.GetLibraryDestination(c.Request.Context(), id)
+		if err == nil && row != nil && strings.TrimSpace(row.APIKey) != "" {
+			return row.APIKey, nil
+		}
+	}
+	return "", errors.New("API key is required — paste one or use the existing saved key.")
+}
+
 // handleDestinationsPlexPinStart kicks off a plex.tv PIN sign-in flow on
 // behalf of the user. Returns an HTML fragment containing:
 //   - a "Sign in with Plex" button that opens the plex.tv auth URL in

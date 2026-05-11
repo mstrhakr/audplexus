@@ -859,6 +859,70 @@ func (e *EmbyBackend) fetchVirtualFolderPath(ctx context.Context, baseURL, apiKe
 	return "", fmt.Errorf("no virtual folder found for library %s", libraryID)
 }
 
+// EmbyLibrary is one row from the destination form's library picker.
+// Path is the first on-disk location (empty when the API omits Locations).
+type EmbyLibrary struct {
+	ID             string
+	Name           string
+	CollectionType string
+	Path           string
+}
+
+// EmbyListLibraries hits /emby/Library/MediaFolders and returns every
+// library the (baseURL, apiKey) credentials can see. Used by the
+// destination form's "Discover libraries" affordance — mirror of
+// ABS's ListLibraries. Errors surface inline; this function does not log.
+//
+// MediaFolders returns CollectionType="audiobooks" entries that are the
+// natural choice for an audiobook destination; the picker filters to
+// those on the rendering side, falling back to showing everything when
+// none are present so the user isn't stranded with a misconfigured
+// library.
+func EmbyListLibraries(ctx context.Context, baseURL, apiKey string) ([]EmbyLibrary, error) {
+	e := &EmbyBackend{}
+	u, err := e.buildURL(baseURL, "/emby/Library/MediaFolders", apiKey, nil)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("emby /Library/MediaFolders returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	// MediaFolders returns {Items:[{Id, Name, CollectionType, ...}], TotalRecordCount}
+	var r struct {
+		Items []struct {
+			ID             string `json:"Id"`
+			Name           string `json:"Name"`
+			CollectionType string `json:"CollectionType"`
+			Path           string `json:"Path"`
+		} `json:"Items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, fmt.Errorf("parse MediaFolders: %w", err)
+	}
+
+	out := make([]EmbyLibrary, 0, len(r.Items))
+	for _, it := range r.Items {
+		out = append(out, EmbyLibrary{
+			ID:             it.ID,
+			Name:           it.Name,
+			CollectionType: it.CollectionType,
+			Path:           it.Path,
+		})
+	}
+	return out, nil
+}
+
 // findItemByPath asks Emby for the BaseItem with a given on-disk path, scoped
 // to the configured library. Returns "" when no match.
 func (e *EmbyBackend) findItemByPath(ctx context.Context, baseURL, apiKey, libraryID, serverPath string) (string, error) {

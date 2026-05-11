@@ -211,6 +211,31 @@
                     </div>
                     <small class="muted">Asks Audiobookshelf which libraries this token can see and fills the Library ID below. Or paste the UUID manually if you already have it.</small>
                 </div>
+                {{else if eq $dt "emby"}}
+                {{/*
+                  Emby exposes its libraries via /emby/Library/MediaFolders
+                  which returns Items with Id, Name, CollectionType. The
+                  picker filters to CollectionType="audiobooks", falling
+                  back to showing all libraries when none match so the
+                  user can still pick a misconfigured-but-real library.
+                */}}
+                <div class="form-group">
+                    <label>Discover libraries</label>
+                    <div>
+                        <button type="button" class="btn btn-secondary"
+                                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/discover/emby{{else}}/destinations/discover/emby{{end}}"
+                                hx-include="closest form"
+                                hx-target="#emby-discover-result"
+                                hx-swap="innerHTML"
+                                hx-disabled-elt="this"
+                                hx-on::before-request="document.getElementById('emby-discover-result').setAttribute('aria-busy', 'true'); document.getElementById('emby-discover-result').textContent = 'Listing libraries…';"
+                                hx-on::after-request="document.getElementById('emby-discover-result').setAttribute('aria-busy', 'false');">
+                            Discover libraries
+                        </button>
+                        <div id="emby-discover-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
+                    </div>
+                    <small class="muted">Asks Emby which libraries this key can see and fills the Library ID below. Or paste the ItemId manually if you already have it.</small>
+                </div>
                 {{end}}
                 <div class="form-group">
                     <label for="library_id">Library ID</label>
