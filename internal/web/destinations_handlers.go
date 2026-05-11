@@ -596,19 +596,31 @@ func (s *Server) handleDestinationsPlexDiscoverServers(c *gin.Context) {
 
 	var sb strings.Builder
 	sb.WriteString(`<div class="info-box" style="border-color:var(--success);margin:.5rem 0" role="status" aria-live="polite">`)
-	sb.WriteString(fmt.Sprintf(`<strong>Found %d connection(s).</strong> Pick one — its URL will fill the URL field.`, len(servers)))
+	sb.WriteString(fmt.Sprintf(`<strong>Found %d connection(s).</strong> Pick one — its URL will fill the URL field and the display name.`, len(servers)))
 	sb.WriteString(`</div>`)
 	sb.WriteString(`<label for="plex_server_picker" class="visually-hidden">Discovered Plex servers</label>`)
+	// onchange fills the URL field unconditionally and the display_name
+	// field only when empty — so a user who already typed "Living room"
+	// doesn't get it overwritten on every picker change. The server's
+	// own name (e.g. "Living room Plex") is carried on data-server-name,
+	// stripped server-side of the trailing "(Plex Media Server)" product
+	// suffix that plexListServerOptions adds for visual disambiguation.
 	sb.WriteString(`<select id="plex_server_picker" class="form-control" style="margin:.25rem 0 .5rem 0" `)
-	sb.WriteString(`onchange="document.getElementById('url').value=this.value">`)
+	sb.WriteString(`onchange="var o=this.options[this.selectedIndex];`)
+	sb.WriteString(`document.getElementById('url').value=this.value;`)
+	sb.WriteString(`var dn=document.getElementById('display_name');`)
+	sb.WriteString(`if(dn&&!dn.value){dn.value=o.getAttribute('data-server-name')||'';}">`)
 	sb.WriteString(`<option value="">— pick a server —</option>`)
 	for _, sv := range servers {
 		label := sv.Name + " — " + sv.URL
 		if sv.Local {
 			label = "[LAN] " + label
 		}
+		serverName := stripPlexProductSuffix(sv.Name)
 		sb.WriteString(`<option value="`)
 		sb.WriteString(htmlEscape(sv.URL))
+		sb.WriteString(`" data-server-name="`)
+		sb.WriteString(htmlEscape(serverName))
 		sb.WriteString(`">`)
 		sb.WriteString(htmlEscape(label))
 		sb.WriteString(`</option>`)
@@ -674,6 +686,21 @@ func (s *Server) handleDestinationsPlexDiscoverSections(c *gin.Context) {
 	sb.WriteString(`</select>`)
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(http.StatusOK, sb.String())
+}
+
+// stripPlexProductSuffix turns "Living Room Plex (Plex Media Server)"
+// back into "Living Room Plex" — the device name is what plexListServer-
+// Options concatenated with the product. The picker's visible label
+// keeps the suffix for disambiguation when a user has servers with the
+// same Plex device name on different products; the display_name autofill
+// drops it because users name destinations by their Plex server, not its
+// software flavor.
+func stripPlexProductSuffix(s string) string {
+	s = strings.TrimSpace(s)
+	if idx := strings.LastIndex(s, " ("); idx > 0 && strings.HasSuffix(s, ")") {
+		return strings.TrimSpace(s[:idx])
+	}
+	return s
 }
 
 // resolvePlexTokenFromForm reads the Plex token from the form, OR for
@@ -834,6 +861,12 @@ func (s *Server) handleDestinationsCreate(c *gin.Context) {
 		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": err.Error()})
 		return
 	}
+	// Disambiguate display names — turns "Plex" + "Plex" into "Plex" +
+	// "Plex (2)". Only fires when a collision exists, so a single Plex
+	// destination stays plainly named "Plex". The Plex server-picker
+	// onchange autofills display_name from the discovered server name
+	// when present, so the typical Plex flow never hits this fallback.
+	d.DisplayName = s.uniqueDisplayName(c.Request.Context(), d.DisplayName, "")
 	d.ID = uuid.NewString()
 	d.Enabled = true
 	d.CreatedAt = time.Now().UTC()
@@ -842,6 +875,43 @@ func (s *Server) handleDestinationsCreate(c *gin.Context) {
 		return
 	}
 	c.Redirect(http.StatusSeeOther, "/settings#library-destinations")
+}
+
+// uniqueDisplayName appends " (2)", " (3)", … to candidate when another
+// destination already uses it. excludeID is the row being edited (so
+// "edit-without-rename" doesn't trip the collision); pass "" on create.
+// Case-insensitive comparison since DisplayName is a UI label, not a key.
+func (s *Server) uniqueDisplayName(ctx context.Context, candidate, excludeID string) string {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return candidate
+	}
+	rows, err := s.db.ListLibraryDestinations(ctx)
+	if err != nil {
+		// On query failure, return the candidate as-is — better to allow
+		// a possible duplicate than block creation on a transient DB error.
+		// The user can rename after the fact.
+		return candidate
+	}
+	taken := make(map[string]struct{}, len(rows))
+	for _, r := range rows {
+		if r.ID == excludeID {
+			continue
+		}
+		taken[strings.ToLower(strings.TrimSpace(r.DisplayName))] = struct{}{}
+	}
+	if _, exists := taken[strings.ToLower(candidate)]; !exists {
+		return candidate
+	}
+	for n := 2; n < 1000; n++ {
+		try := fmt.Sprintf("%s (%d)", candidate, n)
+		if _, exists := taken[strings.ToLower(try)]; !exists {
+			return try
+		}
+	}
+	// Pathological: 998 collisions. Fall through with a uuid suffix so
+	// we never loop forever, even though no realistic install hits this.
+	return fmt.Sprintf("%s (%s)", candidate, uuid.NewString()[:8])
 }
 
 // handleDestinationEditForm renders the per-destination edit form. Sensitive
@@ -884,6 +954,10 @@ func (s *Server) handleDestinationUpdate(c *gin.Context) {
 	if strings.TrimSpace(updated.APIKey) == "" {
 		updated.APIKey = existing.APIKey
 	}
+	// Disambiguate display name on edit too — but exclude the current row
+	// so renaming a destination back to its existing value is a no-op
+	// instead of bumping it to "Plex (2)".
+	updated.DisplayName = s.uniqueDisplayName(c.Request.Context(), updated.DisplayName, existing.ID)
 	updated.ID = existing.ID
 	updated.Type = existing.Type
 	updated.Enabled = existing.Enabled
