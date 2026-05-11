@@ -265,6 +265,10 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     border: 0;
 }
 
+.is-hidden {
+    display: none;
+}
+
 /* Search bar */
 .search-bar {
     display: flex;
