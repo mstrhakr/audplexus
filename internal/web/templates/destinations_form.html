@@ -25,11 +25,12 @@
                 {{if not $isEdit}}<input type="hidden" name="type" value="{{$dt}}">{{end}}
 
                 <div class="form-group">
-                    <label for="display_name">Display name</label>
-                    <input id="display_name" name="display_name" type="text" required maxlength="128"
+                    <label for="display_name">Display name <span class="muted" style="font-weight:normal">(optional)</span></label>
+                    <input id="display_name" name="display_name" type="text" maxlength="128"
                            value="{{if $isEdit}}{{.Dest.DisplayName}}{{end}}"
+                           placeholder="{{.DestTypeLabel}}"
                            aria-describedby="display_name_help">
-                    <small id="display_name_help" class="muted">Shown in the Settings list and per-destination logs. Free-form, e.g. "Living room Plex".</small>
+                    <small id="display_name_help" class="muted">Shown in the Settings list and per-destination logs. Defaults to <code>{{.DestTypeLabel}}</code>; set this only if you run multiple destinations of the same type (e.g. "Living room Plex" + "Bedroom Plex").</small>
                 </div>
 
                 <div class="form-group">
@@ -42,14 +43,40 @@
                 </div>
 
                 {{if eq $dt "plex"}}
+                {{/*
+                  Sign in with Plex — kicks off the plex.tv PIN flow.
+                  Posts to /destinations/plex/pin/start which returns a
+                  fragment containing an "Open plex.tv sign-in" button
+                  (target=_blank) plus a hidden HTMX poller that re-fires
+                  every 2s until plex.tv returns an authToken. On success
+                  the poll response is a tiny <script> that writes the
+                  token into #plex_token and clicks the Discover servers
+                  button to chain into URL discovery.
+                */}}
+                <div class="form-group">
+                    <label>Sign in with Plex</label>
+                    <div>
+                        <button type="button" class="btn btn-secondary"
+                                hx-post="/destinations/plex/pin/start"
+                                hx-target="#plex-pin-result"
+                                hx-swap="innerHTML"
+                                hx-disabled-elt="this"
+                                hx-on::before-request="document.getElementById('plex-pin-result').setAttribute('aria-busy', 'true'); document.getElementById('plex-pin-result').textContent = 'Starting plex.tv sign-in…';"
+                                hx-on::after-request="document.getElementById('plex-pin-result').setAttribute('aria-busy', 'false');">
+                            Sign in with Plex
+                        </button>
+                        <div id="plex-pin-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
+                    </div>
+                    <small class="muted">Mint a Plex token via plex.tv. Approves access in a new tab; the token fills in here automatically. Or paste a token below if you already have one.</small>
+                </div>
                 <div class="form-group">
                     <label for="plex_token">Plex token</label>
                     <input id="plex_token" name="plex_token" type="password" autocomplete="off"
                            {{if not $isEdit}}required{{end}}
                            aria-describedby="plex_token_help">
-                    <small id="plex_token_help" class="muted">{{if $isEdit}}Leave blank to keep the current token. {{end}}Long-lived authentication string for your Plex account.</small>
+                    <small id="plex_token_help" class="muted">{{if $isEdit}}Leave blank to keep the current token. {{end}}Long-lived authentication string for your Plex account. Sign in above to fill this automatically.</small>
                     <details style="margin-top:.4rem">
-                        <summary>How to find your Plex token</summary>
+                        <summary>Manual: how to find your Plex token</summary>
                         <ol style="margin:.5rem 0 0 1.25rem;padding:0">
                             <li>Sign in to Plex web UI at <code>http://&lt;your-plex&gt;:32400/web</code>.</li>
                             <li>Play any audiobook (or open its detail page).</li>
@@ -59,20 +86,69 @@
                         </ol>
                     </details>
                 </div>
+                {{/*
+                  Discover servers — calls plex.tv /api/v2/resources, lists
+                  the user's Plex servers, fills the URL field on pick.
+                  hx-include posts the form values so the token (just
+                  typed or just minted via PIN) flows through. The id
+                  "plex-discover-servers-btn" is the click target of the
+                  auto-chain from the PIN poll completion script.
+                */}}
+                <div class="form-group">
+                    <label>Discover servers</label>
+                    <div>
+                        <button id="plex-discover-servers-btn" type="button" class="btn btn-secondary"
+                                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/plex/discover/servers{{else}}/destinations/plex/discover/servers{{end}}"
+                                hx-include="closest form"
+                                hx-target="#plex-server-discover-result"
+                                hx-swap="innerHTML"
+                                hx-disabled-elt="this"
+                                hx-on::before-request="document.getElementById('plex-server-discover-result').setAttribute('aria-busy', 'true'); document.getElementById('plex-server-discover-result').textContent = 'Listing your Plex servers…';"
+                                hx-on::after-request="document.getElementById('plex-server-discover-result').setAttribute('aria-busy', 'false');">
+                            Discover servers
+                        </button>
+                        <div id="plex-server-discover-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
+                    </div>
+                    <small class="muted">Asks plex.tv which servers your token can reach and fills the URL field below. LAN connections are flagged.</small>
+                </div>
                 <div class="form-group">
                     <label for="plex_section_id">Plex section ID</label>
                     <input id="plex_section_id" name="plex_section_id" type="text" required
                            value="{{if $isEdit}}{{.Dest.PlexSectionID}}{{end}}"
                            aria-describedby="plex_section_id_help">
-                    <small id="plex_section_id_help" class="muted">Numeric ID of your audiobook library/section.</small>
+                    <small id="plex_section_id_help" class="muted">Numeric ID of your audiobook library/section. Use Discover sections below to find it.</small>
                     <details style="margin-top:.4rem">
-                        <summary>How to find your section ID</summary>
+                        <summary>Manual: how to find your section ID</summary>
                         <ol style="margin:.5rem 0 0 1.25rem;padding:0">
                             <li>In Plex web, click your audiobook library in the sidebar.</li>
                             <li>The URL bar shows <code>/source/&lt;sectionId&gt;</code> &mdash; that number is your section ID.</li>
                             <li>API alternative: <code>curl 'http://&lt;plex&gt;:32400/library/sections?X-Plex-Token=&lt;token&gt;'</code> &mdash; pick the <code>&lt;Directory key="..."&gt;</code> with <code>type="artist"</code>.</li>
                         </ol>
                     </details>
+                </div>
+                {{/*
+                  Discover sections — calls the configured Plex server's
+                  /library/sections, lists all sections, fills section_id
+                  on pick. We don't filter to type=artist because some
+                  audiobook libraries are misconfigured as type=movie or
+                  type=show and we don't want to hide them.
+                */}}
+                <div class="form-group">
+                    <label>Discover sections</label>
+                    <div>
+                        <button type="button" class="btn btn-secondary"
+                                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/plex/discover/sections{{else}}/destinations/plex/discover/sections{{end}}"
+                                hx-include="closest form"
+                                hx-target="#plex-section-discover-result"
+                                hx-swap="innerHTML"
+                                hx-disabled-elt="this"
+                                hx-on::before-request="document.getElementById('plex-section-discover-result').setAttribute('aria-busy', 'true'); document.getElementById('plex-section-discover-result').textContent = 'Listing library sections…';"
+                                hx-on::after-request="document.getElementById('plex-section-discover-result').setAttribute('aria-busy', 'false');">
+                            Discover sections
+                        </button>
+                        <div id="plex-section-discover-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
+                    </div>
+                    <small class="muted">Asks your Plex server for all library sections and fills the section ID above.</small>
                 </div>
                 {{else}}
                 <div class="form-group">
@@ -108,6 +184,82 @@
                         {{end}}
                     </details>
                 </div>
+                {{if eq $dt "abs"}}
+                {{/*
+                  Audiobookshelf can list its own libraries via
+                  GET /api/libraries. The Discover button posts the
+                  URL + token to the server, which renders an HTML
+                  fragment containing a <select> — picking one fills
+                  the library_id input below via the option's inline
+                  onchange. Saves the user from copy-pasting a UUID
+                  out of a curl response or a URL bar.
+                */}}
+                <div class="form-group">
+                    <label>Discover libraries</label>
+                    <div>
+                        <button type="button" class="btn btn-secondary"
+                                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/discover/abs{{else}}/destinations/discover/abs{{end}}"
+                                hx-include="closest form"
+                                hx-target="#abs-discover-result"
+                                hx-swap="innerHTML"
+                                hx-disabled-elt="this"
+                                hx-on::before-request="document.getElementById('abs-discover-result').setAttribute('aria-busy', 'true'); document.getElementById('abs-discover-result').textContent = 'Listing libraries…';"
+                                hx-on::after-request="document.getElementById('abs-discover-result').setAttribute('aria-busy', 'false');">
+                            Discover libraries
+                        </button>
+                        <div id="abs-discover-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
+                    </div>
+                    <small class="muted">Asks Audiobookshelf which libraries this token can see and fills the Library ID below. Or paste the UUID manually if you already have it.</small>
+                </div>
+                {{else if eq $dt "emby"}}
+                {{/*
+                  Emby exposes its libraries via /emby/Library/MediaFolders
+                  which returns Items with Id, Name, CollectionType. The
+                  picker filters to CollectionType="audiobooks", falling
+                  back to showing all libraries when none match so the
+                  user can still pick a misconfigured-but-real library.
+                */}}
+                <div class="form-group">
+                    <label>Discover libraries</label>
+                    <div>
+                        <button type="button" class="btn btn-secondary"
+                                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/discover/emby{{else}}/destinations/discover/emby{{end}}"
+                                hx-include="closest form"
+                                hx-target="#emby-discover-result"
+                                hx-swap="innerHTML"
+                                hx-disabled-elt="this"
+                                hx-on::before-request="document.getElementById('emby-discover-result').setAttribute('aria-busy', 'true'); document.getElementById('emby-discover-result').textContent = 'Listing libraries…';"
+                                hx-on::after-request="document.getElementById('emby-discover-result').setAttribute('aria-busy', 'false');">
+                            Discover libraries
+                        </button>
+                        <div id="emby-discover-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
+                    </div>
+                    <small class="muted">Asks Emby which libraries this key can see and fills the Library ID below. Or paste the ItemId manually if you already have it.</small>
+                </div>
+                {{else if eq $dt "jellyfin"}}
+                {{/*
+                  Jellyfin exposes its libraries via /Library/VirtualFolders
+                  with Authorization: MediaBrowser Token=... — the picker
+                  filters to CollectionType="books".
+                */}}
+                <div class="form-group">
+                    <label>Discover libraries</label>
+                    <div>
+                        <button type="button" class="btn btn-secondary"
+                                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/discover/jellyfin{{else}}/destinations/discover/jellyfin{{end}}"
+                                hx-include="closest form"
+                                hx-target="#jellyfin-discover-result"
+                                hx-swap="innerHTML"
+                                hx-disabled-elt="this"
+                                hx-on::before-request="document.getElementById('jellyfin-discover-result').setAttribute('aria-busy', 'true'); document.getElementById('jellyfin-discover-result').textContent = 'Listing libraries…';"
+                                hx-on::after-request="document.getElementById('jellyfin-discover-result').setAttribute('aria-busy', 'false');">
+                            Discover libraries
+                        </button>
+                        <div id="jellyfin-discover-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
+                    </div>
+                    <small class="muted">Asks Jellyfin which libraries this key can see and fills the Library ID below. Or paste the ItemId manually if you already have it.</small>
+                </div>
+                {{end}}
                 <div class="form-group">
                     <label for="library_id">Library ID</label>
                     <input id="library_id" name="library_id" type="text" required
@@ -124,9 +276,10 @@
                         </ol>
                         {{else if eq $dt "jellyfin"}}
                         <ol style="margin:.5rem 0 0 1.25rem;padding:0">
-                            <li>In a terminal, run: <code>curl -H 'X-Emby-Token: &lt;your_key&gt;' 'http://&lt;jellyfin&gt;:8096/Library/VirtualFolders' | jq</code></li>
+                            <li>In a terminal, run: <code>curl -H 'Authorization: MediaBrowser Token="&lt;your_key&gt;"' 'http://&lt;jellyfin&gt;:8096/Library/VirtualFolders' | jq</code></li>
                             <li>Find the entry with <code>"CollectionType": "books"</code> and an audiobook path.</li>
                             <li>Copy its <code>ItemId</code> field. That&apos;s your library ID.</li>
+                            <li>The legacy <code>X-Emby-Token</code> header still works on Jellyfin 10.x but is removed in 12.0 — use the <code>Authorization: MediaBrowser</code> scheme above.</li>
                         </ol>
                         {{else if eq $dt "abs"}}
                         <ol style="margin:.5rem 0 0 1.25rem;padding:0">

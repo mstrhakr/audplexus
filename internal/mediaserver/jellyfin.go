@@ -358,6 +358,73 @@ func (j *JellyfinBackend) TriggerLibraryScan(ctx context.Context) (int, error) {
 
 // --- HTTP helpers ---
 
+// JellyfinLibrary is one row from the destination form's library picker.
+// Path is the first on-disk location (empty when the API omits Locations).
+type JellyfinLibrary struct {
+	ID             string
+	Name           string
+	CollectionType string
+	Path           string
+}
+
+// JellyfinListLibraries hits /Library/VirtualFolders and returns every
+// library the credentials can see. Mirror of EmbyListLibraries with the
+// Jellyfin auth scheme (Authorization: MediaBrowser Token="...") and
+// the VirtualFolders response shape (ItemId, Name, CollectionType,
+// Locations). Audiobook libraries on Jellyfin have CollectionType="books".
+func JellyfinListLibraries(ctx context.Context, baseURL, apiKey string) ([]JellyfinLibrary, error) {
+	// NewJellyfin sets clientID — addAuthHeader needs it for the DeviceId
+	// claim. A nil-db/nil-audnexus instance is fine here; this code path
+	// touches neither.
+	j := NewJellyfin(nil, nil, "")
+	u, err := j.buildURL(baseURL, "/Library/VirtualFolders", nil)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	j.addAuthHeader(req, apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("jellyfin /Library/VirtualFolders returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	// VirtualFolders returns an array, not {Items:[...]}. Each entry has
+	// ItemId / Name / CollectionType / Locations[]; we keep the first
+	// location (when present) for the picker label.
+	var folders []struct {
+		ItemID         string   `json:"ItemId"`
+		Name           string   `json:"Name"`
+		CollectionType string   `json:"CollectionType"`
+		Locations      []string `json:"Locations"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&folders); err != nil {
+		return nil, fmt.Errorf("parse VirtualFolders: %w", err)
+	}
+
+	out := make([]JellyfinLibrary, 0, len(folders))
+	for _, f := range folders {
+		path := ""
+		if len(f.Locations) > 0 {
+			path = strings.TrimSpace(f.Locations[0])
+		}
+		out = append(out, JellyfinLibrary{
+			ID:             f.ItemID,
+			Name:           f.Name,
+			CollectionType: f.CollectionType,
+			Path:           path,
+		})
+	}
+	return out, nil
+}
+
 func (j *JellyfinBackend) buildURL(baseURL, pathSuffix string, query map[string]string) (string, error) {
 	base, err := url.Parse(strings.TrimRight(baseURL, "/"))
 	if err != nil {

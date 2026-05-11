@@ -314,16 +314,11 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/auth/marketplace", s.handleAudibleMarketplaceSelect)
 	s.router.POST("/auth/start", s.handleAuthStart)
 	s.router.POST("/auth/callback", s.handleAuthCallback)
-	s.router.POST("/auth/plex/start", s.handlePlexStart)
-	s.router.POST("/auth/plex/poll", s.handlePlexPoll)
-	s.router.POST("/auth/plex/complete", s.handlePlexComplete)
-	s.router.POST("/auth/plex/select", s.handlePlexSelect)
-	s.router.POST("/auth/plex/section", s.handlePlexSectionSelect)
-	s.router.POST("/auth/plex/scan", s.handlePlexScan)
-	s.router.POST("/auth/plex/check", s.handlePlexCheck)
-	// Legacy /auth/emby/* and /auth/media-server/select removed: the UI
-	// surfaces that posted to them (the dedicated Emby panel + Active
-	// Media Server radio) are gone in favor of /destinations/* CRUD.
+	// Legacy /auth/plex/*, /auth/emby/* and /auth/media-server/select removed:
+	// the UI surfaces that posted to them (Plex PIN sign-in panel, dedicated
+	// Emby panel, Active Media Server radio) are gone in favor of
+	// /destinations/* CRUD. Plex sign-in is re-introduced as a per-
+	// destination affordance — see /destinations/plex/* below.
 	s.router.POST("/settings/tag-profile", s.handleTagProfileSelect)
 
 	// Library destinations CRUD (multi-destination model). Two-page flow
@@ -344,6 +339,25 @@ func (s *Server) setupRoutes() {
 	// The same endpoint serves both: confirm=1 actually deletes;
 	// otherwise the confirmation page is rendered.
 	s.router.POST("/destinations/:id/delete", s.handleDestinationDelete)
+
+	// Discovery / sign-in endpoints — per-destination affordances that
+	// auto-populate the form. All HTMX-targeted, all render HTML fragments
+	// with role="status" aria-live="polite" for SR parity.
+	s.router.POST("/destinations/discover/abs", s.handleDestinationsDiscoverABS)
+	s.router.POST("/destinations/discover/emby", s.handleDestinationsDiscoverEmby)
+	s.router.POST("/destinations/discover/jellyfin", s.handleDestinationsDiscoverJellyfin)
+	s.router.POST("/destinations/plex/pin/start", s.handleDestinationsPlexPinStart)
+	s.router.POST("/destinations/plex/pin/poll", s.handleDestinationsPlexPinPoll)
+	s.router.POST("/destinations/plex/discover/servers", s.handleDestinationsPlexDiscoverServers)
+	s.router.POST("/destinations/plex/discover/sections", s.handleDestinationsPlexDiscoverSections)
+	// :id variants for the edit form — secrets carry over from the saved
+	// row when the form leaves them blank, so the user doesn't have to
+	// retype the API key just to discover.
+	s.router.POST("/destinations/:id/plex/discover/servers", s.handleDestinationsPlexDiscoverServers)
+	s.router.POST("/destinations/:id/plex/discover/sections", s.handleDestinationsPlexDiscoverSections)
+	s.router.POST("/destinations/:id/discover/abs", s.handleDestinationsDiscoverABS)
+	s.router.POST("/destinations/:id/discover/emby", s.handleDestinationsDiscoverEmby)
+	s.router.POST("/destinations/:id/discover/jellyfin", s.handleDestinationsDiscoverJellyfin)
 
 	// API / HTMX endpoints
 	api := s.router.Group("/api")

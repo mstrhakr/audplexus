@@ -1,6 +1,7 @@
 package mediaserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -347,6 +348,92 @@ func (a *ABSBackend) TriggerLibraryScan(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return a.LibraryItemCount(ctx)
+}
+
+// ABSLibrary is a minimal projection of a library row from GET /api/libraries,
+// exported so the destinations UI can populate a picker without going through
+// a backend instance (no destination row exists yet at form-render time).
+type ABSLibrary struct {
+	ID        string
+	Name      string
+	MediaType string // "book", "podcast", ...
+	Path      string // first folder.fullPath, when present
+}
+
+// ListLibraries fetches all libraries the given (baseURL, apiKey) credentials
+// can see. Used by the destination form's "Discover libraries" affordance to
+// turn library-ID-paste UX into a dropdown picker. Errors surface inline in
+// the UI; the function itself does not log.
+func ListLibraries(ctx context.Context, baseURL, apiKey string) ([]ABSLibrary, error) {
+	// Reuse a backend's URL/header helpers — the empty receiver is fine since
+	// those helpers don't touch any state.
+	a := &ABSBackend{}
+	u, err := a.buildURL(baseURL, "/api/libraries", nil)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	a.addAuthHeader(req, apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("abs /api/libraries returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		return nil, err
+	}
+	trimmed := bytes.TrimLeft(bodyBytes, " \t\r\n")
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("abs /api/libraries returned an empty body")
+	}
+
+	type rawLib struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		MediaType string `json:"mediaType"`
+		Folders   []struct {
+			FullPath string `json:"fullPath"`
+		} `json:"folders"`
+	}
+
+	// ABS returns either {libraries:[...]} (older) or a bare array, depending
+	// on version. Sniff the first non-whitespace byte rather than try-then-
+	// fall-back so an empty paged response doesn't get misclassified.
+	var raw []rawLib
+	if trimmed[0] == '[' {
+		if err := json.Unmarshal(bodyBytes, &raw); err != nil {
+			return nil, fmt.Errorf("parse abs libraries: %w", err)
+		}
+	} else {
+		var wrapped struct {
+			Libraries []rawLib `json:"libraries"`
+		}
+		if err := json.Unmarshal(bodyBytes, &wrapped); err != nil {
+			return nil, fmt.Errorf("parse abs libraries: %w", err)
+		}
+		raw = wrapped.Libraries
+	}
+
+	out := make([]ABSLibrary, 0, len(raw))
+	for _, r := range raw {
+		path := ""
+		for _, f := range r.Folders {
+			if p := strings.TrimSpace(f.FullPath); p != "" {
+				path = p
+				break
+			}
+		}
+		out = append(out, ABSLibrary{ID: r.ID, Name: r.Name, MediaType: r.MediaType, Path: path})
+	}
+	return out, nil
 }
 
 // --- HTTP helpers ---

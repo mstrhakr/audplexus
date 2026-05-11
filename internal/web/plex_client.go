@@ -11,8 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/gin-gonic/gin"
 )
 
 const (
@@ -47,20 +45,22 @@ type plexMediaContainer struct {
 	TotalSize int `json:"totalSize"`
 }
 
-// plexSearchResponse wraps search endpoint JSON response.
-type plexSearchResponse struct {
-	MediaContainer plexMediaContainer `json:"MediaContainer"`
-}
-
 // plexSectionItemsResponse wraps section items endpoint JSON response (e.g., /library/sections/{id}/albums).
 type plexSectionItemsResponse struct {
 	MediaContainer plexMediaContainer `json:"MediaContainer"`
 }
 
 type plexServerOption struct {
-	Name  string
-	URL   string
-	Local bool
+	// Name is "<device> (<product>)" for the picker's visible label —
+	// some users have multiple servers with the same device name on
+	// different products, the product disambiguates.
+	Name string
+	// DeviceName is the raw <device> portion, used for default
+	// display_name autofill on the destination form. Plex's parenthesized
+	// product suffix is intentionally absent.
+	DeviceName string
+	URL        string
+	Local      bool
 }
 
 type plexLibrarySection struct {
@@ -146,237 +146,11 @@ func (s *Server) plexAuthURL(pinCode string) string {
 	return fmt.Sprintf("https://app.plex.tv/auth#?clientID=%s&code=%s&context%%5Bdevice%%5D%%5Bproduct%%5D=%s&context%%5Bdevice%%5D%%5BdeviceName%%5D=%s", clientID, code, product, device)
 }
 
-func (s *Server) handlePlexStart(c *gin.Context) {
-	pin, err := s.plexCreatePin(c.Request.Context())
-	if err != nil {
-		if wantsJSON(c) {
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "Failed to start Plex auth: " + err.Error()})
-			return
-		}
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to start Plex auth: " + err.Error()})
-		return
-	}
-	authURL := s.plexAuthURL(pin.Code)
-
-	if wantsJSON(c) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":   "started",
-			"pin_id":   pin.ID,
-			"pin_code": pin.Code,
-			"auth_url": authURL,
-		})
-		return
-	}
-
-	s.renderAuthPage(c, http.StatusOK, gin.H{
-		"PlexPendingPinID":   pin.ID,
-		"PlexPendingPinCode": pin.Code,
-		"PlexAuthURL":        authURL,
-		"Success":            "Plex sign-in started. Complete login in plex.tv and this page will finish automatically.",
-	})
-}
-
-func (s *Server) completePlexLogin(ctx context.Context, pinID int64, pinCode string) (bool, []plexServerOption, string, error) {
-	pin, err := s.plexGetPin(ctx, pinID, pinCode)
-	if err != nil {
-		return false, nil, "", err
-	}
-
-	if strings.TrimSpace(pin.AuthToken) == "" {
-		return false, nil, "", nil
-	}
-
-	if err := s.db.SetSetting(ctx, "plex_token", pin.AuthToken); err != nil {
-		return false, nil, "", err
-	}
-
-	servers, err := s.plexListServerOptions(ctx, pin.AuthToken)
-	if err != nil {
-		return true, nil, "Plex login complete and token saved. Could not list servers yet: " + err.Error(), nil
-	}
-
-	return true, servers, "", nil
-}
-
-func (s *Server) handlePlexPoll(c *gin.Context) {
-	pinID, err := strconv.ParseInt(strings.TrimSpace(c.PostForm("pin_id")), 10, 64)
-	if err != nil || pinID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "Invalid Plex PIN ID. Start Plex auth again."})
-		return
-	}
-	pinCode := strings.TrimSpace(c.PostForm("pin_code"))
-	if pinCode == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "Missing Plex PIN code. Start Plex auth again."})
-		return
-	}
-
-	complete, servers, warning, err := s.completePlexLogin(c.Request.Context(), pinID, pinCode)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "Failed to verify Plex login: " + err.Error()})
-		return
-	}
-
-	if !complete {
-		c.JSON(http.StatusOK, gin.H{"status": "pending"})
-		return
-	}
-
-	resp := gin.H{"status": "complete", "servers_found": len(servers) > 0}
-	if warning != "" {
-		resp["message"] = warning
-	}
-	c.JSON(http.StatusOK, resp)
-}
-
-func (s *Server) handlePlexComplete(c *gin.Context) {
-	pinID, err := strconv.ParseInt(strings.TrimSpace(c.PostForm("pin_id")), 10, 64)
-	if err != nil || pinID <= 0 {
-		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": "Invalid Plex PIN ID. Start Plex auth again."})
-		return
-	}
-	pinCode := strings.TrimSpace(c.PostForm("pin_code"))
-	if pinCode == "" {
-		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": "Missing Plex PIN code. Start Plex auth again."})
-		return
-	}
-
-	complete, servers, warning, err := s.completePlexLogin(c.Request.Context(), pinID, pinCode)
-	if err != nil {
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to verify Plex login: " + err.Error()})
-		return
-	}
-
-	if !complete {
-		s.renderAuthPage(c, http.StatusOK, gin.H{
-			"Error":              "Plex login is not complete yet. Finish login in plex.tv and keep this page open.",
-			"PlexPendingPinID":   pinID,
-			"PlexPendingPinCode": pinCode,
-			"PlexAuthURL":        s.plexAuthURL(pinCode),
-		})
-		return
-	}
-
-	if warning != "" {
-		s.renderAuthPage(c, http.StatusOK, gin.H{
-			"Success": warning,
-		})
-		return
-	}
-
-	s.renderAuthPage(c, http.StatusOK, gin.H{
-		"Success":     "Plex login complete. Select the server URL to use.",
-		"PlexServers": servers,
-	})
-}
-
-func wantsJSON(c *gin.Context) bool {
-	accept := strings.ToLower(c.GetHeader("Accept"))
-	return strings.Contains(accept, "application/json")
-}
-
-func (s *Server) handlePlexSelect(c *gin.Context) {
-	plexURL := strings.TrimSpace(c.PostForm("plex_url"))
-	if plexURL == "" {
-		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": "Please select a Plex server URL."})
-		return
-	}
-
-	if err := s.db.SetSetting(c.Request.Context(), "plex_url", plexURL); err != nil {
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to save Plex URL: " + err.Error()})
-		return
-	}
-
-	sections, err := s.plexListSections(c.Request.Context(), plexURL, s.mustPlexToken(c.Request.Context()))
-	if err != nil {
-		s.renderAuthPage(c, http.StatusOK, gin.H{"Success": "Plex server URL saved. Could not load libraries yet: " + err.Error()})
-		return
-	}
-
-	s.renderAuthPage(c, http.StatusOK, gin.H{"Success": "Plex server URL saved. Select a Plex library section.", "PlexSections": sections})
-}
-
-func (s *Server) handlePlexSectionSelect(c *gin.Context) {
-	sectionID := strings.TrimSpace(c.PostForm("plex_section_id"))
-	sectionTitle := strings.TrimSpace(c.PostForm("plex_section_title"))
-	if sectionID == "" {
-		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": "Please select a Plex library section."})
-		return
-	}
-
-	ctx := c.Request.Context()
-	plexURL, plexToken := s.getPlexSettings(ctx)
-
-	if err := s.db.SetSetting(ctx, "plex_section_id", sectionID); err != nil {
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to save Plex section: " + err.Error()})
-		return
-	}
-	if sectionTitle != "" {
-		_ = s.db.SetSetting(ctx, "plex_section_title", sectionTitle)
-	}
-
-	// Fetch and save the actual library path from Plex
-	if plexURL != "" && plexToken != "" {
-		if sectionPath, err := s.plexSectionLocation(ctx, plexURL, plexToken, sectionID); err == nil && sectionPath != "" {
-			_ = s.db.SetSetting(ctx, "plex_section_path", sectionPath)
-		} else if err != nil {
-			webLog.Debug().Err(err).Str("section_id", sectionID).Msg("plex section path not available from API")
-		}
-	}
-
-	s.renderAuthPage(c, http.StatusOK, gin.H{"Success": "Plex library section saved."})
-}
-
-func (s *Server) handlePlexScan(c *gin.Context) {
-	plexURL, plexToken := s.getPlexSettings(c.Request.Context())
-	if plexURL == "" || plexToken == "" {
-		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": "Plex is not configured. Complete Plex login and server selection first."})
-		return
-	}
-	sectionID, _ := s.db.GetSetting(c.Request.Context(), "plex_section_id")
-	sectionID = strings.TrimSpace(sectionID)
-	if sectionID == "" {
-		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": "Choose a Plex library section first."})
-		return
-	}
-
-	if err := s.plexTriggerSectionScan(c.Request.Context(), plexURL, plexToken, sectionID, "", false); err != nil {
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to trigger Plex scan: " + err.Error()})
-		return
-	}
-
-	s.renderAuthPage(c, http.StatusOK, gin.H{"Success": "Plex section scan triggered."})
-}
-
-func (s *Server) handlePlexCheck(c *gin.Context) {
-	query := strings.TrimSpace(c.PostForm("query"))
-	if query == "" {
-		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": "Enter a title to search in Plex."})
-		return
-	}
-
-	plexURL, plexToken := s.getPlexSettings(c.Request.Context())
-	if plexURL == "" || plexToken == "" {
-		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": "Plex is not configured. Complete Plex login and server selection first."})
-		return
-	}
-
-	count, err := s.plexSearchCount(c.Request.Context(), plexURL, plexToken, query)
-	if err != nil {
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Plex search failed: " + err.Error(), "PlexCheckQuery": query})
-		return
-	}
-
-	msg := fmt.Sprintf("Plex search found %d result(s) for %q.", count, query)
-	if count == 0 {
-		msg = fmt.Sprintf("Plex search found no matches for %q yet.", query)
-	}
-	s.renderAuthPage(c, http.StatusOK, gin.H{
-		"Success":          msg,
-		"PlexCheckQuery":   query,
-		"PlexSearchResult": count,
-	})
-}
-
+// getPlexSettings reads the legacy single-backend Plex URL+token from the
+// settings table (with env-var fallback). Still in use by reconcile,
+// diagnostics, and a few sync paths in server.go that haven't been migrated
+// to the per-destination WithDestination model yet. New code should prefer
+// reading from a database.LibraryDestination row directly.
 func (s *Server) getPlexSettings(ctx context.Context) (string, string) {
 	plexURL, _ := s.db.GetSetting(ctx, "plex_url")
 	plexToken, _ := s.db.GetSetting(ctx, "plex_token")
@@ -387,11 +161,6 @@ func (s *Server) getPlexSettings(ctx context.Context) (string, string) {
 		plexToken = strings.TrimSpace(os.Getenv("PLEX_TOKEN"))
 	}
 	return plexURL, plexToken
-}
-
-func (s *Server) mustPlexToken(ctx context.Context) string {
-	_, token := s.getPlexSettings(ctx)
-	return token
 }
 
 func (s *Server) plexCreatePin(ctx context.Context) (*plexPinResponse, error) {
@@ -491,9 +260,10 @@ func (s *Server) plexListServerOptions(ctx context.Context, token string) ([]ple
 			}
 			seen[u] = struct{}{}
 			options = append(options, plexServerOption{
-				Name:  fmt.Sprintf("%s (%s)", dev.Name, dev.Product),
-				URL:   u,
-				Local: conn.Local,
+				Name:       fmt.Sprintf("%s (%s)", dev.Name, dev.Product),
+				DeviceName: dev.Name,
+				URL:        u,
+				Local:      conn.Local,
 			})
 		}
 	}
@@ -610,35 +380,6 @@ func (s *Server) plexTriggerSectionScan(ctx context.Context, plexURL, token, sec
 	return nil
 }
 
-func (s *Server) plexSearchCount(ctx context.Context, plexURL, token, query string) (int, error) {
-	u, err := buildPlexURL(plexURL, "/search", token, map[string]string{"query": query})
-	if err != nil {
-		return 0, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return 0, err
-	}
-	s.addPlexHeaders(req, token)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return 0, fmt.Errorf("search endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	var searchResp plexSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
-		return 0, err
-	}
-	return searchResp.MediaContainer.Size, nil
-}
-
 func (s *Server) plexSectionItemCount(ctx context.Context, plexURL, token, sectionID string) (int, error) {
 	// Audiobooks in Plex music libraries are represented as albums, not artists.
 	u, err := buildPlexURL(plexURL, "/library/sections/"+url.PathEscape(sectionID)+"/albums", token, map[string]string{
@@ -676,7 +417,6 @@ func (s *Server) plexSectionItemCount(ctx context.Context, plexURL, token, secti
 		return 0, fmt.Errorf("section items endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	// Read bytes first to log and inspect
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		webLog.Debug().Err(err).Str("section_id", sectionID).Msg("failed to read plex response body")
@@ -737,7 +477,6 @@ func (s *Server) plexSectionLocation(ctx context.Context, plexURL, token, sectio
 		return "", fmt.Errorf("failed to parse section details: %w", err)
 	}
 
-	// Return the first location path found
 	for _, dir := range detailResp.MediaContainer.Directories {
 		if len(dir.Locations) > 0 && strings.TrimSpace(dir.Locations[0].Path) != "" {
 			return dir.Locations[0].Path, nil
@@ -905,4 +644,3 @@ func (s *Server) plexListSectionItems(ctx context.Context, plexURL, token, secti
 
 	return items, nil
 }
-
