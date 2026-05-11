@@ -164,8 +164,9 @@ func (fv *FileValidator) detectSuspicious(duration float64, bitrateKbps int, fil
 	// Typical: ~1MB per 10-15 seconds at standard bitrate
 	// If ratio is way off, file might be truncated
 	if duration > 0 && fileSize > 0 {
-		expectedMin := int64((duration * 8 * 64) / 8)  // 64 kbps minimum
-		expectedMax := int64((duration * 8 * 320) / 8) // 320 kbps maximum
+		// Convert kbps to bytes: kbps * 1000 bits/kilo / 8 bits/byte
+		expectedMin := int64((duration * 64 * 1000) / 8)  // 64 kbps minimum
+		expectedMax := int64((duration * 320 * 1000) / 8) // 320 kbps maximum
 
 		if fileSize < expectedMin*900/1000 {
 			// File is significantly smaller than expected even at minimum bitrate
