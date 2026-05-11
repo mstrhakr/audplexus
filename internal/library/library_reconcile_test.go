@@ -142,6 +142,22 @@ func TestBuildASINIndexExtractsISBN10FromFolder(t *testing.T) {
 	}
 }
 
+func TestBuildASINFileIndexPicksFirstSortedPathForSameASIN(t *testing.T) {
+	root := filepath.Join("root", "Author", "Some Book B0ABCDEF12 [us]")
+	first := filepath.Join(root, "01 - One.mp3")
+	second := filepath.Join(root, "25 - Twenty-Five.mp3")
+
+	files := map[string]int64{
+		second: 100,
+		first:  200,
+	}
+
+	index := buildASINFileIndex(files)
+	if got := index["B0ABCDEF12"]; got != first {
+		t.Fatalf("buildASINFileIndex() path = %q, want %q", got, first)
+	}
+}
+
 func TestFindBestFileForBookPrefersASINMatch(t *testing.T) {
 	root := filepath.Join("root")
 	asinFile := filepath.Join(root, "pirateaba", "Hell's Wardens B0DCCZ5MG2 [us]", "Hell's Wardens The Wandering Inn, Book 14 - The Wandering Inn 14 B0DCCZ5MG2 [us].m4b")
@@ -194,6 +210,68 @@ func TestFindBestFileForBookMatchesISBN10WithX(t *testing.T) {
 	}
 	if matchMethod != "asin_path" {
 		t.Fatalf("findBestFileForBook() matchMethod = %q, want %q", matchMethod, "asin_path")
+	}
+}
+
+func TestFindBestFileForBookKeepsStoredDirectoryForChapterSplit(t *testing.T) {
+	root := filepath.Join("root")
+	bookDir := filepath.Join(root, "Author", "Some Book B0ABCDEF12 [us]")
+	chapterOne := filepath.Join(bookDir, "01 - One.mp3")
+	chapterTwo := filepath.Join(bookDir, "25 - Twenty-Five.mp3")
+
+	discovered := map[string]int64{
+		chapterTwo: 200,
+		chapterOne: 100,
+	}
+
+	book := &database.Book{
+		ASIN:     "B0ABCDEF12",
+		Title:    "Some Book",
+		Author:   "Author",
+		FilePath: bookDir,
+		Status:   database.BookStatusComplete,
+	}
+
+	matchedPath, matchedSize, matchMethod := findBestFileForBook(context.Background(), book, root, discovered, buildASINFileIndex(discovered))
+	if matchedPath != bookDir {
+		t.Fatalf("findBestFileForBook() path = %q, want %q", matchedPath, bookDir)
+	}
+	if matchedSize != 300 {
+		t.Fatalf("findBestFileForBook() size = %d, want %d", matchedSize, 300)
+	}
+	if matchMethod != "stored_path" {
+		t.Fatalf("findBestFileForBook() matchMethod = %q, want %q", matchMethod, "stored_path")
+	}
+}
+
+func TestFindBestFileForBookPromotesStoredChapterFileToDirectory(t *testing.T) {
+	root := filepath.Join("root")
+	bookDir := filepath.Join(root, "Author", "Some Book B0ABCDEF12 [us]")
+	chapterOne := filepath.Join(bookDir, "01 - One.mp3")
+	chapterTwo := filepath.Join(bookDir, "25 - Twenty-Five.mp3")
+
+	discovered := map[string]int64{
+		chapterOne: 100,
+		chapterTwo: 200,
+	}
+
+	book := &database.Book{
+		ASIN:     "B0ABCDEF12",
+		Title:    "Some Book",
+		Author:   "Author",
+		FilePath: chapterTwo,
+		Status:   database.BookStatusComplete,
+	}
+
+	matchedPath, matchedSize, matchMethod := findBestFileForBook(context.Background(), book, root, discovered, buildASINFileIndex(discovered))
+	if matchedPath != bookDir {
+		t.Fatalf("findBestFileForBook() path = %q, want %q", matchedPath, bookDir)
+	}
+	if matchedSize != 300 {
+		t.Fatalf("findBestFileForBook() size = %d, want %d", matchedSize, 300)
+	}
+	if matchMethod != "stored_path" {
+		t.Fatalf("findBestFileForBook() matchMethod = %q, want %q", matchMethod, "stored_path")
 	}
 }
 

@@ -239,8 +239,8 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 // findBestFileForBook searches for a matching audio file for a book among discoveredFiles.
 // Returns the best matching file path, its size, and the method used to find it.
 // Match methods (in priority order):
+//   - "stored_path"    previously stored FilePath is still present on disk (file or chapter directory)
 //   - "asin_path"      hard match: ASIN found anywhere in the path (filename or folder), mirroring Audnexus.bundle
-//   - "stored_path"    previously stored FilePath is still present on disk
 //   - "candidate_path" a generated candidate path (author/title/filename layout) exists on disk
 //   - "no_match"       no file found
 func findBestFileForBook(ctx context.Context, book *database.Book, libraryRoot string, discoveredFiles map[string]int64, asinFileIndex map[string]string) (string, int64, string) {
@@ -250,7 +250,23 @@ func findBestFileForBook(ctx context.Context, book *database.Book, libraryRoot s
 
 	_ = ctx
 
-	// First choice: hard match — file path (folder or filename) contains the book's ASIN.
+	// First choice: previously stored path still exists on disk.
+	// For chapter-split books, FilePath is the book directory.
+	if book.FilePath != "" {
+		cleanStoredPath := filepath.Clean(book.FilePath)
+		if size, found := discoveredFiles[cleanStoredPath]; found {
+			parentDir := filepath.Dir(cleanStoredPath)
+			if totalSize, fileCount := audioStatsForDirectory(parentDir, discoveredFiles); fileCount > 1 {
+				return parentDir, totalSize, "stored_path"
+			}
+			return cleanStoredPath, size, "stored_path"
+		}
+		if totalSize, fileCount := audioStatsForDirectory(cleanStoredPath, discoveredFiles); fileCount > 0 {
+			return cleanStoredPath, totalSize, "stored_path"
+		}
+	}
+
+	// Second choice: hard match — file path (folder or filename) contains the book's ASIN.
 	// Audible stores the identifier (ASIN/ISBN) in the ASIN field of the database.
 	asin := strings.ToUpper(strings.TrimSpace(book.ASIN))
 	if asin != "" {
@@ -258,13 +274,6 @@ func findBestFileForBook(ctx context.Context, book *database.Book, libraryRoot s
 			if size, found := discoveredFiles[path]; found {
 				return path, size, "asin_path"
 			}
-		}
-	}
-
-	// Second choice: previously stored file path still exists on disk
-	if book.FilePath != "" {
-		if size, found := discoveredFiles[book.FilePath]; found {
-			return book.FilePath, size, "stored_path"
 		}
 	}
 
@@ -313,7 +322,13 @@ func extractASINFromPath(path string) string {
 
 func buildASINFileIndex(discoveredFiles map[string]int64) map[string]string {
 	index := make(map[string]string)
+	paths := make([]string, 0, len(discoveredFiles))
 	for path := range discoveredFiles {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	for _, path := range paths {
 		asin := extractASINFromPath(path)
 		if asin == "" {
 			continue
@@ -324,6 +339,28 @@ func buildASINFileIndex(discoveredFiles map[string]int64) map[string]string {
 		}
 	}
 	return index
+}
+
+func audioStatsForDirectory(dirPath string, discoveredFiles map[string]int64) (int64, int) {
+	cleanDir := filepath.Clean(strings.TrimSpace(dirPath))
+	if cleanDir == "" || cleanDir == "." {
+		return 0, 0
+	}
+
+	var total int64
+	count := 0
+	for path, size := range discoveredFiles {
+		rel, err := filepath.Rel(cleanDir, path)
+		if err != nil {
+			continue
+		}
+		if rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		total += size
+		count++
+	}
+	return total, count
 }
 
 // formatCountMap formats a map[string]int as a sorted "key=val,key=val" string for logging.

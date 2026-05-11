@@ -879,7 +879,50 @@ func buildBookFileDetails(storedPath string) (string, []bookFileDetail) {
 		return left < right
 	})
 
+	for i := range entries {
+		entries[i].IsPrimary = false
+	}
+
+	// For multi-file books, choose the first audio file in playback-order-ish
+	// filename sorting instead of the persisted file path (which may be stale
+	// or arbitrary for chapter sets).
+	audioIndexes := make([]int, 0, len(entries))
+	for i := range entries {
+		if isAudioFile(entries[i].RelativePath) {
+			audioIndexes = append(audioIndexes, i)
+		}
+	}
+
+	if len(audioIndexes) > 1 {
+		entries[audioIndexes[0]].IsPrimary = true
+		return folderPath, entries
+	}
+
+	if primaryPath != "" {
+		for i := range entries {
+			fullPath := filepath.Join(folderPath, entries[i].RelativePath)
+			if filepath.Clean(fullPath) == primaryPath {
+				entries[i].IsPrimary = true
+				return folderPath, entries
+			}
+		}
+	}
+
+	if len(audioIndexes) == 1 {
+		entries[audioIndexes[0]].IsPrimary = true
+	}
+
 	return folderPath, entries
+}
+
+func isAudioFile(path string) bool {
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
+	switch ext {
+	case "mp3", "m4b", "m4a", "aac", "flac", "ogg", "opus", "wav":
+		return true
+	default:
+		return false
+	}
 }
 
 func humanFileSize(sizeBytes int64) string {
