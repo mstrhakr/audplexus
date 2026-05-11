@@ -9,18 +9,19 @@
         <section class="auth-panel" aria-labelledby="dest-type-heading">
             <h3 id="dest-type-heading">Destination type</h3>
             <form method="POST" action="/destinations/new" class="settings-form">
-                <fieldset class="form-group" style="border:0;padding:0;margin:0">
+                <fieldset class="form-group destination-type-group" style="border:0;padding:0;margin:0">
                     <legend class="visually-hidden">Choose a destination type</legend>
-                    <p style="display:flex;flex-direction:column;gap:.5rem;margin:0">
-                        <label><input type="radio" name="type" value="plex" required> Plex</label>
-                        <label><input type="radio" name="type" value="emby"> Emby</label>
-                        <label><input type="radio" name="type" value="jellyfin"> Jellyfin</label>
-                        <label><input type="radio" name="type" value="abs"> Audiobookshelf</label>
-                    </p>
+                    <p class="destination-type-help muted" id="destination-type-help">One click to continue to that destination's setup flow.</p>
+                    <div class="destination-type-grid" role="group" aria-describedby="destination-type-help">
+                        <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="plex">Plex</button>
+                        <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="emby">Emby</button>
+                        <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="jellyfin">Jellyfin</button>
+                        <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="abs">Audiobookshelf</button>
+                    </div>
                 </fieldset>
-                <div style="display:flex;gap:.75rem;margin-top:1rem">
+                <div style="display:flex;gap:.75rem;margin-top:1rem;align-items:center">
                     <a href="/settings#library-destinations" class="btn btn-outline">Cancel</a>
-                    <button type="submit" class="btn btn-primary">Continue</button>
+                    <span class="muted" style="font-size:.9rem">Pick a destination type above.</span>
                 </div>
             </form>
         </section>

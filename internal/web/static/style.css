@@ -634,6 +634,88 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 }
 .btn-warning:hover { opacity: 0.9; }
 
+/* Settings and Destination page layout polish */
+.settings-page {
+    max-width: 980px;
+    margin: 0 auto;
+    padding-bottom: 2rem;
+}
+
+.settings-header {
+    margin-bottom: 1.5rem;
+}
+
+.settings-header h1 {
+    margin-bottom: 0.65rem;
+}
+
+.settings-header p {
+    max-width: 72ch;
+    color: var(--text-muted);
+    line-height: 1.45;
+}
+
+.auth-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.1rem;
+}
+
+.auth-panel {
+    background: linear-gradient(180deg, rgba(12, 28, 60, 0.62), rgba(11, 25, 53, 0.42));
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem 1.25rem 1.15rem;
+    box-shadow: 0 14px 26px rgba(0, 0, 0, 0.22);
+}
+
+.auth-panel h3 {
+    margin: 0 0 0.95rem;
+    font-size: 1.1rem;
+}
+
+.settings-form {
+    max-width: 760px;
+}
+
+.settings-form details > summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.settings-form details[open] > summary {
+    margin-bottom: 0.6rem;
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.34);
+    color: var(--text);
+}
+
+.btn-outline:hover {
+    border-color: #7ebeff;
+    background: rgba(126, 190, 255, 0.08);
+}
+
+.destination-type-help {
+    margin-bottom: 0.9rem;
+    line-height: 1.4;
+}
+
+.destination-type-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.7rem;
+}
+
+.destination-type-btn {
+    width: 100%;
+    text-align: center;
+    padding: 0.72rem 1rem;
+    font-weight: 600;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .sync-phases { gap: 0.25rem; }
@@ -652,4 +734,7 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     body { flex-direction: column; }
     .book-detail { flex-direction: column; }
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    .settings-page { max-width: 100%; }
+    .auth-panel { padding: 1rem; border-radius: 10px; }
+    .destination-type-grid { grid-template-columns: 1fr; }
 }
