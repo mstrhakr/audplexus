@@ -230,7 +230,7 @@ func (s *Server) handleDestinationsDiscoverABS(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	urlStr := strings.TrimSpace(c.PostForm("url"))
+	urlStr := normalizeURL(c.PostForm("url"))
 	apiKey, err := s.resolveAPIKeyFromForm(c)
 	if err != nil {
 		renderDiscoverResult(c, nil, err.Error())
@@ -265,7 +265,7 @@ func (s *Server) handleDestinationsDiscoverEmby(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	urlStr := strings.TrimSpace(c.PostForm("url"))
+	urlStr := normalizeURL(c.PostForm("url"))
 	apiKey, err := s.resolveAPIKeyFromForm(c)
 	if err != nil {
 		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", err.Error())
@@ -304,7 +304,7 @@ func (s *Server) handleDestinationsDiscoverJellyfin(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	urlStr := strings.TrimSpace(c.PostForm("url"))
+	urlStr := normalizeURL(c.PostForm("url"))
 	apiKey, err := s.resolveAPIKeyFromForm(c)
 	if err != nil {
 		renderEmbyLikeDiscover(c, nil, "books", "Jellyfin", "jellyfin_discover_picker", err.Error())
@@ -650,7 +650,7 @@ func (s *Server) handleDestinationsPlexDiscoverSections(c *gin.Context) {
 		renderPlexDiscoverError(c, err.Error())
 		return
 	}
-	urlStr := strings.TrimSpace(c.PostForm("url"))
+	urlStr := normalizeURL(c.PostForm("url"))
 	if urlStr == "" {
 		renderPlexDiscoverError(c, "Enter the Plex server URL first (or pick one with Discover servers).")
 		return
@@ -732,6 +732,31 @@ func renderPlexDiscoverWarning(c *gin.Context, msg string) {
 // fetcher. RFC1918 / loopback addresses are NOT blocked — this app is
 // designed to talk to LAN media servers, and blocking them would defeat
 // the entire feature.
+// normalizeURL trims surrounding whitespace and any trailing slashes
+// from a user-supplied destination URL so `http://abs.lan:13378/` and
+// `http://abs.lan:13378` are stored identically and compare equal.
+// Each backend's buildURL re-applies TrimRight(..., "/") at request
+// time, but persisting the canonical form keeps the DB tidy and lets
+// future logic (dedup checks, reconcile diffs) rely on string equality.
+//
+// Only the path's trailing slashes are stripped; query and fragment
+// (which destination URLs never have, but defense in depth) are
+// preserved by going through url.Parse.
+func normalizeURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		// Hand it back as-is; validateRemoteURL will produce the user-
+		// facing error on the same string.
+		return raw
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+	return u.String()
+}
+
 func validateRemoteURL(raw string) error {
 	u, err := neturl.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -1058,7 +1083,7 @@ func (s *Server) destinationFromForm(c *gin.Context, existingType string) (*data
 	d := &database.LibraryDestination{
 		Type:            database.LibraryDestinationType(t),
 		DisplayName:     displayName,
-		URL:             strings.TrimSpace(c.PostForm("url")),
+		URL:             normalizeURL(c.PostForm("url")),
 		AudiobookPath:   strings.TrimSpace(c.PostForm("audiobook_path")),
 		DestinationPath: strings.TrimSpace(c.PostForm("destination_path")),
 	}
