@@ -1735,14 +1735,6 @@ func (s *Server) handleRestart(c *gin.Context) {
 			webLog.Warn().Err(err).Msg("restart SIGTERM failed, attempting interrupt")
 			_ = proc.Signal(os.Interrupt)
 		}
-		if added > 0 && s.settingBool(context.Background(), library.SettingKeyAutoQueueNewBooks, false) {
-			queued, qErr := s.downloads.QueueNewBooks(context.Background())
-			if qErr != nil {
-				webLog.Error().Err(qErr).Int("added", added).Msg("failed to auto-queue new books after manual sync")
-				return
-			}
-			webLog.Info().Int("added", added).Int("queued", queued).Msg("auto-queued new books after manual sync")
-		}
 	}()
 
 	if c.GetHeader("HX-Request") == "true" {
