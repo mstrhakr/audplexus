@@ -1046,7 +1046,11 @@ func (dm *DownloadManager) decryptBook(ctx context.Context, item *pipelineItem, 
 
 func (dm *DownloadManager) metadataWithOptionalCover(ctx context.Context, asin string, enriched *audnexus.EnrichedBook) (audio.Metadata, string) {
 	meta := enriched.ToAudioMetadata()
-	meta.Profile = audio.ResolveTagProfile(ctx, dm.db)
+	// Resolve the user's chosen profile, then override to Audiobook-rich
+	// when an ABS destination is enabled — ABS reads series/asin freeform
+	// atoms to auto-group books, so the Basic default would silently
+	// degrade the ABS experience.
+	meta.Profile = resolveTagProfileForDownload(ctx, dm.db, audio.ResolveTagProfile(ctx, dm.db))
 
 	dm.mu.Lock()
 	wantCover := dm.embedCover
