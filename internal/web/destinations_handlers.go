@@ -468,20 +468,33 @@ func (s *Server) handleDestinationsPlexPinStart(c *gin.Context) {
 	}
 	authURL := s.plexAuthURL(pin.Code)
 
-	// Render: success banner + popup-open button + self-polling div.
+	// Render: inline <script> that opens the plex.tv popup immediately,
+	// plus a fallback link if the popup is blocked, plus the self-polling
+	// div. The popup-open lives inside the response because the user
+	// just clicked "Sign in with Plex" — that gesture is still considered
+	// active when the HTMX response is parsed, so window.open is allowed
+	// without a blocker prompt in Chrome/Edge/Firefox. Safari is stricter
+	// about popups from network responses; the visible fallback link
+	// covers that case and any popup-blocker that did intervene.
+	//
 	// The poller is the HTMX equivalent of the old setInterval — every 2s
 	// it POSTs to /destinations/plex/pin/poll and either replaces itself
 	// with another polling div (still pending) or with the autofill script
 	// (got token).
+	authURLAttr := htmlEscape(authURL)
+	authURLJS := jsString(authURL)
 	var sb strings.Builder
 	sb.WriteString(`<div class="info-box" style="border-color:var(--accent);margin:.5rem 0" role="status" aria-live="polite">`)
-	sb.WriteString(`<strong>Sign in with Plex.</strong> A new tab will open at plex.tv. After you approve access there, the token will fill in automatically.`)
+	sb.WriteString(`<strong>Approve access in the Plex window.</strong> The token will fill in automatically once you sign in. `)
+	sb.WriteString(`If no window opened, <a href="`)
+	sb.WriteString(authURLAttr)
+	sb.WriteString(`" target="_blank" rel="noopener noreferrer">open plex.tv sign-in</a>.`)
 	sb.WriteString(`</div>`)
-	sb.WriteString(`<a href="`)
-	sb.WriteString(htmlEscape(authURL))
-	sb.WriteString(`" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" `)
-	sb.WriteString(`onclick="setTimeout(function(){window.focus();},200)">Open plex.tv sign-in</a>`)
-	sb.WriteString(` <span class="muted">— waiting for approval…</span>`)
+	sb.WriteString(`<script>(function(){`)
+	sb.WriteString(`try{window.open(`)
+	sb.WriteString(authURLJS)
+	sb.WriteString(`,"plexAuth","width=540,height=760,resizable=yes,scrollbars=yes,noopener");}catch(e){}`)
+	sb.WriteString(`})();</script>`)
 	sb.WriteString(renderPlexPollerDiv(pin.ID, pin.Code))
 	writeSensitiveHTML(c, sb.String())
 }
