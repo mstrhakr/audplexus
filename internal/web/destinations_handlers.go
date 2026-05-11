@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/mediaserver"
 )
 
 // destinationView is the per-card view-model rendered by settings.html.
@@ -213,6 +215,137 @@ func (s *Server) destinationForTest(c *gin.Context) (*database.LibraryDestinatio
 	return formed, nil
 }
 
+// handleDestinationsDiscoverABS calls GET /api/libraries against the
+// posted URL+token, then renders an HTML fragment containing a <select>
+// of libraries. The destination form's JS swaps the picked option's
+// value into the library_id input — turning "paste this UUID from a
+// curl command" UX into a dropdown picker.
+//
+// Same fragment shape as handleDestinationTest: HTMX-targeted, no JSON.
+// Errors render an inline failure box so screen-reader users still
+// hear the outcome via aria-live="polite".
+func (s *Server) handleDestinationsDiscoverABS(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	urlStr := strings.TrimSpace(c.PostForm("url"))
+	apiKey := strings.TrimSpace(c.PostForm("api_key"))
+	if urlStr == "" || apiKey == "" {
+		renderDiscoverResult(c, nil, "Enter both URL and API token before discovering libraries.")
+		return
+	}
+	if err := validateRemoteURL(urlStr); err != nil {
+		renderDiscoverResult(c, nil, err.Error())
+		return
+	}
+
+	libs, err := mediaserver.ListLibraries(ctx, urlStr, apiKey)
+	if err != nil {
+		renderDiscoverResult(c, nil, "Could not list libraries: "+err.Error())
+		return
+	}
+
+	renderDiscoverResult(c, libs, "")
+}
+
+// validateRemoteURL checks a user-supplied destination URL before the
+// server issues an outbound request on the user's behalf. url.Parse is
+// permissive (it accepts empty strings, file://, gopher://, …) so this
+// guard rejects anything that isn't an http(s) URL with a non-empty host
+// to keep the discover/test endpoints from being turned into a generic
+// fetcher. RFC1918 / loopback addresses are NOT blocked — this app is
+// designed to talk to LAN media servers, and blocking them would defeat
+// the entire feature.
+func validateRemoteURL(raw string) error {
+	u, err := neturl.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("URL is malformed: %v", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+	default:
+		return fmt.Errorf("URL must start with http:// or https://")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL is missing a host (e.g. http://abs.local:13378)")
+	}
+	return nil
+}
+
+// renderDiscoverResult emits the HTML fragment for the abs discover
+// affordance. On success: a labeled <select> of libraries plus a hint
+// that picking one will fill the library_id input. On failure: an
+// inline error box matching the test-connection style.
+func renderDiscoverResult(c *gin.Context, libs []mediaserver.ABSLibrary, errMsg string) {
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	if errMsg != "" {
+		c.String(http.StatusOK,
+			`<div class="info-box" style="border-color:var(--error);margin:.5rem 0" role="status" aria-live="polite">`+
+				`<strong>Failed.</strong> `+htmlEscape(errMsg)+`</div>`)
+		return
+	}
+	if len(libs) == 0 {
+		c.String(http.StatusOK,
+			`<div class="info-box" style="border-color:var(--warning);margin:.5rem 0" role="status" aria-live="polite">`+
+				`<strong>No libraries visible to this token.</strong> `+
+				`Check that the token has access to at least one library on this server.</div>`)
+		return
+	}
+
+	bookLibs := make([]mediaserver.ABSLibrary, 0, len(libs))
+	for _, l := range libs {
+		if l.MediaType == "book" {
+			bookLibs = append(bookLibs, l)
+		}
+	}
+
+	// If the token can see the server but no book libraries are visible,
+	// don't show a picker — there's nothing useful to pick. Surface that
+	// as a warning so the user knows they need to grant the token access
+	// to the audiobook library on the ABS side.
+	if len(bookLibs) == 0 {
+		other := len(libs)
+		c.String(http.StatusOK,
+			`<div class="info-box" style="border-color:var(--warning);margin:.5rem 0" role="status" aria-live="polite">`+
+				`<strong>Connected, but no book libraries are visible to this token.</strong> `+
+				htmlEscape(fmt.Sprintf("Found %d non-book libraries; none with mediaType=book. ", other))+
+				`Grant this token access to your audiobook library in ABS, then try again.</div>`)
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString(`<div class="info-box" style="border-color:var(--success);margin:.5rem 0" role="status" aria-live="polite">`)
+	sb.WriteString(`<strong>Connected.</strong> Found `)
+	sb.WriteString(fmt.Sprintf("%d ", len(bookLibs)))
+	if len(bookLibs) == 1 {
+		sb.WriteString(`book library`)
+	} else {
+		sb.WriteString(`book libraries`)
+	}
+	if other := len(libs) - len(bookLibs); other > 0 {
+		sb.WriteString(fmt.Sprintf(` (and %d non-book hidden)`, other))
+	}
+	sb.WriteString(`. Pick one — its UUID will fill the Library ID field.`)
+	sb.WriteString(`</div>`)
+	sb.WriteString(`<label for="abs_discover_picker" class="visually-hidden">Discovered libraries</label>`)
+	sb.WriteString(`<select id="abs_discover_picker" class="form-control" style="margin:.25rem 0 .5rem 0" `)
+	sb.WriteString(`onchange="document.getElementById('library_id').value=this.value">`)
+	sb.WriteString(`<option value="">— pick a library —</option>`)
+	for _, l := range bookLibs {
+		label := l.Name
+		if l.Path != "" {
+			label += " — " + l.Path
+		}
+		sb.WriteString(`<option value="`)
+		sb.WriteString(htmlEscape(l.ID))
+		sb.WriteString(`">`)
+		sb.WriteString(htmlEscape(label))
+		sb.WriteString(`</option>`)
+	}
+	sb.WriteString(`</select>`)
+	c.String(http.StatusOK, sb.String())
+}
+
 func renderTestResult(c *gin.Context, ok bool, success, fail string) {
 	// Tiny inline HTML fragment. role="status" is set on the wrapper in
 	// the form template; this fragment provides the inner content. The
@@ -369,9 +502,12 @@ func (s *Server) destinationFromForm(c *gin.Context, existingType string) (*data
 		return nil, errors.New("invalid destination type")
 	}
 
+	// Display name is optional — default to the type label when blank
+	// ("Audiobookshelf", "Plex", etc.). The CRUD UI rarely needs a custom
+	// name unless the user runs multiple destinations of the same type.
 	displayName := strings.TrimSpace(c.PostForm("display_name"))
 	if displayName == "" {
-		return nil, errors.New("display name is required")
+		displayName = destinationTypeLabel(database.LibraryDestinationType(t))
 	}
 
 	d := &database.LibraryDestination{

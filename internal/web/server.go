@@ -336,6 +336,7 @@ func (s *Server) setupRoutes() {
 	// form values. HTMX-targeted; renders a small HTML fragment.
 	s.router.POST("/destinations/test", s.handleDestinationTest)
 	s.router.POST("/destinations/:id/test", s.handleDestinationTest)
+	s.router.POST("/destinations/discover/abs", s.handleDestinationsDiscoverABS)
 	s.router.GET("/destinations/:id/edit", s.handleDestinationEditForm)
 	s.router.POST("/destinations/:id", s.handleDestinationUpdate)
 	s.router.POST("/destinations/:id/toggle", s.handleDestinationToggle)

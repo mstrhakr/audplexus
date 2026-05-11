@@ -25,11 +25,12 @@
                 {{if not $isEdit}}<input type="hidden" name="type" value="{{$dt}}">{{end}}
 
                 <div class="form-group">
-                    <label for="display_name">Display name</label>
-                    <input id="display_name" name="display_name" type="text" required maxlength="128"
+                    <label for="display_name">Display name <span class="muted" style="font-weight:normal">(optional)</span></label>
+                    <input id="display_name" name="display_name" type="text" maxlength="128"
                            value="{{if $isEdit}}{{.Dest.DisplayName}}{{end}}"
+                           placeholder="{{.DestTypeLabel}}"
                            aria-describedby="display_name_help">
-                    <small id="display_name_help" class="muted">Shown in the Settings list and per-destination logs. Free-form, e.g. "Living room Plex".</small>
+                    <small id="display_name_help" class="muted">Shown in the Settings list and per-destination logs. Defaults to <code>{{.DestTypeLabel}}</code>; set this only if you run multiple destinations of the same type (e.g. "Living room Plex" + "Bedroom Plex").</small>
                 </div>
 
                 <div class="form-group">
@@ -108,6 +109,34 @@
                         {{end}}
                     </details>
                 </div>
+                {{if eq $dt "abs"}}
+                {{/*
+                  Audiobookshelf can list its own libraries via
+                  GET /api/libraries. The Discover button posts the
+                  URL + token to the server, which renders an HTML
+                  fragment containing a <select> — picking one fills
+                  the library_id input below via the option's inline
+                  onchange. Saves the user from copy-pasting a UUID
+                  out of a curl response or a URL bar.
+                */}}
+                <div class="form-group">
+                    <label>Discover libraries</label>
+                    <div>
+                        <button type="button" class="btn btn-secondary"
+                                hx-post="/destinations/discover/abs"
+                                hx-include="closest form"
+                                hx-target="#abs-discover-result"
+                                hx-swap="innerHTML"
+                                hx-disabled-elt="this"
+                                hx-on::before-request="document.getElementById('abs-discover-result').setAttribute('aria-busy', 'true'); document.getElementById('abs-discover-result').textContent = 'Listing libraries…';"
+                                hx-on::after-request="document.getElementById('abs-discover-result').setAttribute('aria-busy', 'false');">
+                            Discover libraries
+                        </button>
+                        <div id="abs-discover-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
+                    </div>
+                    <small class="muted">Asks Audiobookshelf which libraries this token can see and fills the Library ID below. Or paste the UUID manually if you already have it.</small>
+                </div>
+                {{end}}
                 <div class="form-group">
                     <label for="library_id">Library ID</label>
                     <input id="library_id" name="library_id" type="text" required
