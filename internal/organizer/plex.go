@@ -69,14 +69,16 @@ func (o *PlexOrganizer) SetPlexMatchFile(v bool) {
 // Region, subtitle, and series are optional.
 // Optionally embeds metadata, cover art, and generates a chapters file.
 func (o *PlexOrganizer) Organize(ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, inputPath string) (string, error) {
-	return o.OrganizeWithProgress(ctx, book, enriched, inputPath, nil)
+	return o.OrganizeWithProgress(ctx, book, enriched, inputPath, nil, nil)
 }
 
 // OrganizeWithProgress performs the same work as Organize and reports file move progress.
 // The callback receives bytes moved and total bytes.
+// onStage is called when the move stage changes (e.g. to "finalizing" during flush);
+// callers can use this to update the UI. It's optional (can be nil).
 // Files are always saved to the configured libraryRoot. The Plex path (if configured)
 // is only used when notifying Plex to scan the library.
-func (o *PlexOrganizer) OrganizeWithProgress(ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, inputPath string, onMoveProgress func(moved, total int64)) (string, error) {
+func (o *PlexOrganizer) OrganizeWithProgress(ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, inputPath string, onMoveProgress func(moved, total int64), onStage func(stage string)) (string, error) {
 	_ = ctx
 	author := strings.TrimSpace(enriched.Author())
 	title := strings.TrimSpace(enriched.Title())
@@ -119,7 +121,7 @@ func (o *PlexOrganizer) OrganizeWithProgress(ctx context.Context, book *database
 	// File is already decrypted and tagged earlier in the pipeline.
 	if err := os.Rename(inputPath, finalPath); err != nil {
 		// Cross-device rename; fall back to copy+delete.
-		if err := copyFile(inputPath, finalPath, totalBytes, onMoveProgress); err != nil {
+		if err := copyFile(inputPath, finalPath, totalBytes, onMoveProgress, onStage); err != nil {
 			return "", fmt.Errorf("move file: %w", err)
 		}
 		_ = os.Remove(inputPath)
@@ -182,7 +184,8 @@ func (o *PlexOrganizer) OrganizeWithProgress(ctx context.Context, book *database
 // folder so Plex orders tracks naturally.
 //
 // onMoveProgress reports cumulative bytes moved across all chapter files.
-func (o *PlexOrganizer) OrganizeMultiFile(ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, srcDir string, onMoveProgress func(moved, total int64)) (string, error) {
+// onStage is called when the move stage changes (e.g. to "finalizing" during the last file's flush).
+func (o *PlexOrganizer) OrganizeMultiFile(ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, srcDir string, onMoveProgress func(moved, total int64), onStage func(stage string)) (string, error) {
 	_ = ctx
 	author := strings.TrimSpace(enriched.Author())
 	title := strings.TrimSpace(enriched.Title())
@@ -245,12 +248,17 @@ func (o *PlexOrganizer) OrganizeMultiFile(ctx context.Context, book *database.Bo
 
 		if err := os.Rename(src, dst); err != nil {
 			// Cross-device rename; fall back to copy+delete with sub-file progress.
+			// Only pass onStage for the last file so it fires once at the end.
+			var stg func(string)
+			if e.Name() == chapterFiles[len(chapterFiles)-1].Name() {
+				stg = onStage
+			}
 			subProgress := func(moved, _ int64) {
 				if onMoveProgress != nil {
 					onMoveProgress(movedTotal+moved, totalBytes)
 				}
 			}
-			if err := copyFile(src, dst, fileSize, subProgress); err != nil {
+			if err := copyFile(src, dst, fileSize, subProgress, stg); err != nil {
 				return "", fmt.Errorf("move chapter file %q: %w", e.Name(), err)
 			}
 			_ = os.Remove(src)
@@ -467,7 +475,7 @@ func downloadCover(ctx context.Context, coverURL, bookDir, titleBase string) (st
 }
 
 // copyFile copies a file from src to dst and optionally reports progress.
-func copyFile(src, dst string, totalBytes int64, onProgress func(moved, total int64)) error {
+func copyFile(src, dst string, totalBytes int64, onProgress func(moved, total int64), onStage func(stage string)) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -493,7 +501,9 @@ func copyFile(src, dst string, totalBytes int64, onProgress func(moved, total in
 				return io.ErrShortWrite
 			}
 			moved += int64(w)
-			if onProgress != nil {
+			// Only emit progress up to just-under 100% here; the caller emits
+			// the true 100% after this function returns (i.e. after Close flushes).
+			if onProgress != nil && moved < totalBytes {
 				onProgress(moved, totalBytes)
 			}
 		}
@@ -503,6 +513,9 @@ func copyFile(src, dst string, totalBytes int64, onProgress func(moved, total in
 		if readErr != nil {
 			return readErr
 		}
+	}
+	if onStage != nil {
+		onStage("finalizing")
 	}
 	return out.Close()
 }

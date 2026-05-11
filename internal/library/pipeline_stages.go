@@ -500,7 +500,18 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 			}
 
 			onMoveProgress(0, totalBytes)
-			finalPath, err := dm.organizer.OrganizeMultiFile(ctx, book, enriched, stageDir, onMoveProgress)
+			onStage := func(stage string) {
+				if stage == "finalizing" {
+					dm.emit(DownloadEvent{
+						ASIN:   item.ASIN,
+						BookID: item.BookID,
+						Title:  item.Title,
+						Type:   "stage",
+						Stage:  "finalizing",
+					})
+				}
+			}
+			finalPath, err := dm.organizer.OrganizeMultiFile(ctx, book, enriched, stageDir, onMoveProgress, onStage)
 			if err != nil {
 				_ = os.RemoveAll(stageDir)
 				dm.cleanupDownloadFiles(item.ASIN)
@@ -510,7 +521,6 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 				dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("organize: %w", err))
 				return
 			}
-			onMoveProgress(totalBytes, totalBytes)
 
 			// Best-effort: drop the staging dir and the now-orphan decrypted m4b.
 			_ = os.RemoveAll(stageDir)
@@ -587,7 +597,18 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 	}
 
 	onMoveProgress(0, totalBytes)
-	finalPath, err := dm.organizer.OrganizeWithProgress(ctx, book, enriched, decryptedPath, onMoveProgress)
+	onStage := func(stage string) {
+		if stage == "finalizing" {
+			dm.emit(DownloadEvent{
+				ASIN:   item.ASIN,
+				BookID: item.BookID,
+				Title:  item.Title,
+				Type:   "stage",
+				Stage:  "finalizing",
+			})
+		}
+	}
+	finalPath, err := dm.organizer.OrganizeWithProgress(ctx, book, enriched, decryptedPath, onMoveProgress, onStage)
 	if err != nil {
 		asinLog.Error().Err(err).Msg("organization failed")
 		dm.cleanupDownloadFiles(item.ASIN)
@@ -597,7 +618,6 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 		dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("organize: %w", err))
 		return
 	}
-	onMoveProgress(totalBytes, totalBytes)
 
 	// Drop a folder-level `folder.jpg` next to the audiobook so media servers
 	// that prefer a sidecar cover (Emby looks for folder.jpg before falling

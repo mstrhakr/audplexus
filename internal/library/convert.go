@@ -186,7 +186,7 @@ func (dm *DownloadManager) convertM4BToMP3(parentCtx, ctx context.Context, book 
 	// Reuse organizer multi-file flow so mp3 conversion gets the same
 	// companion metadata (.plexmatch/.chapters.txt) and DB update behavior
 	// as pipeline chapter-split output.
-	finalPath, err := dm.organizer.OrganizeMultiFile(ctx, book, enriched, stageDir, nil)
+	finalPath, err := dm.organizer.OrganizeMultiFile(ctx, book, enriched, stageDir, nil, nil)
 	if err != nil {
 		return fmt.Errorf("organize chapter files: %w", err)
 	}

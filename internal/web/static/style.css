@@ -355,6 +355,29 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     transition: width 0.3s;
 }
 
+.progress-throbber {
+    height: 8px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 0.5rem;
+    position: relative;
+}
+
+.progress-throbber-bar {
+    position: absolute;
+    height: 100%;
+    width: 40%;
+    background: var(--accent);
+    border-radius: 4px;
+    animation: throbber-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes throbber-slide {
+    0%   { left: -40%; }
+    100% { left: 100%; }
+}
+
 /* Download cards */
 .download-card {
     background: var(--surface);

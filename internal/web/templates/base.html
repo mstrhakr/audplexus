@@ -56,6 +56,7 @@
             'decrypting':  'badge-warning',
             'processing':  'badge-warning',
             'moving':      'badge-warning',
+            'finalizing':  'badge-warning',
             'converting':  'badge-warning',
             'transcoding': 'badge-warning',
             'waiting_decrypt': 'badge-info',
@@ -68,6 +69,7 @@
 
         function stageLabel(stage) {
             if (stage === 'moving') return 'moving file';
+            if (stage === 'finalizing') return 'finalizing';
             if (stage === 'waiting_decrypt') return 'waiting for decrypt worker';
             if (stage === 'waiting_moving') return 'waiting for moving worker';
             if (stage === 'converting') return 'converting';
@@ -80,6 +82,7 @@
                 stage === 'decrypting' ||
                 stage === 'processing' ||
                 stage === 'moving' ||
+                stage === 'finalizing' ||
                 stage === 'converting' ||
                 stage === 'transcoding' ||
                 stage === 'waiting_decrypt' ||
@@ -433,6 +436,7 @@
 
                     var bClass = badgeClass[stage] || 'badge-warning';
                     var isWaiting = (stage === 'waiting_decrypt' || stage === 'waiting_moving');
+                    var isFinalizing = (stage === 'finalizing');
                     var cancellable = (stage === 'downloading' || stage === 'decrypting' || stage === 'processing' || stage === 'moving' || stage === 'converting' || stage === 'transcoding');
 
                     // Once the user has clicked Cancel we mark the card so
@@ -447,11 +451,16 @@
                     var cancelBtn = cancellable
                         ? '<div class="dl-info-actions"><button class="btn btn-small btn-danger pipe-cancel" data-asin="' + escHTML(d.asin) + '">Cancel</button></div>'
                         : '<div class="dl-info-actions"></div>';
+                    var bottomEl = '';
+                    if (isFinalizing) {
+                        bottomEl = '<div class="progress-throbber"><div class="progress-throbber-bar"></div></div>';
+                    } else if (stage === 'downloading' || stage === 'decrypting' || stage === 'processing' || stage === 'moving' || stage === 'converting' || stage === 'transcoding' || stage === 'waiting_decrypt' || stage === 'waiting_moving') {
+                        bottomEl = '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div>';
+                    }
                     card.innerHTML = '<div class="dl-info"><strong>' + escHTML(label) + '</strong>' +
                         '<span class="badge ' + bClass + '">' + escHTML(stageText) +
-                        (!isWaiting && pct > 0 ? ' ' + pct + '%' : '') +
-                        '</span>' + cancelBtn + '</div>' + details +
-                        ((stage === 'downloading' || stage === 'decrypting' || stage === 'processing' || stage === 'moving' || stage === 'converting' || stage === 'transcoding' || stage === 'waiting_decrypt' || stage === 'waiting_moving') ? '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div>' : '');
+                        (!isWaiting && !isFinalizing && pct > 0 ? ' ' + pct + '%' : '') +
+                        '</span>' + cancelBtn + '</div>' + details + bottomEl;
                 } else if (d.type === 'complete') {
                     clearStageRateState(d.asin);
                     if (card) card.remove();
