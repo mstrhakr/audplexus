@@ -198,7 +198,7 @@
                     <label>Discover libraries</label>
                     <div>
                         <button type="button" class="btn btn-secondary"
-                                hx-post="/destinations/discover/abs"
+                                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/discover/abs{{else}}/destinations/discover/abs{{end}}"
                                 hx-include="closest form"
                                 hx-target="#abs-discover-result"
                                 hx-swap="innerHTML"

@@ -231,9 +231,13 @@ func (s *Server) handleDestinationsDiscoverABS(c *gin.Context) {
 	defer cancel()
 
 	urlStr := strings.TrimSpace(c.PostForm("url"))
-	apiKey := strings.TrimSpace(c.PostForm("api_key"))
-	if urlStr == "" || apiKey == "" {
-		renderDiscoverResult(c, nil, "Enter both URL and API token before discovering libraries.")
+	apiKey, err := s.resolveAPIKeyFromForm(c)
+	if err != nil {
+		renderDiscoverResult(c, nil, err.Error())
+		return
+	}
+	if urlStr == "" {
+		renderDiscoverResult(c, nil, "Enter the URL before discovering libraries.")
 		return
 	}
 	if err := validateRemoteURL(urlStr); err != nil {
@@ -241,9 +245,9 @@ func (s *Server) handleDestinationsDiscoverABS(c *gin.Context) {
 		return
 	}
 
-	libs, err := mediaserver.ListLibraries(ctx, urlStr, apiKey)
-	if err != nil {
-		renderDiscoverResult(c, nil, "Could not list libraries: "+err.Error())
+	libs, listErr := mediaserver.ListLibraries(ctx, urlStr, apiKey)
+	if listErr != nil {
+		renderDiscoverResult(c, nil, "Could not list libraries: "+listErr.Error())
 		return
 	}
 
@@ -264,21 +268,21 @@ func (s *Server) handleDestinationsDiscoverEmby(c *gin.Context) {
 	urlStr := strings.TrimSpace(c.PostForm("url"))
 	apiKey, err := s.resolveAPIKeyFromForm(c)
 	if err != nil {
-		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", err.Error(), "")
+		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", err.Error())
 		return
 	}
 	if urlStr == "" {
-		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", "Enter the Emby URL first.", "")
+		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", "Enter the Emby URL first.")
 		return
 	}
 	if err := validateRemoteURL(urlStr); err != nil {
-		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", err.Error(), "")
+		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", err.Error())
 		return
 	}
 
 	libs, err := mediaserver.EmbyListLibraries(ctx, urlStr, apiKey)
 	if err != nil {
-		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", "Could not list libraries: "+err.Error(), "")
+		renderEmbyLikeDiscover(c, nil, "audiobooks", "Emby", "emby_discover_picker", "Could not list libraries: "+err.Error())
 		return
 	}
 	// Adapt EmbyLibrary -> generic shape.
@@ -286,7 +290,7 @@ func (s *Server) handleDestinationsDiscoverEmby(c *gin.Context) {
 	for _, l := range libs {
 		rows = append(rows, mediaServerLibrary{ID: l.ID, Name: l.Name, Kind: l.CollectionType, Path: l.Path})
 	}
-	renderEmbyLikeDiscover(c, rows, "audiobooks", "Emby", "emby_discover_picker", "", "")
+	renderEmbyLikeDiscover(c, rows, "audiobooks", "Emby", "emby_discover_picker", "")
 }
 
 // handleDestinationsDiscoverJellyfin calls /Library/VirtualFolders and
@@ -303,28 +307,28 @@ func (s *Server) handleDestinationsDiscoverJellyfin(c *gin.Context) {
 	urlStr := strings.TrimSpace(c.PostForm("url"))
 	apiKey, err := s.resolveAPIKeyFromForm(c)
 	if err != nil {
-		renderEmbyLikeDiscover(c, nil, "books", "Jellyfin", "jellyfin_discover_picker", err.Error(), "")
+		renderEmbyLikeDiscover(c, nil, "books", "Jellyfin", "jellyfin_discover_picker", err.Error())
 		return
 	}
 	if urlStr == "" {
-		renderEmbyLikeDiscover(c, nil, "books", "Jellyfin", "jellyfin_discover_picker", "Enter the Jellyfin URL first.", "")
+		renderEmbyLikeDiscover(c, nil, "books", "Jellyfin", "jellyfin_discover_picker", "Enter the Jellyfin URL first.")
 		return
 	}
 	if err := validateRemoteURL(urlStr); err != nil {
-		renderEmbyLikeDiscover(c, nil, "books", "Jellyfin", "jellyfin_discover_picker", err.Error(), "")
+		renderEmbyLikeDiscover(c, nil, "books", "Jellyfin", "jellyfin_discover_picker", err.Error())
 		return
 	}
 
 	libs, err := mediaserver.JellyfinListLibraries(ctx, urlStr, apiKey)
 	if err != nil {
-		renderEmbyLikeDiscover(c, nil, "books", "Jellyfin", "jellyfin_discover_picker", "Could not list libraries: "+err.Error(), "")
+		renderEmbyLikeDiscover(c, nil, "books", "Jellyfin", "jellyfin_discover_picker", "Could not list libraries: "+err.Error())
 		return
 	}
 	rows := make([]mediaServerLibrary, 0, len(libs))
 	for _, l := range libs {
 		rows = append(rows, mediaServerLibrary{ID: l.ID, Name: l.Name, Kind: l.CollectionType, Path: l.Path})
 	}
-	renderEmbyLikeDiscover(c, rows, "books", "Jellyfin", "jellyfin_discover_picker", "", "")
+	renderEmbyLikeDiscover(c, rows, "books", "Jellyfin", "jellyfin_discover_picker", "")
 }
 
 // mediaServerLibrary is the generic row shape consumed by renderEmbyLikeDiscover.
@@ -345,16 +349,15 @@ type mediaServerLibrary struct {
 // picker still renders all libraries so a misconfigured server doesn't
 // strand the user. errMsg is rendered as an inline failure box when
 // non-empty.
-func renderEmbyLikeDiscover(c *gin.Context, libs []mediaServerLibrary, wantKind, backendLabel, pickerID, errMsg, _ /*unused*/ string) {
-	c.Header("Content-Type", "text/html; charset=utf-8")
+func renderEmbyLikeDiscover(c *gin.Context, libs []mediaServerLibrary, wantKind, backendLabel, pickerID, errMsg string) {
 	if errMsg != "" {
-		c.String(http.StatusOK,
+		writeSensitiveHTML(c,
 			`<div class="info-box" style="border-color:var(--error);margin:.5rem 0" role="status" aria-live="polite">`+
 				`<strong>Failed.</strong> `+htmlEscape(errMsg)+`</div>`)
 		return
 	}
 	if len(libs) == 0 {
-		c.String(http.StatusOK,
+		writeSensitiveHTML(c,
 			`<div class="info-box" style="border-color:var(--warning);margin:.5rem 0" role="status" aria-live="polite">`+
 				`<strong>No libraries visible to this API key.</strong> `+
 				`Check that the key has access to at least one library on this `+htmlEscape(backendLabel)+` server.</div>`)
@@ -421,7 +424,7 @@ func renderEmbyLikeDiscover(c *gin.Context, libs []mediaServerLibrary, wantKind,
 		sb.WriteString(`</option>`)
 	}
 	sb.WriteString(`</select>`)
-	c.String(http.StatusOK, sb.String())
+	writeSensitiveHTML(c, sb.String())
 }
 
 // resolveAPIKeyFromForm reads the API key from the form, OR for :id-bound
@@ -480,8 +483,7 @@ func (s *Server) handleDestinationsPlexPinStart(c *gin.Context) {
 	sb.WriteString(`onclick="setTimeout(function(){window.focus();},200)">Open plex.tv sign-in</a>`)
 	sb.WriteString(` <span class="muted">— waiting for approval…</span>`)
 	sb.WriteString(renderPlexPollerDiv(pin.ID, pin.Code))
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(http.StatusOK, sb.String())
+	writeSensitiveHTML(c, sb.String())
 }
 
 // renderPlexPollerDiv emits the self-replacing HTMX poller div. While
@@ -525,8 +527,7 @@ func (s *Server) handleDestinationsPlexPinPoll(c *gin.Context) {
 
 	if strings.TrimSpace(pin.AuthToken) == "" {
 		// Still pending — render another poller. HTMX will re-fire it in 2s.
-		c.Header("Content-Type", "text/html; charset=utf-8")
-		c.String(http.StatusOK, renderPlexPollerDiv(pinID, pinCode))
+		writeSensitiveHTML(c, renderPlexPollerDiv(pinID, pinCode))
 		return
 	}
 
@@ -534,39 +535,35 @@ func (s *Server) handleDestinationsPlexPinPoll(c *gin.Context) {
 	// input and then clicks the "Discover servers" button so the URL list
 	// populates in one shot. The script runs as the swapped-in HTML is
 	// parsed; the message replaces the "waiting…" status above.
-	token := pin.AuthToken
 	var sb strings.Builder
 	sb.WriteString(`<div class="info-box" style="border-color:var(--success);margin:.5rem 0" role="status" aria-live="polite">`)
 	sb.WriteString(`<strong>Connected to Plex.</strong> Token saved to the form. Loading your servers…`)
 	sb.WriteString(`</div>`)
 	sb.WriteString(`<script>(function(){`)
 	sb.WriteString(`var t=document.getElementById('plex_token');if(t){t.value=`)
-	sb.WriteString(jsString(token))
+	sb.WriteString(jsString(pin.AuthToken))
 	sb.WriteString(`;t.dispatchEvent(new Event('change',{bubbles:true}));}`)
 	sb.WriteString(`var b=document.getElementById('plex-discover-servers-btn');if(b){b.click();}`)
 	sb.WriteString(`})();</script>`)
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(http.StatusOK, sb.String())
+	writeSensitiveHTML(c, sb.String())
 }
 
 func renderPlexPinError(c *gin.Context, msg string) {
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(http.StatusOK,
+	writeSensitiveHTML(c,
 		`<div class="info-box" style="border-color:var(--error);margin:.5rem 0" role="status" aria-live="polite">`+
 			`<strong>Plex sign-in failed.</strong> `+htmlEscape(msg)+`</div>`)
 }
 
-// jsString returns a JSON-encoded JS string literal for safe inline embedding
-// inside a <script> tag. JSON-encoding handles quotes, backslashes, and
-// control chars; the manual <, >, & replacements close the </script>
-// injection path. plex.tv tokens are URL-safe base64 in practice, but
-// belt-and-braces.
+// jsString returns a JSON-encoded JS string literal safe for inline
+// embedding inside a <script> tag. Go's encoding/json defaults to
+// SetEscapeHTML(true) for json.Marshal, which already escapes <, >,
+// and & as < / > / & — so a token containing "</script>"
+// becomes "</script>" and cannot close the script tag.
+// plex.tv tokens are URL-safe base64 in practice; this is purely
+// defensive.
 func jsString(s string) string {
 	b, _ := json.Marshal(s)
-	out := strings.ReplaceAll(string(b), `<`, `<`)
-	out = strings.ReplaceAll(out, `>`, `>`)
-	out = strings.ReplaceAll(out, `&`, `&`)
-	return out
+	return string(b)
 }
 
 // handleDestinationsPlexDiscoverServers calls plex.tv resources API to
@@ -616,18 +613,16 @@ func (s *Server) handleDestinationsPlexDiscoverServers(c *gin.Context) {
 		if sv.Local {
 			label = "[LAN] " + label
 		}
-		serverName := stripPlexProductSuffix(sv.Name)
 		sb.WriteString(`<option value="`)
 		sb.WriteString(htmlEscape(sv.URL))
 		sb.WriteString(`" data-server-name="`)
-		sb.WriteString(htmlEscape(serverName))
+		sb.WriteString(htmlEscape(sv.DeviceName))
 		sb.WriteString(`">`)
 		sb.WriteString(htmlEscape(label))
 		sb.WriteString(`</option>`)
 	}
 	sb.WriteString(`</select>`)
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(http.StatusOK, sb.String())
+	writeSensitiveHTML(c, sb.String())
 }
 
 // handleDestinationsPlexDiscoverSections lists library sections on the
@@ -684,23 +679,7 @@ func (s *Server) handleDestinationsPlexDiscoverSections(c *gin.Context) {
 		sb.WriteString(`</option>`)
 	}
 	sb.WriteString(`</select>`)
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(http.StatusOK, sb.String())
-}
-
-// stripPlexProductSuffix turns "Living Room Plex (Plex Media Server)"
-// back into "Living Room Plex" — the device name is what plexListServer-
-// Options concatenated with the product. The picker's visible label
-// keeps the suffix for disambiguation when a user has servers with the
-// same Plex device name on different products; the display_name autofill
-// drops it because users name destinations by their Plex server, not its
-// software flavor.
-func stripPlexProductSuffix(s string) string {
-	s = strings.TrimSpace(s)
-	if idx := strings.LastIndex(s, " ("); idx > 0 && strings.HasSuffix(s, ")") {
-		return strings.TrimSpace(s[:idx])
-	}
-	return s
+	writeSensitiveHTML(c, sb.String())
 }
 
 // resolvePlexTokenFromForm reads the Plex token from the form, OR for
@@ -721,15 +700,13 @@ func (s *Server) resolvePlexTokenFromForm(c *gin.Context) (string, error) {
 }
 
 func renderPlexDiscoverError(c *gin.Context, msg string) {
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(http.StatusOK,
+	writeSensitiveHTML(c,
 		`<div class="info-box" style="border-color:var(--error);margin:.5rem 0" role="status" aria-live="polite">`+
 			`<strong>Failed.</strong> `+htmlEscape(msg)+`</div>`)
 }
 
 func renderPlexDiscoverWarning(c *gin.Context, msg string) {
-	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(http.StatusOK,
+	writeSensitiveHTML(c,
 		`<div class="info-box" style="border-color:var(--warning);margin:.5rem 0" role="status" aria-live="polite">`+
 			`<strong>Connected, but…</strong> `+htmlEscape(msg)+`</div>`)
 }
@@ -754,6 +731,13 @@ func validateRemoteURL(raw string) error {
 	}
 	if u.Host == "" {
 		return fmt.Errorf("URL is missing a host (e.g. http://abs.local:13378)")
+	}
+	// Reject userinfo (http://user:pass@host) — confuses naive readers
+	// about which host is being contacted (the parser sees `host`, the
+	// eye sees `user`) and serves no legitimate purpose for an API key
+	// the user is about to type into a dedicated field below.
+	if u.User != nil {
+		return fmt.Errorf("URL must not contain user:pass@ credentials")
 	}
 	return nil
 }
@@ -852,6 +836,21 @@ func renderTestResult(c *gin.Context, ok bool, success, fail string) {
 func htmlEscape(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;")
 	return r.Replace(s)
+}
+
+// writeSensitiveHTML emits an HTML fragment that may carry secrets
+// (Plex auth tokens, API keys discovered via plex.tv, library UUIDs).
+// Cache-Control: no-store + Pragma: no-cache prevent any proxy or
+// browser cache from storing the response — otherwise a token minted
+// for user A could leak to user B sharing the same upstream cache.
+// The Plex PIN-poll success response is the worst case (contains the
+// authToken inline in a <script>), but the discover endpoints get the
+// same treatment for symmetry.
+func writeSensitiveHTML(c *gin.Context, body string) {
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.Header("Cache-Control", "no-store")
+	c.Header("Pragma", "no-cache")
+	c.String(http.StatusOK, body)
 }
 
 // handleDestinationsCreate persists a new destination after the form submit.

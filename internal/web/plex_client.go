@@ -51,9 +51,16 @@ type plexSectionItemsResponse struct {
 }
 
 type plexServerOption struct {
-	Name  string
-	URL   string
-	Local bool
+	// Name is "<device> (<product>)" for the picker's visible label —
+	// some users have multiple servers with the same device name on
+	// different products, the product disambiguates.
+	Name string
+	// DeviceName is the raw <device> portion, used for default
+	// display_name autofill on the destination form. Plex's parenthesized
+	// product suffix is intentionally absent.
+	DeviceName string
+	URL        string
+	Local      bool
 }
 
 type plexLibrarySection struct {
@@ -253,9 +260,10 @@ func (s *Server) plexListServerOptions(ctx context.Context, token string) ([]ple
 			}
 			seen[u] = struct{}{}
 			options = append(options, plexServerOption{
-				Name:  fmt.Sprintf("%s (%s)", dev.Name, dev.Product),
-				URL:   u,
-				Local: conn.Local,
+				Name:       fmt.Sprintf("%s (%s)", dev.Name, dev.Product),
+				DeviceName: dev.Name,
+				URL:        u,
+				Local:      conn.Local,
 			})
 		}
 	}

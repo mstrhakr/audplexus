@@ -355,6 +355,7 @@ func (s *Server) setupRoutes() {
 	// retype the API key just to discover.
 	s.router.POST("/destinations/:id/plex/discover/servers", s.handleDestinationsPlexDiscoverServers)
 	s.router.POST("/destinations/:id/plex/discover/sections", s.handleDestinationsPlexDiscoverSections)
+	s.router.POST("/destinations/:id/discover/abs", s.handleDestinationsDiscoverABS)
 	s.router.POST("/destinations/:id/discover/emby", s.handleDestinationsDiscoverEmby)
 	s.router.POST("/destinations/:id/discover/jellyfin", s.handleDestinationsDiscoverJellyfin)
 
