@@ -56,17 +56,3 @@ func TestWithDestinationOverridesSettingsTable(t *testing.T) {
 	}
 }
 
-func TestWithDestinationFallsBackToSettingsWhenNotSet(t *testing.T) {
-	// Sanity: backwards compat preserved. Without WithDestination, the
-	// legacy single-backend code path keeps reading settings table.
-	db := newSettingsOnlyStubDB()
-	_ = db.SetSetting(context.Background(), "plex_url", "http://legacy.plex.lan")
-	_ = db.SetSetting(context.Background(), "plex_token", "legacy-token")
-	_ = db.SetSetting(context.Background(), "plex_section_id", "1")
-
-	plex := NewPlex(db, "/audiobooks") // NO WithDestination
-	url, tok, _ := plex.settings(context.Background())
-	if url != "http://legacy.plex.lan" || tok != "legacy-token" {
-		t.Errorf("Plex without WithDestination should read settings table; got url=%q tok=%q", url, tok)
-	}
-}

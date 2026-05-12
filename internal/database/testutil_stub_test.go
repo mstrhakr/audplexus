@@ -53,12 +53,6 @@ func TestStubDB_AllNoopMethods(t *testing.T) {
 	if err := s.UpdateBookStatus(ctx, 1, BookStatusNew); err != nil {
 		t.Fatalf("UpdateBookStatus error: %v", err)
 	}
-	if err := s.UpdateBookPlexInfo(ctx, 1, "k", "t"); err != nil {
-		t.Fatalf("UpdateBookPlexInfo error: %v", err)
-	}
-	if err := s.UpdateBookMediaServerInfo(ctx, 1, "k", "t"); err != nil {
-		t.Fatalf("UpdateBookMediaServerInfo error: %v", err)
-	}
 	if err := s.DeleteBook(ctx, 1); err != nil {
 		t.Fatalf("DeleteBook error: %v", err)
 	}

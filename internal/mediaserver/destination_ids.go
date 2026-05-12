@@ -25,8 +25,18 @@ func pickDestinationItemID(book database.Book, destinationItemIDs map[int64]stri
 	if id := strings.TrimSpace(destinationItemIDs[book.ID]); id != "" {
 		return id
 	}
-	if id := strings.TrimSpace(book.MediaServerID); id != "" {
-		return id
+	return ""
+}
+
+func upsertBookDestinationItem(ctx context.Context, db database.Database, bookID int64, destinationID, serverItemID, serverItemTitle string) error {
+	bd, err := db.GetBookDestination(ctx, bookID, destinationID)
+	if err != nil {
+		return err
 	}
-	return strings.TrimSpace(book.PlexRatingKey)
+	if bd == nil {
+		bd = &database.BookDestination{BookID: bookID, DestinationID: destinationID}
+	}
+	bd.ServerItemID = strings.TrimSpace(serverItemID)
+	bd.ServerItemTitle = strings.TrimSpace(serverItemTitle)
+	return db.UpsertBookDestination(ctx, bd)
 }

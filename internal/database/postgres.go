@@ -70,7 +70,7 @@ func (p *PostgresDB) GetBook(ctx context.Context, id int64) (*Book, error) {
 	return p.scanBook(p.db.QueryRowContext(ctx,
 		`SELECT id, asin, title, author, author_asin, narrator, publisher, description,
 		        duration, series, series_position, cover_url, purchase_date, release_date,
-		        drm_type, status, file_path, file_size, plex_rating_key, plex_title, media_server_id, media_server_title,
+		        drm_type, status, file_path, file_size,
 		        created_at, updated_at
 		 FROM books WHERE id = $1`, id))
 }
@@ -79,7 +79,7 @@ func (p *PostgresDB) GetBookByASIN(ctx context.Context, asin string) (*Book, err
 	return p.scanBook(p.db.QueryRowContext(ctx,
 		`SELECT id, asin, title, author, author_asin, narrator, publisher, description,
 		        duration, series, series_position, cover_url, purchase_date, release_date,
-		        drm_type, status, file_path, file_size, plex_rating_key, plex_title, media_server_id, media_server_title,
+		        drm_type, status, file_path, file_size,
 		        created_at, updated_at
 		 FROM books WHERE asin = $1`, asin))
 }
@@ -119,7 +119,7 @@ func (p *PostgresDB) ListBooks(ctx context.Context, filter BookFilter) ([]Book, 
 
 	query := `SELECT id, asin, title, author, author_asin, narrator, publisher, description,
 	                 duration, series, series_position, cover_url, purchase_date, release_date,
-	                 drm_type, status, file_path, file_size, plex_rating_key, plex_title, media_server_id, media_server_title,
+	                 drm_type, status, file_path, file_size,
 	                 created_at, updated_at
 	          FROM books` + where + orderBy + limit + offset
 
@@ -174,20 +174,6 @@ func (p *PostgresDB) UpdateBookStatus(ctx context.Context, id int64, status Book
 	_, err := p.db.ExecContext(ctx,
 		`UPDATE books SET status = $1, updated_at = $2 WHERE id = $3`,
 		status, time.Now(), id)
-	return err
-}
-
-func (p *PostgresDB) UpdateBookPlexInfo(ctx context.Context, id int64, plexRatingKey, plexTitle string) error {
-	_, err := p.db.ExecContext(ctx,
-		`UPDATE books SET plex_rating_key = $1, plex_title = $2, media_server_id = $3, media_server_title = $4, updated_at = $5 WHERE id = $6`,
-		plexRatingKey, plexTitle, plexRatingKey, plexTitle, time.Now(), id)
-	return err
-}
-
-func (p *PostgresDB) UpdateBookMediaServerInfo(ctx context.Context, id int64, serverID, serverTitle string) error {
-	_, err := p.db.ExecContext(ctx,
-		`UPDATE books SET media_server_id = $1, media_server_title = $2, updated_at = $3 WHERE id = $4`,
-		serverID, serverTitle, time.Now(), id)
 	return err
 }
 
@@ -524,8 +510,7 @@ func (p *PostgresDB) scanBook(row *sql.Row) (*Book, error) {
 	err := row.Scan(&b.ID, &b.ASIN, &b.Title, &b.Author, &b.AuthorASIN, &b.Narrator,
 		&b.Publisher, &b.Description, &b.Duration, &b.Series, &b.SeriesPosition,
 		&b.CoverURL, &b.PurchaseDate, &b.ReleaseDate, &b.DRMType, &b.Status,
-		&b.FilePath, &b.FileSize, &b.PlexRatingKey, &b.PlexTitle,
-		&b.MediaServerID, &b.MediaServerTitle,
+		&b.FilePath, &b.FileSize,
 		&b.CreatedAt, &b.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -541,8 +526,7 @@ func (p *PostgresDB) scanBookRow(rows *sql.Rows) (*Book, error) {
 	err := rows.Scan(&b.ID, &b.ASIN, &b.Title, &b.Author, &b.AuthorASIN, &b.Narrator,
 		&b.Publisher, &b.Description, &b.Duration, &b.Series, &b.SeriesPosition,
 		&b.CoverURL, &b.PurchaseDate, &b.ReleaseDate, &b.DRMType, &b.Status,
-		&b.FilePath, &b.FileSize, &b.PlexRatingKey, &b.PlexTitle,
-		&b.MediaServerID, &b.MediaServerTitle,
+		&b.FilePath, &b.FileSize,
 		&b.CreatedAt, &b.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("scan book row: %w", err)

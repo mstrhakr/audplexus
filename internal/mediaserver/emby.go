@@ -289,9 +289,9 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		key := normalizeTitle(title)
 		if candidates, ok := booksByTitle[key]; ok {
 			for _, book := range candidates {
-				if book.MediaServerID != item.ID || book.MediaServerTitle != title {
-					if err := e.db.UpdateBookMediaServerInfo(ctx, book.ID, item.ID, title); err != nil {
-						msLog.Warn().Err(err).Int64("book_id", book.ID).Str("title", book.Title).Msg("emby: failed to update book media server info")
+				if e.destination != nil {
+					if err := upsertBookDestinationItem(ctx, e.db, book.ID, e.destination.ID, item.ID, title); err != nil {
+						msLog.Warn().Err(err).Int64("book_id", book.ID).Str("title", book.Title).Msg("emby: failed to update destination item id")
 					} else {
 						matched++
 					}
@@ -323,7 +323,11 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		if series == "" {
 			continue
 		}
-		if pickDestinationItemID(b, destinationItemIDs) == "" {
+		if e.destination == nil {
+			continue
+		}
+		itemID := pickDestinationItemID(b, destinationItemIDs)
+		if itemID == "" {
 			continue
 		}
 		seriesBooks[series] = append(seriesBooks[series], b)

@@ -94,12 +94,6 @@ func (s *settingsOnlyStubDB) UpsertBook(ctx context.Context, b *database.Book) e
 func (s *settingsOnlyStubDB) UpdateBookStatus(ctx context.Context, id int64, status database.BookStatus) error {
 	return nil
 }
-func (s *settingsOnlyStubDB) UpdateBookPlexInfo(ctx context.Context, id int64, k, t string) error {
-	return nil
-}
-func (s *settingsOnlyStubDB) UpdateBookMediaServerInfo(ctx context.Context, id int64, k, t string) error {
-	return nil
-}
 func (s *settingsOnlyStubDB) DeleteBook(ctx context.Context, id int64) error { return nil }
 func (s *settingsOnlyStubDB) EnqueueDownload(ctx context.Context, i *database.DownloadQueue) error {
 	return nil

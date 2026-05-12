@@ -26,7 +26,7 @@ type PlexBackend struct {
 
 	// destination, if set, overrides the settings-table lookup so multiple
 	// Plex destinations can have independent config. Settings-table fallback
-	// preserves the legacy single-backend code path.
+	// keeps destination-scoped config isolated.
 	destination *database.LibraryDestination
 }
 
@@ -80,7 +80,7 @@ func (p *PlexBackend) settings(ctx context.Context) (string, string, string) {
 			strings.TrimSpace(p.destination.PlexToken),
 			strings.TrimSpace(p.destination.PlexSectionID)
 	}
-	// Legacy single-backend path: settings table + env-var fallback.
+	// Global settings/env fallback for unbound use.
 	u, _ := p.db.GetSetting(ctx, "plex_url")
 	t, _ := p.db.GetSetting(ctx, "plex_token")
 	s, _ := p.db.GetSetting(ctx, "plex_section_id")
@@ -205,9 +205,9 @@ func (p *PlexBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		key := normalizeTitle(albumTitle)
 		if candidates, ok := booksByTitle[key]; ok {
 			for _, book := range candidates {
-				if book.PlexRatingKey != album.RatingKey || book.PlexTitle != albumTitle {
-					if err := p.db.UpdateBookPlexInfo(ctx, book.ID, album.RatingKey, albumTitle); err != nil {
-						msLog.Warn().Err(err).Int64("book_id", book.ID).Str("title", book.Title).Msg("plex: failed to update book plex info")
+				if p.destination != nil {
+					if err := upsertBookDestinationItem(ctx, p.db, book.ID, p.destination.ID, album.RatingKey, albumTitle); err != nil {
+						msLog.Warn().Err(err).Int64("book_id", book.ID).Str("title", book.Title).Msg("plex: failed to update destination item id")
 					} else {
 						matched++
 					}
@@ -239,7 +239,7 @@ func (p *PlexBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		}
 	}
 
-	seriesBooks := buildPlexSeriesBooks(books, bookDestinationIDs, validAlbumRatingKeys)
+	seriesBooks := buildPlexSeriesBooksFromDestinations(books, bookDestinationIDs, validAlbumRatingKeys)
 
 	if len(seriesBooks) == 0 {
 		msLog.Info().Msg("no series with Plex-matched books to reconcile")
@@ -289,7 +289,7 @@ type plexSeriesBook struct {
 	RatingKey string
 }
 
-func buildPlexSeriesBooks(books []database.Book, bookDestinationIDs map[int64]string, validAlbumRatingKeys map[string]struct{}) map[string][]plexSeriesBook {
+func buildPlexSeriesBooksFromDestinations(books []database.Book, bookDestinationIDs map[int64]string, validAlbumRatingKeys map[string]struct{}) map[string][]plexSeriesBook {
 	seriesBooks := make(map[string][]plexSeriesBook)
 	for _, b := range books {
 		series := strings.TrimSpace(b.Series)
@@ -297,8 +297,17 @@ func buildPlexSeriesBooks(books []database.Book, bookDestinationIDs map[int64]st
 			continue
 		}
 
-		ratingKey := choosePlexCollectionRatingKey(b, bookDestinationIDs[b.ID], validAlbumRatingKeys)
+		ratingKey := strings.TrimSpace(bookDestinationIDs[b.ID])
 		if ratingKey == "" {
+			continue
+		}
+		if _, ok := validAlbumRatingKeys[ratingKey]; !ok {
+			msLog.Debug().
+				Int64("book_id", b.ID).
+				Str("book", b.Title).
+				Str("series", b.Series).
+				Str("stored_destination_id", ratingKey).
+				Msg("plex: stored destination id not found in current Plex album list")
 			continue
 		}
 
@@ -308,42 +317,6 @@ func buildPlexSeriesBooks(books []database.Book, bookDestinationIDs map[int64]st
 		})
 	}
 	return seriesBooks
-}
-
-func choosePlexCollectionRatingKey(book database.Book, storedDestinationID string, validAlbumRatingKeys map[string]struct{}) string {
-	if ratingKey := strings.TrimSpace(storedDestinationID); ratingKey != "" {
-		if _, ok := validAlbumRatingKeys[ratingKey]; ok {
-			return ratingKey
-		}
-		msLog.Debug().
-			Int64("book_id", book.ID).
-			Str("book", book.Title).
-			Str("series", book.Series).
-			Str("stored_destination_id", ratingKey).
-			Msg("plex: stored destination id not found in current Plex album list")
-	}
-
-	plexRatingKey := strings.TrimSpace(book.PlexRatingKey)
-	if _, ok := validAlbumRatingKeys[plexRatingKey]; ok {
-		return plexRatingKey
-	}
-
-	legacyRatingKey := strings.TrimSpace(book.MediaServerID)
-	if _, ok := validAlbumRatingKeys[legacyRatingKey]; ok {
-		return legacyRatingKey
-	}
-
-	if strings.TrimSpace(book.Series) != "" && (storedDestinationID != "" || plexRatingKey != "" || legacyRatingKey != "") {
-		msLog.Debug().
-			Int64("book_id", book.ID).
-			Str("book", book.Title).
-			Str("series", book.Series).
-			Str("stored_destination_id", strings.TrimSpace(storedDestinationID)).
-			Str("plex_rating_key", plexRatingKey).
-			Str("media_server_id", legacyRatingKey).
-			Msg("plex: skipping collection reconcile for book without valid Plex rating key")
-	}
-	return ""
 }
 
 // LibraryItemCount queries Plex for the album count in the configured section.

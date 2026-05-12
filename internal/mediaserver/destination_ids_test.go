@@ -10,7 +10,7 @@ import (
 func TestPickDestinationItemIDPrefersStoredDestinationID(t *testing.T) {
 	t.Parallel()
 
-	book := database.Book{ID: 1, MediaServerID: "legacy", PlexRatingKey: "plex"}
+	book := database.Book{ID: 1}
 	got := pickDestinationItemID(book, map[int64]string{1: "stored"})
 	if got != "stored" {
 		t.Fatalf("pickDestinationItemID() = %q, want %q", got, "stored")
@@ -46,8 +46,6 @@ func (d *destinationIDsStubDB) GetBookByASIN(ctx context.Context, asin string) (
 func (d *destinationIDsStubDB) ListBooks(ctx context.Context, filter database.BookFilter) ([]database.Book, int, error) { return nil, 0, nil }
 func (d *destinationIDsStubDB) UpsertBook(ctx context.Context, book *database.Book) error { return nil }
 func (d *destinationIDsStubDB) UpdateBookStatus(ctx context.Context, id int64, status database.BookStatus) error { return nil }
-func (d *destinationIDsStubDB) UpdateBookPlexInfo(ctx context.Context, id int64, plexRatingKey, plexTitle string) error { return nil }
-func (d *destinationIDsStubDB) UpdateBookMediaServerInfo(ctx context.Context, id int64, serverID, serverTitle string) error { return nil }
 func (d *destinationIDsStubDB) DeleteBook(ctx context.Context, id int64) error { return nil }
 func (d *destinationIDsStubDB) EnqueueDownload(ctx context.Context, item *database.DownloadQueue) error { return nil }
 func (d *destinationIDsStubDB) GetNextPendingDownload(ctx context.Context) (*database.DownloadQueue, error) { return nil, nil }
@@ -71,5 +69,6 @@ func (d *destinationIDsStubDB) ListLibraryDestinations(ctx context.Context) ([]d
 func (d *destinationIDsStubDB) ListEnabledLibraryDestinations(ctx context.Context) ([]database.LibraryDestination, error) { return nil, nil }
 func (d *destinationIDsStubDB) UpdateLibraryDestination(ctx context.Context, d2 *database.LibraryDestination) error { return nil }
 func (d *destinationIDsStubDB) DeleteLibraryDestination(ctx context.Context, id string) error { return nil }
+func (d *destinationIDsStubDB) UpsertBookDestination(ctx context.Context, bd *database.BookDestination) error { return nil }
 func (d *destinationIDsStubDB) GetBookDestinations(ctx context.Context, bookID int64) ([]database.BookDestination, error) { return nil, nil }
 func (d *destinationIDsStubDB) GetBookDestination(ctx context.Context, bookID int64, destID string) (*database.BookDestination, error) { return nil, nil }

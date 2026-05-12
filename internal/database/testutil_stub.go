@@ -50,12 +50,6 @@ func (s *StubDB) ListBooks(ctx context.Context, f BookFilter) ([]Book, int, erro
 }
 func (s *StubDB) UpsertBook(ctx context.Context, b *Book) error                       { return nil }
 func (s *StubDB) UpdateBookStatus(ctx context.Context, id int64, st BookStatus) error { return nil }
-func (s *StubDB) UpdateBookPlexInfo(ctx context.Context, id int64, k, t string) error {
-	return nil
-}
-func (s *StubDB) UpdateBookMediaServerInfo(ctx context.Context, id int64, k, t string) error {
-	return nil
-}
 func (s *StubDB) DeleteBook(ctx context.Context, id int64) error { return nil }
 
 // --- Download Queue ---

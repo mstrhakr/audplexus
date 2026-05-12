@@ -159,9 +159,9 @@ func (a *ABSBackend) OnBookOrganized(ctx context.Context, book OrganizedBook) []
 }
 
 // ReconcileLibrary walks the ABS library, matches each item back to a
-// local book by ASIN, and records the server item ID via
-// UpdateBookMediaServerInfo so future operations can address items
-// directly. Pages through /api/libraries/{id}/items in batches.
+// local book by ASIN, and records the server item ID in the bound
+// destination row so future operations can address items directly.
+// Pages through /api/libraries/{id}/items in batches.
 //
 // ABS auto-detects series from embedded metadata when the Audiobook-rich
 // tag profile is enabled, so this reconcile pass intentionally does NOT
@@ -207,9 +207,9 @@ func (a *ABSBackend) ReconcileLibrary(ctx context.Context, progressFn func(curre
 		if !ok {
 			continue
 		}
-		if book.MediaServerID != it.ID || book.MediaServerTitle != it.Title {
-			if err := a.db.UpdateBookMediaServerInfo(ctx, book.ID, it.ID, it.Title); err != nil {
-				msLog.Warn().Err(err).Int64("book_id", book.ID).Str("asin", asin).Msg("abs: failed to update book media server info")
+		if a.destination != nil {
+			if err := upsertBookDestinationItem(ctx, a.db, book.ID, a.destination.ID, it.ID, it.Title); err != nil {
+				msLog.Warn().Err(err).Int64("book_id", book.ID).Str("asin", asin).Msg("abs: failed to update destination item id")
 			} else {
 				matched++
 			}
