@@ -283,7 +283,7 @@ func fanOutScanWithFn(ctx context.Context, dests []DestinationBackend, maxConcur
 				subFn(db.Row.ID, db.Row.DisplayName, "failed", err.Error(), 0, 0)
 				dlLog.Warn().Err(err).Str("destination_id", db.Row.ID).Str("destination_name", db.Row.DisplayName).Msg("destinations: library scan failed")
 			} else {
-				subFn(db.Row.ID, db.Row.DisplayName, "complete", fmt.Sprintf("%d items", items), items, items)
+				subFn(db.Row.ID, db.Row.DisplayName, "complete", "", items, items)
 			}
 		}()
 	}
@@ -322,16 +322,14 @@ func fanOutReconcileWithFn(ctx context.Context, dests []DestinationBackend, maxC
 			defer sem.Release(1)
 			perCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()
-			lastCurrent := 0
 			lastTotal := 0
 			err := db.Backend.ReconcileLibrary(perCtx, func(current, total int) {
-				lastCurrent = current
 				lastTotal = total
 				if progressFn != nil {
 					progressFn(current, total)
 				}
 				if total > 0 {
-					subFn(db.Row.ID, db.Row.DisplayName, "running", fmt.Sprintf("scanned %d / %d items", current, total), current, total)
+					subFn(db.Row.ID, db.Row.DisplayName, "running", "", current, total)
 				}
 			})
 			results[i] = DestinationReconcileResult{Destination: db.Row, Err: err}
@@ -339,11 +337,8 @@ func fanOutReconcileWithFn(ctx context.Context, dests []DestinationBackend, maxC
 				subFn(db.Row.ID, db.Row.DisplayName, "failed", err.Error(), 0, 0)
 				dlLog.Warn().Err(err).Str("destination_id", db.Row.ID).Str("destination_name", db.Row.DisplayName).Msg("destinations: reconcile failed")
 			} else {
-				if lastTotal > 0 {
-					subFn(db.Row.ID, db.Row.DisplayName, "complete", fmt.Sprintf("scanned %d / %d items", lastCurrent, lastTotal), lastCurrent, lastTotal)
-				} else {
-					subFn(db.Row.ID, db.Row.DisplayName, "complete", "", 0, 0)
-				}
+				// Pass lastTotal/lastTotal so a successful reconcile always shows Y/Y.
+				subFn(db.Row.ID, db.Row.DisplayName, "complete", "", lastTotal, lastTotal)
 			}
 		}()
 	}
