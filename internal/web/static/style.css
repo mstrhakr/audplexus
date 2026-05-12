@@ -305,6 +305,20 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     text-decoration: underline;
 }
 
+.table-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+}
+
+.library-row-default-actions,
+.library-row-cancel-action {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+}
+
 .search-bar input { flex: 1; }
 
 /* Book detail */

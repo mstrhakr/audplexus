@@ -375,6 +375,7 @@ func (s *Server) setupRoutes() {
 		api.POST("/downloads/queue/:asin", s.handleQueueBook)
 		api.POST("/downloads/cancel/:id", s.handleCancelDownload)
 		api.POST("/downloads/cancel-active/:asin", s.handleCancelActiveDownload)
+		api.POST("/downloads/cancel-by-asin/:asin", s.handleCancelByASIN)
 		api.POST("/downloads/retry/:id", s.handleRetryDownload)
 		api.POST("/downloads/retry-all", s.handleRetryAllDownloads)
 		api.POST("/downloads/pause", s.handlePauseDownloads)
@@ -761,10 +762,11 @@ func (s *Server) handleLibrary(c *gin.Context) {
 	}
 
 	data := gin.H{
-		"Books":  books,
-		"Total":  total,
-		"Filter": filter,
-		"Page":   "library",
+		"Books":       books,
+		"Total":       total,
+		"Filter":      filter,
+		"Page":        "library",
+		"BookActions": buildLibraryBookActions(books),
 	}
 
 	// For HTMX partial requests, render only the table body
@@ -773,6 +775,84 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		return
 	}
 	c.HTML(http.StatusOK, "library.html", data)
+}
+
+type libraryBookAction struct {
+	ShowConvert    bool
+	ConvertLabel   string
+	ConvertFormat  string
+	ConvertConfirm string
+	ShowCancel     bool
+}
+
+func buildLibraryBookActions(books []database.Book) map[int64]libraryBookAction {
+	actions := make(map[int64]libraryBookAction, len(books))
+	for _, b := range books {
+		a := libraryBookAction{}
+		statusText := strings.ToLower(strings.TrimSpace(string(b.Status)))
+		a.ShowCancel = b.Status == database.BookStatusQueued || b.Status == database.BookStatusDownloading || b.Status == database.BookStatusDecrypting || b.Status == database.BookStatusProcessing || statusText == "converting"
+
+		if b.Status == database.BookStatusComplete {
+			if format, label, confirm, ok := conversionActionForPath(b.FilePath); ok {
+				a.ShowConvert = true
+				a.ConvertFormat = format
+				a.ConvertLabel = label
+				a.ConvertConfirm = confirm
+			}
+		}
+
+		actions[b.ID] = a
+	}
+	return actions
+}
+
+func conversionActionForPath(filePath string) (string, string, string, bool) {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return "", "", "", false
+	}
+
+	fi, err := os.Stat(filePath)
+	if err != nil {
+		return "", "", "", false
+	}
+
+	if fi.IsDir() {
+		if !hasFilesWithExt(filePath, ".mp3") {
+			return "", "", "", false
+		}
+		return "m4b", "Merge to M4B", "Reassemble chapter MP3s into a single M4B? The chapter files will be removed.", true
+	}
+
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".m4b":
+		return "mp3", "Split to MP3", "Split this book into per-chapter MP3 files? The original M4B will be removed.", true
+	case ".mp3":
+		dir := filepath.Dir(filePath)
+		if !hasFilesWithExt(dir, ".mp3") {
+			return "", "", "", false
+		}
+		return "m4b", "Merge to M4B", "Reassemble chapter MP3s into a single M4B? The chapter files will be removed.", true
+	default:
+		return "", "", "", false
+	}
+}
+
+func hasFilesWithExt(dirPath string, ext string) bool {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return false
+	}
+	ext = strings.ToLower(strings.TrimSpace(ext))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if strings.EqualFold(filepath.Ext(e.Name()), ext) {
+			return true
+		}
+	}
+	return false
 }
 
 // handleBookDetail renders the detail page for a single book.
@@ -1613,6 +1693,65 @@ func (s *Server) handleCancelActiveDownload(c *gin.Context) {
 	}
 	webLog.Info().Str("asin", asin).Msg("cancelled active pipeline item via UI")
 	c.JSON(http.StatusOK, gin.H{"status": "cancelling"})
+}
+
+// handleCancelByASIN cancels pending queue rows and active processing for a book.
+// Used by the Library table so users can stop work without navigating to Pipeline.
+func (s *Server) handleCancelByASIN(c *gin.Context) {
+	ctx := c.Request.Context()
+	asin := strings.TrimSpace(c.Param("asin"))
+	if asin == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing asin"})
+		return
+	}
+
+	cancelledRows := 0
+
+	pendingStatus := database.DownloadStatusPending
+	pendingRows, err := s.db.ListDownloads(ctx, &pendingStatus)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	for _, row := range pendingRows {
+		if strings.TrimSpace(row.ASIN) != asin {
+			continue
+		}
+		if err := s.db.CancelDownload(ctx, row.ID); err == nil {
+			cancelledRows++
+		}
+	}
+
+	activeStatus := database.DownloadStatusActive
+	activeRows, err := s.db.ListDownloads(ctx, &activeStatus)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	for _, row := range activeRows {
+		if strings.TrimSpace(row.ASIN) != asin {
+			continue
+		}
+		if err := s.db.CancelDownload(ctx, row.ID); err == nil {
+			cancelledRows++
+		}
+	}
+
+	// Conversion and some in-flight stages may not have an active download row,
+	// so always attempt active cancellation by ASIN.
+	activeCancelled := s.downloads.CancelActiveDownload(asin)
+
+	if cancelledRows == 0 && !activeCancelled {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no active or queued work for that asin"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":           "cancelling",
+		"asin":             asin,
+		"cancelled_rows":   cancelledRows,
+		"active_cancelled": activeCancelled,
+	})
 }
 
 // handleRetryDownload resets a failed download back to pending.

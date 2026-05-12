@@ -25,11 +25,30 @@
             <td>{{formatDuration .Duration}}</td>
             <td><span class="badge {{statusBadge .Status}}" id="status-book-{{.ID}}">{{.Status}}</span></td>
             <td>
-                {{if eq (printf "%s" .Status) "new"}}
-                <button hx-post="/api/downloads/queue/{{.ASIN}}" hx-swap="none" hx-on::after-request="this.remove()" class="btn btn-small btn-primary">Queue</button>
-                {{else if eq (printf "%s" .Status) "failed"}}
-                <button hx-post="/api/downloads/queue/{{.ASIN}}" hx-swap="none" hx-on::after-request="this.remove()" class="btn btn-small btn-primary">Retry</button>
-                {{end}}
+                {{$action := index $.BookActions .ID}}
+                <div class="table-actions" id="book-actions-{{.ID}}" data-book-id="{{.ID}}" data-asin="{{.ASIN}}">
+                    <div class="library-row-default-actions{{if $action.ShowCancel}} is-hidden{{end}}">
+                    {{if eq (printf "%s" .Status) "new"}}
+                    <button hx-post="/api/downloads/queue/{{.ASIN}}" hx-swap="none" hx-on::after-request="this.remove()" class="btn btn-small btn-primary">Queue</button>
+                    {{else if eq (printf "%s" .Status) "failed"}}
+                    <button hx-post="/api/downloads/queue/{{.ASIN}}" hx-swap="none" hx-on::after-request="this.remove()" class="btn btn-small btn-primary">Retry</button>
+                    {{end}}
+
+                    {{if $action.ShowConvert}}
+                    <button hx-post="/api/books/{{.ID}}/convert?format={{$action.ConvertFormat}}"
+                        hx-confirm="{{$action.ConvertConfirm}}"
+                        hx-swap="none"
+                        class="btn btn-small btn-secondary">{{$action.ConvertLabel}}</button>
+                    {{end}}
+                    </div>
+
+                    <div class="library-row-cancel-action{{if not $action.ShowCancel}} is-hidden{{end}}">
+                    <button hx-post="/api/downloads/cancel-by-asin/{{.ASIN}}"
+                        hx-swap="none"
+                        hx-on::before-request="this.disabled=true; this.textContent='Cancelling...'"
+                        class="btn btn-small btn-danger">Cancel</button>
+                    </div>
+                </div>
             </td>
         </tr>
         {{else}}

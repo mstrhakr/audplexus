@@ -315,6 +315,31 @@
             }
         }
 
+        function isLibraryCancelableStage(stage) {
+            return stage === 'downloading' ||
+                stage === 'decrypting' ||
+                stage === 'processing' ||
+                stage === 'moving' ||
+                stage === 'converting' ||
+                stage === 'transcoding';
+        }
+
+        function setLibraryRowCancelState(bookID, asin, showCancel) {
+            var wrap = null;
+            if (bookID) {
+                wrap = document.getElementById('book-actions-' + bookID);
+            }
+            if (!wrap && asin) {
+                wrap = document.querySelector('.table-actions[data-asin="' + asin + '"]');
+            }
+            if (!wrap) return;
+
+            var defaultWrap = wrap.querySelector('.library-row-default-actions');
+            var cancelWrap = wrap.querySelector('.library-row-cancel-action');
+            if (defaultWrap) defaultWrap.classList.toggle('is-hidden', showCancel);
+            if (cancelWrap) cancelWrap.classList.toggle('is-hidden', !showCancel);
+        }
+
         function onPipelineEvent(e) {
             var d = JSON.parse(e.data);
 
@@ -365,6 +390,12 @@
                 var stage = d.stage || d.type;
                 badge.textContent = stageLabel(stage);
                 badge.className = 'badge ' + (badgeClass[stage] || 'badge-neutral');
+
+                if (isLibraryCancelableStage(stage)) {
+                    setLibraryRowCancelState(d.book_id, d.asin, true);
+                } else if (stage === 'complete' || stage === 'failed') {
+                    setLibraryRowCancelState(d.book_id, d.asin, false);
+                }
             }
 
             // --- Pipeline page: active pipeline card ---
