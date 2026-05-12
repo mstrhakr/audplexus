@@ -279,6 +279,7 @@ func (s *Server) handleDiagnosticsTargetedScan(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "book has no local file path"})
 		return
 	}
+	webLog.Info().Str("asin", strings.TrimSpace(req.ASIN)).Str("file_path", book.FilePath).Str("destination_id", strings.TrimSpace(req.DestinationID)).Msg("diagnostics: targeted scan start")
 
 	dests, _ := s.db.ListEnabledLibraryDestinations(ctx)
 	if len(dests) == 0 {
@@ -341,11 +342,13 @@ func (s *Server) handleDiagnosticsTargetedScan(c *gin.Context) {
 		}
 		if scanOK {
 			okCount++
+			webLog.Info().Str("asin", book.ASIN).Str("destination_id", d.ID).Str("destination_name", destinationDisplayName(d)).Str("detail", scanDetail).Msg("diagnostics: targeted scan triggered")
 			results = append(results, gin.H{"destination_id": d.ID, "destination_name": destinationDisplayName(d), "ok": true, "detail": scanDetail})
 		} else {
 			if scanErr == "" {
 				scanErr = "scan trigger was not reported by backend"
 			}
+			webLog.Warn().Str("asin", book.ASIN).Str("destination_id", d.ID).Str("destination_name", destinationDisplayName(d)).Str("error", scanErr).Msg("diagnostics: targeted scan failed")
 			results = append(results, gin.H{"destination_id": d.ID, "destination_name": destinationDisplayName(d), "ok": false, "error": scanErr})
 		}
 	}

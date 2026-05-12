@@ -107,7 +107,6 @@ async function triggerTargetedScan(asin) {
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || 'scan failed');
         status.innerHTML = '<span class="success">' + escapeHtml(data.message || 'scan queued') + '</span>';
-        setTimeout(loadDiagnostics, 800);
     } catch (err) {
         status.innerHTML = '<span class="error">' + escapeHtml(err.message) + '</span>';
     }
