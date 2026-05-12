@@ -1,335 +1,160 @@
 {{define "content"}}
-<h1>Library Diagnostics</h1>
+<h1>Diagnostics</h1>
+<p>Destination-first diagnostics for already-downloaded books. Resolution order: targeted scan first, redownload last resort.</p>
 
-<p>Compare your Audible library with what&apos;s in your media server ({{if .MediaServerDisplay}}{{.MediaServerDisplay}}{{else}}Plex/Emby{{end}}) to identify missing or problematic books.</p>
-
-<script>
-window.MEDIA_SERVER_LABEL = "{{if .MediaServerDisplay}}{{.MediaServerDisplay}}{{else}}media server{{end}}";
-</script>
-
-<div class="diagnostics-summary" id="diagnostics-summary">
-    <div class="loading">Loading diagnostic data...</div>
+<div id="diag-summary" class="diagnostics-summary">
+    <div class="loading">Loading diagnostics...</div>
 </div>
 
 <div class="actions-bar">
-    <button id="btn-refresh" class="btn btn-primary" onclick="loadDiagnostics()">Refresh</button>
-    <button id="btn-redownload-all" class="btn btn-warning" onclick="redownloadAll()" style="display:none;">Redownload All</button>
-    <select id="filter-type" onchange="filterResults()">
-        <option value="all">All Issues</option>
-        <option value="missing-plex">Missing from Library</option>
-        <option value="missing-disk">Missing from Disk</option>
-        <option value="region">Region Mismatch</option>
-    </select>
+    <button class="btn btn-primary" onclick="loadDiagnostics()">Refresh</button>
     <span id="diag-status"></span>
 </div>
 
-<h2>Problem Books</h2>
-<div id="diagnostics-results">
-    <p class="empty">Click Refresh to load diagnostics</p>
+<h2>Issue Inbox</h2>
+<div id="diag-issues">
+    <p class="empty">Loading...</p>
 </div>
 
 <script>
-let diagnosticData = null;
+let diagData = null;
 
 async function loadDiagnostics() {
-    const summary = document.getElementById('diagnostics-summary');
-    const results = document.getElementById('diagnostics-results');
-    
-    summary.innerHTML = '<div class="loading">Loading diagnostic data...</div>';
-    results.innerHTML = '<div class="loading">Analyzing library...</div>';
-    
+    const summary = document.getElementById('diag-summary');
+    const issues = document.getElementById('diag-issues');
+    summary.innerHTML = '<div class="loading">Loading diagnostics...</div>';
+    issues.innerHTML = '<div class="loading">Evaluating destinations...</div>';
     try {
-        const response = await fetch('/api/diagnostics/compare');
-        if (!response.ok) {
-            throw new Error('Failed to load diagnostics: ' + response.statusText);
-        }
-        diagnosticData = await response.json();
-        renderSummary(diagnosticData);
-        renderResults(diagnosticData.items);
-    } catch (error) {
-        summary.innerHTML = '<div class="error">Error: ' + error.message + '</div>';
-        results.innerHTML = '';
+        const r = await fetch('/api/diagnostics/compare');
+        if (!r.ok) throw new Error('Failed: ' + r.statusText);
+        diagData = await r.json();
+        renderSummary(diagData);
+        renderIssues(diagData.items || []);
+    } catch (err) {
+        summary.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+        issues.innerHTML = '';
     }
 }
 
 function renderSummary(data) {
-    const summary = document.getElementById('diagnostics-summary');
-    summary.innerHTML = `
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-value">${data.total_books}</div>
-                <div class="stat-label">Total Books</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${data.complete_books}</div>
-                <div class="stat-label">Complete</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${data.plex_items}</div>
-                <div class="stat-label">In ${window.MEDIA_SERVER_LABEL}</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${data.files_on_disk}</div>
-                <div class="stat-label">On Disk</div>
-            </div>
-            <div class="stat-card ${data.missing_from_plex > 0 ? 'stat-warning' : ''}">
-                <div class="stat-value">${data.missing_from_plex}</div>
-                <div class="stat-label">Missing from ${window.MEDIA_SERVER_LABEL}</div>
-            </div>
-            <div class="stat-card ${data.missing_from_disk > 0 ? 'stat-error' : ''}">
-                <div class="stat-value">${data.missing_from_disk}</div>
-                <div class="stat-label">Missing from Disk</div>
-            </div>
-            <div class="stat-card ${data.region_issues > 0 ? 'stat-warning' : ''}">
-                <div class="stat-value">${data.region_issues}</div>
-                <div class="stat-label">Region Issues</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${data.user_marketplace.toUpperCase()}</div>
-                <div class="stat-label">Your Region</div>
-            </div>
+    const summary = document.getElementById('diag-summary');
+    const cards = (data.destinations || []).map(d => {
+        const cls = !d.fetch_healthy ? 'stat-error' : (d.missing > 0 ? 'stat-warning' : '');
+        return `<div class="stat-card ${cls}">
+            <div class="stat-value">${d.matched}</div>
+            <div class="stat-label">${escapeHtml(d.name)}</div>
+            <div class="stat-sub">Missing ${d.missing} • Unknown ${d.unknown}</div>
+            ${d.fetch_error ? `<div class="stat-sub error">${escapeHtml(d.fetch_error)}</div>` : ''}
+        </div>`;
+    }).join('');
+
+    summary.innerHTML = `<div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-value">${data.complete_books}</div>
+            <div class="stat-label">Complete Books</div>
+            <div class="stat-sub">Issue Books ${data.issue_books}</div>
         </div>
-    `;
+        <div class="stat-card ${data.disk_missing > 0 ? 'stat-warning' : ''}">
+            <div class="stat-value">${data.disk_missing}</div>
+            <div class="stat-label">Missing On Disk</div>
+            <div class="stat-sub">Generated ${new Date(data.generated_at).toLocaleTimeString()}</div>
+        </div>
+        ${cards}
+    </div>`;
 }
 
-function renderResults(items) {
-    const results = document.getElementById('diagnostics-results');
-    const redownloadAllBtn = document.getElementById('btn-redownload-all');
-    
-    if (!items || items.length === 0) {
-        results.innerHTML = '<p class="success">No issues found! All complete books are properly synced.</p>';
-        redownloadAllBtn.style.display = 'none';
+function renderIssues(items) {
+    const root = document.getElementById('diag-issues');
+    if (!items.length) {
+        root.innerHTML = '<p class="success">No issues detected.</p>';
         return;
     }
-    
-    // Show the redownload-all button if any items can be redownloaded
-    const hasRedownloadable = items.some(i => i.can_redownload);
-    redownloadAllBtn.style.display = hasRedownloadable ? '' : 'none';
-    
-    let html = `
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Title</th>
-                    <th>Author</th>
-                    <th>Region</th>
-                    <th>Status</th>
-                    <th>Issue</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-    `;
-    
+    let html = `<table class="data-table"><thead><tr>
+        <th>Book</th><th>Status</th><th>Issue</th><th>Actions</th>
+    </tr></thead><tbody>`;
+
     for (const item of items) {
-        const statusBadges = [];
-        if (item.on_disk) statusBadges.push('<span class="badge badge-success">On Disk</span>');
-        else statusBadges.push('<span class="badge badge-error">Missing File</span>');
-        
-        if (item.in_plex) statusBadges.push('<span class="badge badge-success">In ' + window.MEDIA_SERVER_LABEL + '</span>');
-        else statusBadges.push('<span class="badge badge-warning">Not in ' + window.MEDIA_SERVER_LABEL + '</span>');
-        
-        const regionClass = item.region ? '' : 'text-muted';
-        const regionDisplay = item.region ? `[${item.region}]` : 'N/A';
-        
-        html += `
-            <tr id="diag-${item.asin}" 
-                data-missing-plex="${!item.in_plex}" 
-                data-missing-disk="${!item.on_disk}" 
-                data-region-issue="${item.issue && item.issue.includes('Region')}">
-                <td>
-                    <a href="/library/${item.asin}">${escapeHtml(item.title)}</a>
-                    <br><small class="text-muted">${item.asin}</small>
-                </td>
-                <td>${escapeHtml(item.author || '')}</td>
-                <td class="${regionClass}">${regionDisplay}</td>
-                <td>${statusBadges.join(' ')}</td>
-                <td class="issue-text">${escapeHtml(item.issue || '')}</td>
-                <td>
-                    ${item.can_redownload ? `
-                        <button 
-                            class="btn btn-small btn-warning"
-                            onclick="redownloadBook('${item.asin}', '${escapeHtml(item.title)}')"
-                            title="Delete old file and re-download">
-                            Redownload
-                        </button>
-                    ` : ''}
-                </td>
-            </tr>
-        `;
+        const statuses = (item.destination_statuses || []).map(s => {
+            const cls = s.status === 'matched' ? 'badge-success' : (s.status === 'missing' ? 'badge-warning' : 'badge-neutral');
+            const detail = s.match_method ? ` (${s.match_method})` : '';
+            const reason = s.reason ? `<div class="dest-detail">${escapeHtml(s.reason)}</div>` : '';
+            return `<div class="dest-row"><span class="dest-name">${escapeHtml(s.destination_name)}</span><span class="badge ${cls}">${escapeHtml(s.status)}</span><span class="text-muted">${escapeHtml(detail)}</span>${reason}</div>`;
+        }).join('');
+
+        html += `<tr>
+            <td><a href="/library/${item.asin}">${escapeHtml(item.title)}</a><br><small class="text-muted">${item.asin}</small></td>
+            <td>${statuses}</td>
+            <td class="issue-text">${escapeHtml(item.issue_summary)}</td>
+            <td>
+                ${item.can_targeted_scan ? `<button class="btn btn-small btn-primary" onclick="triggerTargetedScan('${item.asin}')">Targeted Scan</button>` : ''}
+                ${item.can_redownload ? `<button class="btn btn-small btn-secondary" onclick="redownloadBook('${item.asin}', '${escapeJs(item.title)}')">Redownload (Last Resort)</button>` : ''}
+            </td>
+        </tr>`;
     }
-    
     html += '</tbody></table>';
-    results.innerHTML = html;
+    root.innerHTML = html;
 }
 
-function filterResults() {
-    const filter = document.getElementById('filter-type').value;
-    const rows = document.querySelectorAll('#diagnostics-results tbody tr');
-    
-    rows.forEach(row => {
-        let show = true;
-        switch (filter) {
-            case 'missing-plex':
-                show = row.dataset.missingPlex === 'true';
-                break;
-            case 'missing-disk':
-                show = row.dataset.missingDisk === 'true';
-                break;
-            case 'region':
-                show = row.dataset.regionIssue === 'true';
-                break;
-        }
-        row.style.display = show ? '' : 'none';
-    });
+async function triggerTargetedScan(asin) {
+    const status = document.getElementById('diag-status');
+    status.innerHTML = '<span class="loading">Triggering scan...</span>';
+    try {
+        const r = await fetch('/api/diagnostics/targeted-scan', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ asin })
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'scan failed');
+        status.innerHTML = '<span class="success">' + escapeHtml(data.message || 'scan queued') + '</span>';
+        setTimeout(loadDiagnostics, 800);
+    } catch (err) {
+        status.innerHTML = '<span class="error">' + escapeHtml(err.message) + '</span>';
+    }
 }
 
 async function redownloadBook(asin, title) {
-    if (!confirm(`Are you sure you want to redownload "${title}"?\n\nThis will delete the existing file and folder, then queue a fresh download.`)) {
-        return;
-    }
-    
+    if (!confirm('Last resort: redownload "' + title + '"? This deletes local files first.')) return;
     const status = document.getElementById('diag-status');
-    status.innerHTML = '<span class="loading">Redownloading...</span>';
-    
+    status.innerHTML = '<span class="loading">Queueing redownload...</span>';
     try {
-        const response = await fetch(`/api/downloads/redownload/${asin}`, {
-            method: 'POST'
-        });
-        
-        const data = await response.json();
-        
-        if (response.ok) {
-            status.innerHTML = '<span class="success">' + data.message + '</span>';
-            // Remove the row from the table
-            const row = document.getElementById('diag-' + asin);
-            if (row) row.remove();
-        } else {
-            status.innerHTML = '<span class="error">Error: ' + (data.error || 'Unknown error') + '</span>';
-        }
-    } catch (error) {
-        status.innerHTML = '<span class="error">Error: ' + error.message + '</span>';
-    }
-}
-
-async function redownloadAll() {
-    if (!diagnosticData || !diagnosticData.items || diagnosticData.items.length === 0) return;
-
-    const asins = diagnosticData.items.filter(i => i.can_redownload).map(i => i.asin);
-    if (asins.length === 0) return;
-
-    if (!confirm('Redownload ' + asins.length + ' book(s) with problems?\n\nThis will delete their existing files and queue fresh downloads.')) {
-        return;
-    }
-    
-    const status = document.getElementById('diag-status');
-    status.innerHTML = '<span class="loading">Queuing redownloads...</span>';
-    
-    try {
-        const response = await fetch('/api/diagnostics/redownload-all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ asins: asins })
-        });
-        
-        const data = await response.json();
-        
-        if (response.ok) {
-            status.innerHTML = '<span class="success">' + data.message + '</span>';
-            loadDiagnostics();
-        } else {
-            status.innerHTML = '<span class="error">Error: ' + (data.error || 'Unknown error') + '</span>';
-        }
-    } catch (error) {
-        status.innerHTML = '<span class="error">Error: ' + error.message + '</span>';
+        const r = await fetch('/api/downloads/redownload/' + encodeURIComponent(asin), { method: 'POST' });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'redownload failed');
+        status.innerHTML = '<span class="success">' + escapeHtml(data.message || 'queued') + '</span>';
+        setTimeout(loadDiagnostics, 800);
+    } catch (err) {
+        status.innerHTML = '<span class="error">' + escapeHtml(err.message) + '</span>';
     }
 }
 
 function escapeHtml(text) {
-    if (!text) return '';
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = text || '';
     return div.innerHTML;
 }
 
-// Auto-load on page load
+function escapeJs(text) {
+    return (text || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
 document.addEventListener('DOMContentLoaded', loadDiagnostics);
 </script>
 
 <style>
-.diagnostics-summary {
-    margin-bottom: 2rem;
-}
-
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 1rem;
-    margin-bottom: 1rem;
-}
-
-.stat-card {
-    background: var(--surface-color, #1e1e1e);
-    border: 1px solid var(--border-color, #333);
-    border-radius: 8px;
-    padding: 1rem;
-    text-align: center;
-}
-
-.stat-card.stat-warning {
-    border-color: #f59e0b;
-    background: rgba(245, 158, 11, 0.1);
-}
-
-.stat-card.stat-error {
-    border-color: #ef4444;
-    background: rgba(239, 68, 68, 0.1);
-}
-
-.stat-value {
-    font-size: 2rem;
-    font-weight: bold;
-    color: var(--primary-color, #60a5fa);
-}
-
-.stat-label {
-    font-size: 0.875rem;
-    color: var(--text-secondary, #888);
-    margin-top: 0.25rem;
-}
-
-.issue-text {
-    font-size: 0.875rem;
-    color: #f59e0b;
-    max-width: 300px;
-}
-
-.loading {
-    color: var(--text-secondary, #888);
-    font-style: italic;
-}
-
-.success {
-    color: #10b981;
-    padding: 1rem;
-    background: rgba(16, 185, 129, 0.1);
-    border-radius: 8px;
-}
-
-.error {
-    color: #ef4444;
-}
-
-.text-muted {
-    color: var(--text-secondary, #888);
-}
-
-#filter-type {
-    padding: 0.5rem;
-    background: var(--surface-color, #1e1e1e);
-    border: 1px solid var(--border-color, #333);
-    border-radius: 4px;
-    color: var(--text-color, #fff);
-}
+.diagnostics-summary { margin-bottom: 1.2rem; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.8rem; }
+.stat-card { background: var(--surface-color, #1e1e1e); border: 1px solid var(--border-color, #333); border-radius: 8px; padding: 0.8rem; }
+.stat-card.stat-warning { border-color: #f59e0b; background: rgba(245, 158, 11, 0.1); }
+.stat-card.stat-error { border-color: #ef4444; background: rgba(239, 68, 68, 0.1); }
+.stat-value { font-size: 1.6rem; font-weight: 700; color: var(--primary-color, #60a5fa); }
+.stat-label { margin-top: 0.2rem; font-size: 0.92rem; }
+.stat-sub { margin-top: 0.2rem; font-size: 0.78rem; color: var(--text-secondary, #888); }
+.dest-row { margin-bottom: 0.35rem; }
+.dest-name { display: inline-block; min-width: 9rem; }
+.dest-detail { font-size: 0.75rem; color: var(--text-secondary, #888); }
+.issue-text { color: #f59e0b; }
+.badge-neutral { background: rgba(107, 114, 128, 0.2); color: #d1d5db; border: 1px solid #6b7280; }
+.btn-secondary { background: #374151; color: #fff; }
 </style>
 {{end}}

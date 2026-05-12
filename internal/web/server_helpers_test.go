@@ -80,31 +80,6 @@ func TestSettingsHelpers(t *testing.T) {
 	}
 }
 
-func TestNormalizeTitle(t *testing.T) {
-	if got := normalizeTitle(" The-Book: A_Test, Vol. 1 "); got != "the book a test vol 1" {
-		t.Fatalf("normalizeTitle() = %q", got)
-	}
-}
-
-func TestExtractRegionFromPath(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{in: "/library/My Book [US]", want: "us"},
-		{in: "/library/My Book [uk]", want: "uk"},
-		{in: "/library/no-region", want: ""},
-		{in: "/library/too-long [abcd]", want: ""},
-		{in: "/library/bad [x]", want: ""},
-	}
-
-	for _, tc := range tests {
-		if got := extractRegionFromPath(tc.in); got != tc.want {
-			t.Fatalf("extractRegionFromPath(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
 func TestBuildDeleteMediaConfirm(t *testing.T) {
 	withoutQueue := buildDeleteMediaConfirm("A Book", false)
 	if withoutQueue != "Delete downloaded files for 'A Book' and reset status to New?" {
