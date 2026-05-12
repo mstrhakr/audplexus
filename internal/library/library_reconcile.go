@@ -294,12 +294,50 @@ func findBestFileForBook(ctx context.Context, book *database.Book, libraryRoot s
 //
 // The Audible API sometimes returns ISBNs in place of ASINs, so we match all common formats.
 // Accepts Audible ASINs (BXXXXXXXXX), ISBN-10 (including trailing X checksum), and ISBN-13.
+//
+// Note: the Audible-ASIN alternative (B + 9 alphanumerics) is intentionally
+// permissive at the regex level because Go's RE2 engine has no lookaround.
+// The B-prefix branch can therefore over-match common English words such as
+// "Brightness" or "Bloodlines" (both 10-letter B-words). Real Audible ASINs
+// always contain at least one digit, so isLikelyRealASIN below filters those
+// pseudo-matches out before extractASINFromPath returns.
 var asinPathRe = regexp.MustCompile(`(?i)\b(?:B[0-9A-Z]{9}|97[89][0-9]{10}|[0-9]{9}[0-9X])\b`)
+
+// isLikelyRealASIN rejects regex hits that look like an Audible ASIN purely
+// because they're a 10-character B-prefixed word. Audible ASINs always carry
+// at least one digit; pure-alpha tokens are English words (BRIGHTNESS,
+// BLOODLINES, BOUNDARIES, ...) that the regex can't exclude on its own.
+// ISBN-10 / ISBN-13 alternatives are all digits, so they always pass.
+func isLikelyRealASIN(token string) bool {
+	upper := strings.ToUpper(token)
+	if strings.HasPrefix(upper, "B") {
+		for _, r := range upper {
+			if r >= '0' && r <= '9' {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
 
 // ExtractASINFromPath is an exported alias of extractASINFromPath so that
 // other packages (e.g. internal/web diagnostics) can reuse the same path-token
 // parsing rules without duplicating the regex.
 func ExtractASINFromPath(path string) string { return extractASINFromPath(path) }
+
+// firstRealASIN scans every regex hit in a single path segment and returns
+// the first one that survives the digit filter. We use FindAllString rather
+// than FindString so that a B-prefixed English word at the start of a
+// folder name doesn't shadow a real identifier later in the same segment.
+func firstRealASIN(segment string) string {
+	for _, m := range asinPathRe.FindAllString(segment, -1) {
+		if isLikelyRealASIN(m) {
+			return strings.ToUpper(m)
+		}
+	}
+	return ""
+}
 
 // extractASINFromPath searches for an Audible ASIN (or ISBN-10 fallback) anywhere in a file path.
 // Audible ASINs start with 'B' + 9 alphanumerics, but the Audible API sometimes returns ISBN-10s
@@ -307,14 +345,14 @@ func ExtractASINFromPath(path string) string { return extractASINFromPath(path) 
 // we match both patterns. The filename is checked first (most specific), then parent directories.
 func extractASINFromPath(path string) string {
 	// Check filename first
-	if match := asinPathRe.FindString(filepath.Base(path)); match != "" {
-		return strings.ToUpper(match)
+	if match := firstRealASIN(filepath.Base(path)); match != "" {
+		return match
 	}
 	// Walk up directory components
 	dir := filepath.Dir(path)
 	for {
-		if match := asinPathRe.FindString(filepath.Base(dir)); match != "" {
-			return strings.ToUpper(match)
+		if match := firstRealASIN(filepath.Base(dir)); match != "" {
+			return match
 		}
 		next := filepath.Dir(dir)
 		if next == dir { // reached filesystem root
