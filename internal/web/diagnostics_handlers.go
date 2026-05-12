@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"fmt"
 	"io"
 	"net/http"
@@ -74,6 +75,8 @@ type diagnosticsRemoteItem struct {
 type diagnosticsDestinationInventory struct {
 	Destination database.LibraryDestination
 	Items       []diagnosticsRemoteItem
+	ItemsByID   map[string]diagnosticsRemoteItem
+	StoredIDs   map[int64]string
 	FetchErr    error
 }
 
@@ -103,11 +106,33 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 	completeStatus := database.BookStatusComplete
 	_, completeBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
 	dests, _ := s.db.ListEnabledLibraryDestinations(ctx)
+	webLog.Info().Int("enabled_destinations", len(dests)).Int("complete_books", completeBooks).Msg("diagnostics: compare start")
 
 	inventories := make([]diagnosticsDestinationInventory, 0, len(dests))
 	for _, d := range dests {
 		items, fetchErr := s.fetchDiagnosticsInventory(ctx, d)
-		inventories = append(inventories, diagnosticsDestinationInventory{Destination: d, Items: items, FetchErr: fetchErr})
+		itemsByID := make(map[string]diagnosticsRemoteItem, len(items))
+		for _, item := range items {
+			if id := strings.TrimSpace(item.ID); id != "" {
+				itemsByID[id] = item
+			}
+		}
+		storedIDs := map[int64]string{}
+		rows, rowsErr := s.db.ListBookDestinationsBy(ctx, d.ID, nil)
+		if rowsErr != nil {
+			if fetchErr == nil {
+				fetchErr = fmt.Errorf("list destination rows: %w", rowsErr)
+			}
+			webLog.Warn().Err(rowsErr).Str("destination_id", d.ID).Str("destination_type", string(d.Type)).Msg("diagnostics: failed to load stored destination ids")
+		} else {
+			for _, row := range rows {
+				if id := strings.TrimSpace(row.ServerItemID); id != "" {
+					storedIDs[row.BookID] = id
+				}
+			}
+		}
+		webLog.Debug().Str("destination_id", d.ID).Str("destination_type", string(d.Type)).Int("remote_items", len(items)).Int("stored_ids", len(storedIDs)).Bool("fetch_ok", fetchErr == nil).Msg("diagnostics: destination inventory loaded")
+		inventories = append(inventories, diagnosticsDestinationInventory{Destination: d, Items: items, ItemsByID: itemsByID, StoredIDs: storedIDs, FetchErr: fetchErr})
 	}
 
 	destCards := make([]diagnosticsDestinationCard, 0, len(inventories))
@@ -178,6 +203,7 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 				status.MatchMethod = method
 				status.ServerItemID = remote.ID
 				status.ServerTitle = remote.Title
+				webLog.Debug().Str("destination_id", inv.Destination.ID).Str("destination_type", string(inv.Destination.Type)).Str("asin", book.ASIN).Str("match_method", method).Str("server_item_id", remote.ID).Msg("diagnostics: book matched")
 				destCards[cardIdx].Matched++
 			} else {
 				status.Status = reasonStatus(reason)
@@ -227,6 +253,10 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 		Items:           issues,
 		UserMarketplace: marketplace,
 	}
+	for _, card := range destCards {
+		webLog.Info().Str("destination_id", card.ID).Str("destination_name", card.Name).Str("destination_type", card.Type).Int("matched", card.Matched).Int("missing", card.Missing).Int("unknown", card.Unknown).Bool("fetch_healthy", card.FetchHealthy).Msg("diagnostics: compare destination summary")
+	}
+	webLog.Info().Int("issue_books", len(issues)).Int("disk_missing", diskMissing).Int("complete_books", completeBooks).Msg("diagnostics: compare complete")
 	c.JSON(http.StatusOK, response)
 }
 
@@ -336,6 +366,42 @@ func reasonStatus(reason string) string {
 
 func (s *Server) matchBookAgainstInventory(book database.Book, onDisk bool, inv diagnosticsDestinationInventory) (bool, string, string, diagnosticsRemoteItem) {
 	empty := diagnosticsRemoteItem{}
+	if storedID := strings.TrimSpace(inv.StoredIDs[book.ID]); storedID != "" {
+		if remote, ok := inv.ItemsByID[storedID]; ok {
+			return true, "server_item_id", "", remote
+		}
+		return false, "", "missing: stored server item id not found in destination", empty
+	}
+
+	if inv.Destination.Type == database.LibraryDestinationTypePlex {
+		want := normalizeDiagnosticsPathKey(book.FilePath)
+		if want == "" {
+			want = normalizeDiagnosticsTitle(book.Title)
+		}
+		if want == "" {
+			return false, "", "unknown: no path or title to compare", empty
+		}
+		pathMatches := make([]diagnosticsRemoteItem, 0, 1)
+		for _, it := range inv.Items {
+			remoteKey := normalizeDiagnosticsPathKey(it.Path)
+			if remoteKey != "" && remoteKey == want {
+				pathMatches = append(pathMatches, it)
+			}
+		}
+		if len(pathMatches) == 1 {
+			return true, "path_suffix", "", pathMatches[0]
+		}
+		if len(pathMatches) > 1 {
+			return false, "", "unknown: multiple Plex items share artist/album path", empty
+		}
+		for _, it := range inv.Items {
+			remoteTitle := normalizeDiagnosticsTitle(it.Title)
+			if remoteTitle != "" && (strings.Contains(remoteTitle, want) || strings.Contains(want, remoteTitle)) {
+				return true, "title_contains", "", it
+			}
+		}
+	}
+
 	if inv.Destination.Type == database.LibraryDestinationTypeABS {
 		asin := strings.ToUpper(strings.TrimSpace(book.ASIN))
 		if asin == "" {
@@ -659,52 +725,9 @@ func fetchPlexDiagnosticsItems(ctx context.Context, d database.LibraryDestinatio
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		u, _ := url.Parse(fmt.Sprintf("%s/library/metadata/%s", base, url.PathEscape(strings.TrimSpace(album.RatingKey))))
-		q := u.Query()
-		q.Set("X-Plex-Token", token)
-		u.RawQuery = q.Encode()
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-		req.Header.Set("Accept", "application/json")
-		resp, err := http.DefaultClient.Do(req)
+		itemPath, err := fetchPlexAlbumTrackPath(ctx, base, token, strings.TrimSpace(album.RatingKey))
 		if err != nil {
-			continue
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			resp.Body.Close()
-			continue
-		}
-		var parsed struct {
-			MediaContainer struct {
-				Metadata []struct {
-					Media []struct {
-						Part []struct {
-							File string `json:"file"`
-						} `json:"Part"`
-					} `json:"Media"`
-				} `json:"Metadata"`
-			} `json:"MediaContainer"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-			resp.Body.Close()
-			continue
-		}
-		resp.Body.Close()
-		itemPath := ""
-		for _, md := range parsed.MediaContainer.Metadata {
-			for _, m := range md.Media {
-				for _, p := range m.Part {
-					if strings.TrimSpace(p.File) != "" {
-						itemPath = p.File
-						break
-					}
-				}
-				if itemPath != "" {
-					break
-				}
-			}
-			if itemPath != "" {
-				break
-			}
+			webLog.Debug().Err(err).Str("rating_key", album.RatingKey).Str("title", album.Title).Msg("diagnostics: plex album track path fetch failed")
 		}
 		fn := strings.ToLower(strings.TrimSpace(filepath.Base(itemPath)))
 		items = append(items, diagnosticsRemoteItem{ID: album.RatingKey, Title: album.Title, Path: itemPath, Filename: fn})
@@ -712,10 +735,112 @@ func fetchPlexDiagnosticsItems(ctx context.Context, d database.LibraryDestinatio
 	return items, nil
 }
 
+func fetchPlexAlbumTrackPath(ctx context.Context, base, token, ratingKey string) (string, error) {
+	u, _ := url.Parse(fmt.Sprintf("%s/library/metadata/%s/children", base, url.PathEscape(ratingKey)))
+	q := u.Query()
+	q.Set("X-Plex-Token", token)
+	q.Set("X-Plex-Container-Start", "0")
+	q.Set("X-Plex-Container-Size", "1")
+	u.RawQuery = q.Encode()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("plex children returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var parsed struct {
+		MediaContainer struct {
+			Metadata []struct {
+				Media []struct {
+					Part []struct {
+						File string `json:"file"`
+					} `json:"Part"`
+				} `json:"Media"`
+			} `json:"Metadata"`
+		} `json:"MediaContainer"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", err
+	}
+	for _, md := range parsed.MediaContainer.Metadata {
+		for _, m := range md.Media {
+			for _, p := range m.Part {
+				if path := strings.TrimSpace(p.File); path != "" {
+					return path, nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("no track path found for Plex album %s", ratingKey)
+}
+
 func destinationDisplayName(d database.LibraryDestination) string {
 	if strings.TrimSpace(d.DisplayName) != "" {
 		return d.DisplayName
 	}
 	return d.ID
+}
+
+func normalizeDiagnosticsTitle(s string) string {
+	s = html.UnescapeString(s)
+	s = strings.TrimSpace(strings.ToLower(s))
+	s = strings.NewReplacer(
+		"&", " and ",
+		"‘", "'",
+		"’", "'",
+		"“", "\"",
+		"”", "\"",
+		"–", "-",
+		"—", "-",
+	).Replace(s)
+	for _, prefix := range []string{"the ", "a ", "an "} {
+		if strings.HasPrefix(s, prefix) {
+			s = s[len(prefix):]
+			break
+		}
+	}
+	s = strings.NewReplacer(
+		":", "",
+		"-", " ",
+		"_", " ",
+		".", "",
+		",", "",
+		"'", "",
+		"\"", "",
+		"(", "",
+		")", "",
+		"[", "",
+		"]", "",
+		"!", "",
+		"?", "",
+	).Replace(s)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func normalizeDiagnosticsPathKey(p string) string {
+	p = html.UnescapeString(strings.TrimSpace(p))
+	p = strings.ReplaceAll(p, "\\", "/")
+	p = strings.TrimRight(filepath.Clean(p), "/")
+	if p == "" || p == "." {
+		return ""
+	}
+	dir := filepath.Dir(p)
+	if dir == "." || dir == "/" {
+		return ""
+	}
+	dir = strings.ReplaceAll(dir, "\\", "/")
+	parts := strings.FieldsFunc(dir, func(r rune) bool { return r == '/' })
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts) > 2 {
+		parts = parts[len(parts)-2:]
+	}
+	return strings.ToLower(strings.Join(parts, "/"))
 }
 
