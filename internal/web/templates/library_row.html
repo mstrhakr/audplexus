@@ -1,0 +1,47 @@
+{{define "library_row.html"}}
+<tr id="book-row-{{.Book.ID}}">
+    <td class="cover-cell">
+        {{if .Book.CoverURL}}<img src="{{.Book.CoverURL}}" alt="" class="cover-thumb">{{end}}
+    </td>
+    <td>
+        <a href="/library/{{.Book.ID}}" class="book-detail-link" data-book-id="{{.Book.ID}}">{{.Book.Title}}</a>
+        {{if .Book.Series}}<br><small>{{.Book.Series}} #{{.Book.SeriesPosition}}</small>{{end}}
+    </td>
+    <td>{{.Book.Author}}</td>
+    <td>{{formatDuration .Book.Duration}}</td>
+    <td><span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span></td>
+    <td>
+        <div class="table-actions" id="book-actions-{{.Book.ID}}" data-book-id="{{.Book.ID}}" data-asin="{{.Book.ASIN}}">
+            <div class="library-row-default-actions{{if .BookAction.ShowCancel}} is-hidden{{end}}">
+            {{if eq (printf "%s" .Book.Status) "new"}}
+            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" hx-on::after-request="this.remove()" class="btn btn-small btn-primary">Queue</button>
+            {{else if eq (printf "%s" .Book.Status) "failed"}}
+            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" hx-on::after-request="this.remove()" class="btn btn-small btn-primary">Retry</button>
+            {{end}}
+
+            {{if .BookAction.ShowConvert}}
+            <button hx-post="/api/books/{{.Book.ID}}/convert?format={{.BookAction.ConvertFormat}}"
+                hx-confirm="{{.BookAction.ConvertConfirm}}"
+                hx-swap="none"
+                class="btn btn-small btn-secondary">{{.BookAction.ConvertLabel}}</button>
+            {{end}}
+
+            {{if .BookAction.ShowDelete}}
+            <button hx-post="/api/books/{{.Book.ID}}/delete-media?view=row"
+                hx-confirm="{{.BookAction.DeleteConfirm}}"
+                hx-target="#book-row-{{.Book.ID}}"
+                hx-swap="outerHTML"
+                class="btn btn-small btn-danger">Delete Files</button>
+            {{end}}
+            </div>
+
+            <div class="library-row-cancel-action{{if not .BookAction.ShowCancel}} is-hidden{{end}}">
+            <button hx-post="/api/downloads/cancel-by-asin/{{.Book.ASIN}}"
+                hx-swap="none"
+                hx-on::before-request="this.disabled=true; this.textContent='Cancelling...'"
+                class="btn btn-small btn-danger">Cancel</button>
+            </div>
+        </div>
+    </td>
+</tr>
+{{end}}

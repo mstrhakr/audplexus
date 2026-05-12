@@ -246,13 +246,27 @@ func (s *Server) setupTemplates() {
 			return template.HTML(htmlPolicy.Sanitize(raw))
 		},
 		"hasSuffix": strings.HasSuffix,
+		"dict": func(values ...any) (map[string]any, error) {
+			if len(values)%2 != 0 {
+				return nil, fmt.Errorf("dict expects an even number of args")
+			}
+			d := make(map[string]any, len(values)/2)
+			for i := 0; i < len(values); i += 2 {
+				k, ok := values[i].(string)
+				if !ok {
+					return nil, fmt.Errorf("dict keys must be strings")
+				}
+				d[k] = values[i+1]
+			}
+			return d, nil
+		},
 	}
 
 	// Parse the base layout once as a clonable template
 	base := template.Must(template.New("base").Funcs(funcMap).ParseFS(templateFS, "templates/base.html"))
 
 	// Parse all partial/fragment templates that may be referenced by page templates
-	partials := []string{"templates/library_table.html", "templates/book_detail_panel.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html"}
+	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html"}
 	baseWithPartials := template.Must(template.Must(base.Clone()).ParseFS(templateFS, partials...))
 
 	r := &multiRender{templates: make(map[string]*template.Template)}
@@ -284,10 +298,10 @@ func (s *Server) setupTemplates() {
 	}
 
 	// Also register partials standalone for HTMX fragment responses
+	partialSet := template.Must(template.New("partials").Funcs(funcMap).ParseFS(templateFS, partials...))
 	for _, p := range partials {
 		name := p[len("templates/"):]
-		t := template.Must(template.New(name).Funcs(funcMap).ParseFS(templateFS, p))
-		r.templates[name] = t
+		r.templates[name] = partialSet
 	}
 
 	s.router.HTMLRender = r
@@ -2631,10 +2645,20 @@ func (s *Server) handleDeleteBookMedia(c *gin.Context) {
 			webLog.Warn().Err(err).Int64("book_id", book.ID).Str("asin", book.ASIN).Msg("failed to auto-queue book after delete-media reset")
 		}
 	}
+	if latest, err := s.db.GetBook(ctx, book.ID); err == nil && latest != nil {
+		book = latest
+	}
 
 	msg := fmt.Sprintf("Deleted files and reset '%s' to new", book.Title)
 	if autoQueueNew {
 		msg += "; redownload queued immediately"
+	}
+	if c.Query("view") == "row" {
+		c.HTML(http.StatusOK, "library_row.html", gin.H{
+			"Book":       book,
+			"BookAction": buildLibraryBookActions([]database.Book{*book}, autoQueueNew)[book.ID],
+		})
+		return
 	}
 	if c.Query("view") == "modal" {
 		folderPath, files := buildBookFileDetails(book.FilePath)
