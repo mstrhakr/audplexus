@@ -296,6 +296,11 @@ func findBestFileForBook(ctx context.Context, book *database.Book, libraryRoot s
 // Accepts Audible ASINs (BXXXXXXXXX), ISBN-10 (including trailing X checksum), and ISBN-13.
 var asinPathRe = regexp.MustCompile(`(?i)\b(?:B[0-9A-Z]{9}|97[89][0-9]{10}|[0-9]{9}[0-9X])\b`)
 
+// ExtractASINFromPath is an exported alias of extractASINFromPath so that
+// other packages (e.g. internal/web diagnostics) can reuse the same path-token
+// parsing rules without duplicating the regex.
+func ExtractASINFromPath(path string) string { return extractASINFromPath(path) }
+
 // extractASINFromPath searches for an Audible ASIN (or ISBN-10 fallback) anywhere in a file path.
 // Audible ASINs start with 'B' + 9 alphanumerics, but the Audible API sometimes returns ISBN-10s
 // (10 digits) in place of ASINs. Since the organizer writes whatever identifier came from the API,

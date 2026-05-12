@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/library"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
 )
 
@@ -422,6 +423,24 @@ func (s *Server) matchBookAgainstInventory(book database.Book, onDisk bool, inv 
 		if len(match) > 1 {
 			return false, "", "unknown: multiple ABS items share ASIN", empty
 		}
+
+		// metadata.asin missed. ABS may have auto-matched the book to a different
+		// edition during library scan, leaving metadata.asin pointing at an
+		// alternate ISBN/ASIN even though the book folder itself was named after
+		// the Audible ASIN by the organizer. Fall back to the folder/file path
+		// token, which is the source of truth Audplexus controls.
+		pathMatches := make([]diagnosticsRemoteItem, 0, 1)
+		for _, it := range inv.Items {
+			if remoteASIN := library.ExtractASINFromPath(it.Path); remoteASIN != "" && strings.EqualFold(remoteASIN, asin) {
+				pathMatches = append(pathMatches, it)
+			}
+		}
+		if len(pathMatches) == 1 {
+			return true, "asin_path", "", pathMatches[0]
+		}
+		if len(pathMatches) > 1 {
+			return false, "", "unknown: multiple ABS items share ASIN in path", empty
+		}
 		return false, "", "missing: ASIN not found in destination", empty
 	}
 
@@ -528,9 +547,11 @@ func fetchABSDiagnosticsItems(ctx context.Context, d database.LibraryDestination
 		}
 		var parsed struct {
 			Results []struct {
-				ID    string `json:"id"`
-				Title string `json:"title"`
-				Media struct {
+				ID      string `json:"id"`
+				Title   string `json:"title"`
+				Path    string `json:"path"`
+				RelPath string `json:"relPath"`
+				Media   struct {
 					Metadata struct {
 						ASIN string `json:"asin"`
 					} `json:"metadata"`
@@ -546,7 +567,16 @@ func fetchABSDiagnosticsItems(ctx context.Context, d database.LibraryDestination
 			break
 		}
 		for _, r := range parsed.Results {
-			items = append(items, diagnosticsRemoteItem{ID: r.ID, Title: r.Title, ASIN: strings.ToUpper(strings.TrimSpace(r.Media.Metadata.ASIN))})
+			path := strings.TrimSpace(r.Path)
+			if path == "" {
+				path = strings.TrimSpace(r.RelPath)
+			}
+			items = append(items, diagnosticsRemoteItem{
+				ID:    r.ID,
+				Title: r.Title,
+				Path:  path,
+				ASIN:  strings.ToUpper(strings.TrimSpace(r.Media.Metadata.ASIN)),
+			})
 		}
 		if len(parsed.Results) < 200 {
 			break
