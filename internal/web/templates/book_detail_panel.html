@@ -1,5 +1,8 @@
 {{define "book_detail_panel.html"}}
 <div class="book-detail" data-book-detail-root>
+    {{if .Message}}
+    <div class="info-box" style="border-color: var(--success); margin-bottom: 1rem;">{{.Message}}</div>
+    {{end}}
     <div class="book-cover">
         {{if .Book.CoverURL}}<img src="{{.Book.CoverURL}}" alt="Cover">{{end}}
     </div>
@@ -61,6 +64,13 @@
                         class="btn btn-secondary">Convert to M4B (single file)</button>
                 {{end}}
             {{end}}
+                {{if .BookAction.ShowDelete}}
+                <button hx-post="/api/books/{{.Book.ID}}/delete-media?view=modal"
+                    hx-confirm="{{.BookAction.DeleteConfirm}}"
+                    hx-target="#book-detail-modal-content"
+                    hx-swap="innerHTML"
+                    class="btn btn-danger">Delete Files</button>
+                {{end}}
         </div>
 
         {{if .Book.Description}}

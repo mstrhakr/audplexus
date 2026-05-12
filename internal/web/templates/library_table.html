@@ -40,6 +40,13 @@
                         hx-swap="none"
                         class="btn btn-small btn-secondary">{{$action.ConvertLabel}}</button>
                     {{end}}
+
+                    {{if $action.ShowDelete}}
+                    <button hx-post="/api/books/{{.ID}}/delete-media"
+                        hx-confirm="{{$action.DeleteConfirm}}"
+                        hx-swap="none"
+                        class="btn btn-small btn-danger">Delete Files</button>
+                    {{end}}
                     </div>
 
                     <div class="library-row-cancel-action{{if not $action.ShowCancel}} is-hidden{{end}}">

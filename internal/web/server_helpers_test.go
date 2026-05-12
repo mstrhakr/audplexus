@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/mstrhakr/audplexus/internal/database"
@@ -101,5 +102,65 @@ func TestExtractRegionFromPath(t *testing.T) {
 		if got := extractRegionFromPath(tc.in); got != tc.want {
 			t.Fatalf("extractRegionFromPath(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestBuildDeleteMediaConfirm(t *testing.T) {
+	withoutQueue := buildDeleteMediaConfirm("A Book", false)
+	if withoutQueue != "Delete downloaded files for 'A Book' and reset status to New?" {
+		t.Fatalf("unexpected confirm text without auto-queue: %q", withoutQueue)
+	}
+
+	withQueue := buildDeleteMediaConfirm("A Book", true)
+	if withQueue != "Delete downloaded files for 'A Book' and reset status to New? Auto-queue is enabled and redownload will start immediately." {
+		t.Fatalf("unexpected confirm text with auto-queue: %q", withQueue)
+	}
+}
+
+func TestBuildLibraryBookActionsDeleteConfirm(t *testing.T) {
+	books := []database.Book{{
+		ID:       101,
+		Title:    "Title",
+		Status:   database.BookStatusComplete,
+		FilePath: "/tmp/title.m4b",
+	}}
+
+	actionsNoQueue := buildLibraryBookActions(books, false)
+	actionNoQueue, ok := actionsNoQueue[101]
+	if !ok {
+		t.Fatalf("expected action for book 101")
+	}
+	if !actionNoQueue.ShowDelete {
+		t.Fatalf("expected ShowDelete true when file path exists")
+	}
+	if strings.Contains(actionNoQueue.DeleteConfirm, "Auto-queue is enabled") {
+		t.Fatalf("confirm text unexpectedly mentions auto-queue when disabled: %q", actionNoQueue.DeleteConfirm)
+	}
+
+	actionsWithQueue := buildLibraryBookActions(books, true)
+	actionWithQueue := actionsWithQueue[101]
+	if !strings.Contains(actionWithQueue.DeleteConfirm, "Auto-queue is enabled and redownload will start immediately.") {
+		t.Fatalf("confirm text should mention immediate redownload when enabled: %q", actionWithQueue.DeleteConfirm)
+	}
+}
+
+func TestBuildLibraryBookActionsHideDeleteWhenNotComplete(t *testing.T) {
+	books := []database.Book{{
+		ID:       202,
+		Title:    "Queued Book",
+		Status:   database.BookStatusQueued,
+		FilePath: "/tmp/queued-book.m4b",
+	}}
+
+	actions := buildLibraryBookActions(books, false)
+	action, ok := actions[202]
+	if !ok {
+		t.Fatalf("expected action for book 202")
+	}
+	if !action.ShowCancel {
+		t.Fatalf("expected ShowCancel true for queued book")
+	}
+	if action.ShowDelete {
+		t.Fatalf("expected ShowDelete false for non-complete book")
 	}
 }

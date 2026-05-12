@@ -397,6 +397,7 @@ func (s *Server) setupRoutes() {
 
 		// Per-book conversion between m4b and chapter-split mp3.
 		api.POST("/books/:id/convert", s.handleConvertBook)
+		api.POST("/books/:id/delete-media", s.handleDeleteBookMedia)
 	}
 }
 
@@ -766,7 +767,7 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		"Total":       total,
 		"Filter":      filter,
 		"Page":        "library",
-		"BookActions": buildLibraryBookActions(books),
+		"BookActions": buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
 	}
 
 	// For HTMX partial requests, render only the table body
@@ -783,14 +784,18 @@ type libraryBookAction struct {
 	ConvertFormat  string
 	ConvertConfirm string
 	ShowCancel     bool
+	ShowDelete     bool
+	DeleteConfirm  string
 }
 
-func buildLibraryBookActions(books []database.Book) map[int64]libraryBookAction {
+func buildLibraryBookActions(books []database.Book, autoQueueNew bool) map[int64]libraryBookAction {
 	actions := make(map[int64]libraryBookAction, len(books))
 	for _, b := range books {
 		a := libraryBookAction{}
 		statusText := strings.ToLower(strings.TrimSpace(string(b.Status)))
 		a.ShowCancel = b.Status == database.BookStatusQueued || b.Status == database.BookStatusDownloading || b.Status == database.BookStatusDecrypting || b.Status == database.BookStatusProcessing || statusText == "converting"
+		a.ShowDelete = b.Status == database.BookStatusComplete && strings.TrimSpace(b.FilePath) != ""
+		a.DeleteConfirm = buildDeleteMediaConfirm(b.Title, autoQueueNew)
 
 		if b.Status == database.BookStatusComplete {
 			if format, label, confirm, ok := conversionActionForPath(b.FilePath); ok {
@@ -879,6 +884,7 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 		"BookFolderPath": folderPath,
 		"BookFiles":     files,
 		"BookFileCount": len(files),
+		"BookAction":    buildLibraryBookActions([]database.Book{*book}, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false))[book.ID],
 	}
 
 	if c.Query("view") == "modal" || c.GetHeader("HX-Request") == "true" {
@@ -993,6 +999,18 @@ func buildBookFileDetails(storedPath string) (string, []bookFileDetail) {
 	}
 
 	return folderPath, entries
+}
+
+func buildDeleteMediaConfirm(title string, autoQueueNew bool) string {
+	title = strings.TrimSpace(title)
+	autoQueueNote := ""
+	if autoQueueNew {
+		autoQueueNote = " Auto-queue is enabled and redownload will start immediately."
+	}
+	if title == "" {
+		return "Delete downloaded files and reset this book to New?" + autoQueueNote
+	}
+	return fmt.Sprintf("Delete downloaded files for '%s' and reset status to New?%s", title, autoQueueNote)
 }
 
 func isAudioFile(path string) bool {
@@ -2577,6 +2595,67 @@ func (s *Server) handleRedownload(c *gin.Context) {
 		"success": true,
 		"message": fmt.Sprintf("Book '%s' has been queued for redownload", book.Title),
 	})
+}
+
+// handleDeleteBookMedia deletes a book's local media and resets it to "new"
+// without deleting the book metadata row.
+func (s *Server) handleDeleteBookMedia(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid book id"})
+		return
+	}
+
+	book, err := s.db.GetBook(ctx, id)
+	if err != nil || book == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "book not found"})
+		return
+	}
+
+	// Remove local media path if present, then reset state.
+	s.removeBookPath(book.FilePath)
+	book.Status = database.BookStatusNew
+	book.FilePath = ""
+	book.FileSize = 0
+
+	if err := s.db.UpsertBook(ctx, book); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to reset book: " + err.Error()})
+		return
+	}
+
+	autoQueueNew := s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)
+	if autoQueueNew {
+		if _, err := s.downloads.QueueBook(ctx, book.ID, book.ASIN, 100); err != nil {
+			webLog.Warn().Err(err).Int64("book_id", book.ID).Str("asin", book.ASIN).Msg("failed to auto-queue book after delete-media reset")
+		}
+	}
+
+	msg := fmt.Sprintf("Deleted files and reset '%s' to new", book.Title)
+	if autoQueueNew {
+		msg += "; redownload queued immediately"
+	}
+	if c.Query("view") == "modal" {
+		folderPath, files := buildBookFileDetails(book.FilePath)
+		c.HTML(http.StatusOK, "book_detail_panel.html", gin.H{
+			"Book":           book,
+			"Page":           "library",
+			"BookFolderPath": folderPath,
+			"BookFiles":      files,
+			"BookFileCount":  len(files),
+			"BookAction":     buildLibraryBookActions([]database.Book{*book}, autoQueueNew)[book.ID],
+			"Message":        msg,
+		})
+		return
+	}
+
+	if c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": msg})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": msg})
 }
 
 // handleConvertBook converts an existing book between single-file m4b and
