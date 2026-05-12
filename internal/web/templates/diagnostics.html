@@ -8,6 +8,8 @@
 
 <div class="actions-bar">
     <button class="btn btn-primary" onclick="loadDiagnostics()">Refresh</button>
+    <button id="diag-rescan-all" class="btn btn-secondary" onclick="rescanAllIssues()">Rescan All Issues</button>
+    <button id="diag-redownload-all" class="btn btn-danger" onclick="redownloadAllListed()">Redownload All Listed</button>
     <span id="diag-status"></span>
 </div>
 
@@ -20,6 +22,7 @@
 let diagData = null;
 
 async function loadDiagnostics() {
+    setBulkButtonsEnabled(false);
     const summary = document.getElementById('diag-summary');
     const issues = document.getElementById('diag-issues');
     summary.innerHTML = '<div class="loading">Loading diagnostics...</div>';
@@ -30,10 +33,21 @@ async function loadDiagnostics() {
         diagData = await r.json();
         renderSummary(diagData);
         renderIssues(diagData.items || []);
+        setBulkButtonsEnabled(true);
     } catch (err) {
         summary.innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
         issues.innerHTML = '';
+        setBulkButtonsEnabled(false);
     }
+}
+
+function setBulkButtonsEnabled(enabled) {
+    const hasItems = !!(diagData && Array.isArray(diagData.items) && diagData.items.length > 0);
+    const canRun = enabled && hasItems;
+    const rescanBtn = document.getElementById('diag-rescan-all');
+    const redownloadBtn = document.getElementById('diag-redownload-all');
+    if (rescanBtn) rescanBtn.disabled = !canRun;
+    if (redownloadBtn) redownloadBtn.disabled = !canRun;
 }
 
 function renderSummary(data) {
@@ -67,8 +81,10 @@ function renderIssues(items) {
     const root = document.getElementById('diag-issues');
     if (!items.length) {
         root.innerHTML = '<p class="success">No issues detected.</p>';
+        setBulkButtonsEnabled(false);
         return;
     }
+    setBulkButtonsEnabled(true);
     let html = `<table class="data-table"><thead><tr>
         <th>Book</th><th>Status</th><th>Issue</th><th>Actions</th>
     </tr></thead><tbody>`;
@@ -85,7 +101,7 @@ function renderIssues(items) {
             <td><a href="/library/${item.asin}">${escapeHtml(item.title)}</a><br><small class="text-muted">${item.asin}</small></td>
             <td>${statuses}</td>
             <td class="issue-text">${escapeHtml(item.issue_summary)}</td>
-            <td>
+            <td class="diag-actions-cell">
                 ${item.can_targeted_scan ? `<button class="btn btn-small btn-primary" onclick="triggerTargetedScan('${item.asin}')">Targeted Scan</button>` : ''}
                 ${item.can_redownload ? `<button class="btn btn-small btn-secondary" onclick="redownloadBook('${item.asin}', '${escapeJs(item.title)}')">Redownload (Last Resort)</button>` : ''}
             </td>
@@ -127,6 +143,61 @@ async function redownloadBook(asin, title) {
     }
 }
 
+async function runBulkAction(items, label, actionFn) {
+    const status = document.getElementById('diag-status');
+    setBulkButtonsEnabled(false);
+    let ok = 0;
+    let failed = 0;
+
+    for (let i = 0; i < items.length; i++) {
+        status.innerHTML = `<span class="loading">${label}: ${i + 1}/${items.length}</span>`;
+        try {
+            const success = await actionFn(items[i]);
+            if (success) ok++; else failed++;
+        } catch (_) {
+            failed++;
+        }
+    }
+
+    const cls = failed === 0 ? 'success' : 'warning';
+    status.innerHTML = `<span class="${cls}">${label} complete: ${ok} succeeded, ${failed} failed</span>`;
+    await loadDiagnostics();
+}
+
+async function rescanAllIssues() {
+    if (!diagData || !Array.isArray(diagData.items) || diagData.items.length === 0) return;
+    const scanItems = diagData.items.filter(i => i.can_targeted_scan);
+    if (scanItems.length === 0) {
+        document.getElementById('diag-status').innerHTML = '<span class="warning">No listed items can be rescanned</span>';
+        return;
+    }
+    if (!confirm('Run targeted scan for all listed issue items (' + scanItems.length + ')?')) return;
+
+    await runBulkAction(scanItems, 'Rescan all', async (item) => {
+        const r = await fetch('/api/diagnostics/targeted-scan', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ asin: item.asin })
+        });
+        return r.ok;
+    });
+}
+
+async function redownloadAllListed() {
+    if (!diagData || !Array.isArray(diagData.items) || diagData.items.length === 0) return;
+    const redownloadItems = diagData.items.filter(i => i.can_redownload);
+    if (redownloadItems.length === 0) {
+        document.getElementById('diag-status').innerHTML = '<span class="warning">No listed items can be redownloaded</span>';
+        return;
+    }
+    if (!confirm('Last resort: redownload all listed issue items (' + redownloadItems.length + ')? This deletes local files first.')) return;
+
+    await runBulkAction(redownloadItems, 'Redownload all', async (item) => {
+        const r = await fetch('/api/downloads/redownload/' + encodeURIComponent(item.asin), { method: 'POST' });
+        return r.ok;
+    });
+}
+
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text || '';
@@ -155,5 +226,6 @@ document.addEventListener('DOMContentLoaded', loadDiagnostics);
 .issue-text { color: #f59e0b; }
 .badge-neutral { background: rgba(107, 114, 128, 0.2); color: #d1d5db; border: 1px solid #6b7280; }
 .btn-secondary { background: #374151; color: #fff; }
+.diag-actions-cell { min-width: 220px; display: grid; gap: 0.45rem; }
 </style>
 {{end}}
