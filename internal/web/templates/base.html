@@ -338,6 +338,23 @@
                 stage === 'transcoding';
         }
 
+        function syncLibraryRowCancelStates(root) {
+            var scope = root && root.querySelectorAll ? root : document;
+            var rows = scope.querySelectorAll('.table-actions[data-asin]');
+            for (var i = 0; i < rows.length; i++) {
+                var wrap = rows[i];
+                var bookID = wrap.getAttribute('data-book-id');
+                var asin = wrap.getAttribute('data-asin');
+                if (!bookID && !asin) continue;
+
+                var badge = bookID ? document.getElementById('status-book-' + bookID) : null;
+                if (!badge) continue;
+
+                var stage = (badge.textContent || '').trim().toLowerCase();
+                setLibraryRowCancelState(bookID, asin, isLibraryCancelableStage(stage));
+            }
+        }
+
         function setLibraryRowCancelState(bookID, asin, showCancel) {
             var wrap = null;
             if (bookID) {
@@ -629,6 +646,12 @@
                     btn.disabled = false;
                     btn.textContent = 'Cancel';
                 });
+        });
+
+        syncLibraryRowCancelStates();
+
+        document.body.addEventListener('htmx:afterSwap', function(ev) {
+            syncLibraryRowCancelStates(ev.target);
         });
 
         connectEventSource();

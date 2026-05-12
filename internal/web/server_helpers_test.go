@@ -139,3 +139,21 @@ func TestBuildLibraryBookActionsHideDeleteWhenNotComplete(t *testing.T) {
 		t.Fatalf("expected ShowDelete false for non-complete book")
 	}
 }
+
+func TestBuildLibraryBookActionsHideCancelWhenComplete(t *testing.T) {
+	books := []database.Book{{
+		ID:       303,
+		Title:    "Complete Book",
+		Status:   database.BookStatusComplete,
+		FilePath: "/tmp/complete-book.m4b",
+	}}
+
+	actions := buildLibraryBookActions(books, false)
+	action, ok := actions[303]
+	if !ok {
+		t.Fatalf("expected action for book 303")
+	}
+	if action.ShowCancel {
+		t.Fatalf("expected ShowCancel false for complete book")
+	}
+}
