@@ -214,6 +214,14 @@ func (j *JellyfinBackend) ReconcileLibrary(ctx context.Context, progressFn func(
 	if err != nil {
 		return fmt.Errorf("list complete books: %w", err)
 	}
+
+	destinationItemIDs := map[int64]string{}
+	if j.destination != nil {
+		destinationItemIDs, err = loadBookDestinationItemIDs(ctx, j.db, j.destination.ID)
+		if err != nil {
+			return fmt.Errorf("list book destinations for Jellyfin reconcile: %w", err)
+		}
+	}
 	booksByTitle := make(map[string][]database.Book)
 	for _, b := range books {
 		key := normalizeTitle(b.Title)
@@ -231,7 +239,7 @@ func (j *JellyfinBackend) ReconcileLibrary(ctx context.Context, progressFn func(
 		key := normalizeTitle(it.Name)
 		candidates := booksByTitle[key]
 		for _, book := range candidates {
-			if book.MediaServerID != it.Id || book.MediaServerTitle != it.Name {
+			if pickDestinationItemID(book, destinationItemIDs) != it.Id || book.MediaServerTitle != it.Name {
 				if err := j.db.UpdateBookMediaServerInfo(ctx, book.ID, it.Id, it.Name); err != nil {
 					msLog.Warn().Err(err).Int64("book_id", book.ID).Str("title", book.Title).Msg("jellyfin: failed to update book media server info")
 				} else {

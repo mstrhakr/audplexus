@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -171,6 +172,13 @@ func (p *PlexBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		return fmt.Errorf("list Plex albums: %w", err)
 	}
 	msLog.Info().Int("plex_albums", len(albums)).Msg("fetched Plex album list")
+	validAlbumRatingKeys := make(map[string]struct{}, len(albums))
+	for _, album := range albums {
+		ratingKey := strings.TrimSpace(album.RatingKey)
+		if ratingKey != "" {
+			validAlbumRatingKeys[ratingKey] = struct{}{}
+		}
+	}
 
 	completeStatus := database.BookStatusComplete
 	books, _, err := p.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 100000})
@@ -197,9 +205,9 @@ func (p *PlexBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		key := normalizeTitle(albumTitle)
 		if candidates, ok := booksByTitle[key]; ok {
 			for _, book := range candidates {
-				if book.MediaServerID != album.RatingKey || book.MediaServerTitle != albumTitle {
-					if err := p.db.UpdateBookMediaServerInfo(ctx, book.ID, album.RatingKey, albumTitle); err != nil {
-						msLog.Warn().Err(err).Int64("book_id", book.ID).Str("title", book.Title).Msg("plex: failed to update book media server info")
+				if book.PlexRatingKey != album.RatingKey || book.PlexTitle != albumTitle {
+					if err := p.db.UpdateBookPlexInfo(ctx, book.ID, album.RatingKey, albumTitle); err != nil {
+						msLog.Warn().Err(err).Int64("book_id", book.ID).Str("title", book.Title).Msg("plex: failed to update book plex info")
 					} else {
 						matched++
 					}
@@ -217,14 +225,21 @@ func (p *PlexBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		return fmt.Errorf("reload books for collection reconciliation: %w", err)
 	}
 
-	seriesBooks := make(map[string][]database.Book)
-	for _, b := range books {
-		series := strings.TrimSpace(b.Series)
-		if series == "" || b.MediaServerID == "" {
-			continue
+	bookDestinationIDs := map[int64]string{}
+	if p.destination != nil {
+		destRows, err := p.db.ListBookDestinationsBy(ctx, p.destination.ID, nil)
+		if err != nil {
+			return fmt.Errorf("list book destinations for Plex reconcile: %w", err)
 		}
-		seriesBooks[series] = append(seriesBooks[series], b)
+		bookDestinationIDs = make(map[int64]string, len(destRows))
+		for _, bd := range destRows {
+			if id := strings.TrimSpace(bd.ServerItemID); id != "" {
+				bookDestinationIDs[bd.BookID] = id
+			}
+		}
 	}
+
+	seriesBooks := buildPlexSeriesBooks(books, bookDestinationIDs, validAlbumRatingKeys)
 
 	if len(seriesBooks) == 0 {
 		msLog.Info().Msg("no series with Plex-matched books to reconcile")
@@ -252,7 +267,7 @@ func (p *PlexBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		}
 
 		for _, book := range booksInSeries {
-			itemURI := fmt.Sprintf("server://%s/com.plexapp.plugins.library/library/metadata/%s", machineID, book.MediaServerID)
+			itemURI := fmt.Sprintf("server://%s/com.plexapp.plugins.library/library/metadata/%s", machineID, book.RatingKey)
 			if err := p.addToCollection(ctx, plexURL, plexToken, collectionID, itemURI); err != nil {
 				msLog.Warn().Err(err).Str("series", series).Str("book", book.Title).Msg("plex: failed to add book to series collection during reconciliation")
 			} else {
@@ -267,6 +282,68 @@ func (p *PlexBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 
 	msLog.Info().Int("series_checked", totalSeries).Int("collection_adds", collectionsAdded).Msg("plex series collection reconciliation complete")
 	return nil
+}
+
+type plexSeriesBook struct {
+	Title     string
+	RatingKey string
+}
+
+func buildPlexSeriesBooks(books []database.Book, bookDestinationIDs map[int64]string, validAlbumRatingKeys map[string]struct{}) map[string][]plexSeriesBook {
+	seriesBooks := make(map[string][]plexSeriesBook)
+	for _, b := range books {
+		series := strings.TrimSpace(b.Series)
+		if series == "" {
+			continue
+		}
+
+		ratingKey := choosePlexCollectionRatingKey(b, bookDestinationIDs[b.ID], validAlbumRatingKeys)
+		if ratingKey == "" {
+			continue
+		}
+
+		seriesBooks[series] = append(seriesBooks[series], plexSeriesBook{
+			Title:     b.Title,
+			RatingKey: ratingKey,
+		})
+	}
+	return seriesBooks
+}
+
+func choosePlexCollectionRatingKey(book database.Book, storedDestinationID string, validAlbumRatingKeys map[string]struct{}) string {
+	if ratingKey := strings.TrimSpace(storedDestinationID); ratingKey != "" {
+		if _, ok := validAlbumRatingKeys[ratingKey]; ok {
+			return ratingKey
+		}
+		msLog.Debug().
+			Int64("book_id", book.ID).
+			Str("book", book.Title).
+			Str("series", book.Series).
+			Str("stored_destination_id", ratingKey).
+			Msg("plex: stored destination id not found in current Plex album list")
+	}
+
+	plexRatingKey := strings.TrimSpace(book.PlexRatingKey)
+	if _, ok := validAlbumRatingKeys[plexRatingKey]; ok {
+		return plexRatingKey
+	}
+
+	legacyRatingKey := strings.TrimSpace(book.MediaServerID)
+	if _, ok := validAlbumRatingKeys[legacyRatingKey]; ok {
+		return legacyRatingKey
+	}
+
+	if strings.TrimSpace(book.Series) != "" && (storedDestinationID != "" || plexRatingKey != "" || legacyRatingKey != "") {
+		msLog.Debug().
+			Int64("book_id", book.ID).
+			Str("book", book.Title).
+			Str("series", book.Series).
+			Str("stored_destination_id", strings.TrimSpace(storedDestinationID)).
+			Str("plex_rating_key", plexRatingKey).
+			Str("media_server_id", legacyRatingKey).
+			Msg("plex: skipping collection reconcile for book without valid Plex rating key")
+	}
+	return ""
 }
 
 // LibraryItemCount queries Plex for the album count in the configured section.
@@ -712,21 +789,114 @@ func (p *PlexBackend) addToCollection(ctx context.Context, plexURL, token, colle
 	q.Set("uri", itemURI)
 	base.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, base.String(), nil)
-	if err != nil {
-		return err
-	}
-	p.addHeaders(req, token)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	methods := []string{http.MethodPost, http.MethodPut}
+	var lastErr error
+	for i, method := range methods {
+		req, err := http.NewRequestWithContext(ctx, method, base.String(), nil)
+		if err != nil {
+			return err
+		}
+		p.addHeaders(req, token)
+		msLog.Debug().
+			Str("collection_id", collectionID).
+			Str("plex_request", formatPlexRequestForLog(req)).
+			Msg("plex: add to collection request")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("plex add to collection returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		resp.Body.Close()
+		msLog.Debug().
+			Str("collection_id", collectionID).
+			Str("plex_response", formatPlexResponseForLog(resp, body)).
+			Msg("plex: add to collection response")
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return nil
+		}
+
+		lastErr = fmt.Errorf("plex add to collection via %s returned %d: %s", method, resp.StatusCode, strings.TrimSpace(string(body)))
+		if i == len(methods)-1 || (resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed) {
+			return lastErr
+		}
 	}
-	return nil
+	return lastErr
+}
+
+func formatPlexRequestForLog(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	redactedURL := redactPlexURL(req.URL)
+	var b strings.Builder
+	b.WriteString(req.Method)
+	b.WriteString(" ")
+	b.WriteString(redactedURL)
+	b.WriteString(" ")
+	b.WriteString(req.Proto)
+	b.WriteString("\n")
+	b.WriteString(formatPlexHeadersForLog(req.Header))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatPlexResponseForLog(resp *http.Response, body []byte) string {
+	if resp == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(resp.Proto)
+	b.WriteString(" ")
+	b.WriteString(resp.Status)
+	b.WriteString("\n")
+	b.WriteString(formatPlexHeadersForLog(resp.Header))
+	if len(body) > 0 {
+		if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+		b.Write(body)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatPlexHeadersForLog(header http.Header) string {
+	if len(header) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(header))
+	for key := range header {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for _, key := range keys {
+		values := header.Values(key)
+		for _, value := range values {
+			b.WriteString(key)
+			b.WriteString(": ")
+			if strings.EqualFold(key, "X-Plex-Token") {
+				b.WriteString("<redacted>")
+			} else {
+				b.WriteString(value)
+			}
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func redactPlexURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	cloned := *u
+	q := cloned.Query()
+	if q.Has("X-Plex-Token") {
+		q.Set("X-Plex-Token", "<redacted>")
+	}
+	cloned.RawQuery = q.Encode()
+	return cloned.String()
 }
 
 type plexAlbumEntry struct {

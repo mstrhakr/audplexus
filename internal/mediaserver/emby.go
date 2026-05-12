@@ -309,10 +309,21 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		return fmt.Errorf("reload books for collection reconciliation: %w", err)
 	}
 
+	destinationItemIDs := map[int64]string{}
+	if e.destination != nil {
+		destinationItemIDs, err = loadBookDestinationItemIDs(ctx, e.db, e.destination.ID)
+		if err != nil {
+			return fmt.Errorf("list book destinations for Emby reconcile: %w", err)
+		}
+	}
+
 	seriesBooks := make(map[string][]database.Book)
 	for _, b := range books {
 		series := strings.TrimSpace(b.Series)
-		if series == "" || b.MediaServerID == "" {
+		if series == "" {
+			continue
+		}
+		if pickDestinationItemID(b, destinationItemIDs) == "" {
 			continue
 		}
 		seriesBooks[series] = append(seriesBooks[series], b)
@@ -341,7 +352,7 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 
 		var seedID, seedCoverURL string
 		if len(booksInSeries) > 0 {
-			seedID = booksInSeries[0].MediaServerID
+			seedID = pickDestinationItemID(booksInSeries[0], destinationItemIDs)
 			seedCoverURL = booksInSeries[0].CoverURL
 		}
 		collectionID, err := e.findOrCreateCollection(ctx, baseURL, apiKey, series, seedID)
@@ -368,13 +379,14 @@ func (e *EmbyBackend) ReconcileLibrary(ctx context.Context, progressFn func(curr
 		}
 
 		for _, book := range booksInSeries {
-			if err := e.addToCollection(ctx, baseURL, apiKey, collectionID, book.MediaServerID); err != nil {
+			itemID := pickDestinationItemID(book, destinationItemIDs)
+			if err := e.addToCollection(ctx, baseURL, apiKey, collectionID, itemID); err != nil {
 				msLog.Warn().Err(err).Str("series", series).Str("book", book.Title).Msg("emby: failed to add book to collection during reconciliation")
 			} else {
 				collectionsAdded++
 			}
 			if adminID != "" {
-				if err := e.applyTags(ctx, baseURL, apiKey, adminID, book.MediaServerID, tagsForBook); err != nil {
+				if err := e.applyTags(ctx, baseURL, apiKey, adminID, itemID, tagsForBook); err != nil {
 					msLog.Debug().Err(err).Int64("book_id", book.ID).Strs("tags", tagsForBook).Msg("emby: tag write failed during reconcile")
 				} else {
 					tagsApplied++
