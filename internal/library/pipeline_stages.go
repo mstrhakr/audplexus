@@ -80,8 +80,12 @@ func (dm *DownloadManager) handleDownloadStage(ctx context.Context, item *databa
 		dm.startMetadataPrefetch(ctx, pipeItem)
 		now := time.Now()
 		item.StartedAt = &now
-		_ = dm.db.UpdateDownload(ctx, item)
-		_ = dm.db.UpdateBookStatus(ctx, item.BookID, database.BookStatusProcessing)
+		if err := dm.db.UpdateDownload(ctx, item); err != nil {
+			asinLog.Warn().Err(err).Msg("failed to persist reorganize download status")
+		}
+		if err := dm.db.UpdateBookStatus(ctx, item.BookID, database.BookStatusProcessing); err != nil {
+			asinLog.Warn().Err(err).Msg("failed to persist reorganize book status")
+		}
 		pipeItem.DecryptedPath = book.FilePath
 		dm.emit(DownloadEvent{ASIN: item.ASIN, BookID: item.BookID, Title: bookTitle, Type: "stage", Stage: "waiting_moving", Progress: 1.0, QueueDepth: len(dm.processQueue) + 1, QueueItem: true})
 		select {
@@ -113,8 +117,12 @@ func (dm *DownloadManager) handleDownloadStage(ctx context.Context, item *databa
 	now := time.Now()
 	item.Status = database.DownloadStatusActive
 	item.StartedAt = &now
-	_ = dm.db.UpdateDownload(itemCtx, item)
-	_ = dm.db.UpdateBookStatus(itemCtx, item.BookID, database.BookStatusDownloading)
+	if err := dm.db.UpdateDownload(itemCtx, item); err != nil {
+		asinLog.Warn().Err(err).Msg("failed to persist download active status")
+	}
+	if err := dm.db.UpdateBookStatus(itemCtx, item.BookID, database.BookStatusDownloading); err != nil {
+		asinLog.Warn().Err(err).Msg("failed to persist book downloading status")
+	}
 
 	dm.emit(DownloadEvent{ASIN: item.ASIN, BookID: item.BookID, Title: bookTitle, Type: "started", Stage: "downloading"})
 
@@ -197,7 +205,9 @@ func (dm *DownloadManager) handleDownloadStage(ctx context.Context, item *databa
 			// Persist to DB every 5 seconds
 			if now.Sub(lastDBWrite) >= 5*time.Second {
 				lastDBWrite = now
-				_ = dm.db.UpdateDownload(itemCtx, item)
+				if err := dm.db.UpdateDownload(itemCtx, item); err != nil {
+					asinLog.Warn().Err(err).Msg("failed to persist download progress")
+				}
 			}
 
 			// SSE to UI every 500ms for smooth progress
@@ -252,7 +262,9 @@ func (dm *DownloadManager) handleDownloadStage(ctx context.Context, item *databa
 	// Keep queue item active; full completion is only after decrypt + processing finish.
 	now = time.Now()
 	item.Progress = 1.0
-	_ = dm.db.UpdateDownload(ctx, item)
+	if err := dm.db.UpdateDownload(ctx, item); err != nil {
+		asinLog.Warn().Err(err).Msg("failed to persist download-complete progress")
+	}
 	dm.emit(DownloadEvent{
 		ASIN:         item.ASIN,
 		BookID:       item.BookID,
@@ -299,7 +311,9 @@ func (dm *DownloadManager) handleDecryptStage(parentCtx context.Context, item *p
 		cancelItem()
 	}()
 
-	_ = dm.db.UpdateBookStatus(ctx, item.BookID, database.BookStatusDecrypting)
+	if err := dm.db.UpdateBookStatus(ctx, item.BookID, database.BookStatusDecrypting); err != nil {
+		asinLog.Warn().Err(err).Msg("failed to persist book decrypting status")
+	}
 	dm.emit(DownloadEvent{ASIN: item.ASIN, BookID: item.BookID, Title: item.Title, Type: "stage", Stage: "decrypting"})
 
 	// Skip actual decrypt for reorganize jobs; use existing file path
@@ -436,7 +450,9 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 		cancelItem()
 	}()
 
-	_ = dm.db.UpdateBookStatus(ctx, item.BookID, database.BookStatusProcessing)
+	if err := dm.db.UpdateBookStatus(ctx, item.BookID, database.BookStatusProcessing); err != nil {
+		asinLog.Warn().Err(err).Msg("failed to persist book processing status")
+	}
 	dm.emit(DownloadEvent{ASIN: item.ASIN, BookID: item.BookID, Title: item.Title, Type: "stage", Stage: "moving"})
 
 	// Ensure canonical book/metadata are available before move.
@@ -539,7 +555,9 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 			item.DownloadItem.Progress = 1.0
 			item.DownloadItem.Error = ""
 			item.DownloadItem.CompletedAt = &now
-			_ = dm.db.UpdateDownload(context.WithoutCancel(parentCtx), item.DownloadItem)
+			if err := dm.db.UpdateDownload(context.WithoutCancel(parentCtx), item.DownloadItem); err != nil {
+				asinLog.Warn().Err(err).Msg("failed to persist reorganize complete status")
+			}
 		}
 
 		if reorganizeCompleteVisibilityDelay > 0 {
@@ -564,6 +582,7 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 			Stage:    "complete",
 			Progress: 1.0,
 		})
+		dm.fanOutWg.Add(1)
 		go dm.fanOutPostOrganize(context.Background(), asinLog, book, enriched, finalPath)
 		return
 	}
@@ -706,7 +725,9 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 				item.DownloadItem.Progress = 1.0
 				item.DownloadItem.Error = ""
 				item.DownloadItem.CompletedAt = &now
-				_ = dm.db.UpdateDownload(context.WithoutCancel(parentCtx), item.DownloadItem)
+				if err := dm.db.UpdateDownload(context.WithoutCancel(parentCtx), item.DownloadItem); err != nil {
+					asinLog.Warn().Err(err).Msg("failed to persist chapter-split complete status")
+				}
 			}
 			dm.emit(DownloadEvent{
 				ASIN:     item.ASIN,
@@ -716,6 +737,7 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 				Stage:    "complete",
 				Progress: 1.0,
 			})
+			dm.fanOutWg.Add(1)
 			go dm.fanOutPostOrganize(context.Background(), asinLog, book, enriched, finalPath)
 			return
 		}
@@ -814,7 +836,9 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 		item.DownloadItem.CompletedAt = &now
 		// Detach: the work is done, the row must commit even if the
 		// worker context is being torn down at shutdown.
-		_ = dm.db.UpdateDownload(context.WithoutCancel(parentCtx), item.DownloadItem)
+		if err := dm.db.UpdateDownload(context.WithoutCancel(parentCtx), item.DownloadItem); err != nil {
+			asinLog.Warn().Err(err).Msg("failed to persist pipeline complete status")
+		}
 	}
 
 	asinLog.Info().Str("path", finalPath).Msg("pipeline complete")
@@ -827,6 +851,7 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 		Stage:    "complete",
 		Progress: 1.0,
 	})
+	dm.fanOutWg.Add(1)
 	go dm.fanOutPostOrganize(context.Background(), asinLog, book, enriched, finalPath)
 }
 
@@ -834,7 +859,9 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 // (multi-dest path) or falls back to the legacy single mediaServer when
 // destinations isn't wired or returned zero results. Shared by the standard
 // download path, the chapter-split path, and the convert m4b<->mp3 paths.
+// Always launched as a goroutine; callers must call dm.fanOutWg.Add(1) first.
 func (dm *DownloadManager) fanOutPostOrganize(ctx context.Context, asinLog *logging.Logger, book *database.Book, enriched *audnexus.EnrichedBook, finalPath string) {
+	defer dm.fanOutWg.Done()
 	organizedBook := mediaserver.OrganizedBook{
 		BookID:      book.ID,
 		ASIN:        book.ASIN,
