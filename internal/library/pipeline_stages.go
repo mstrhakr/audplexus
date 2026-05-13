@@ -582,8 +582,7 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 			Stage:    "complete",
 			Progress: 1.0,
 		})
-		dm.fanOutWg.Add(1)
-		go dm.fanOutPostOrganize(context.Background(), asinLog, book, enriched, finalPath)
+		dm.goFanOutPostOrganize(asinLog, book, enriched, finalPath)
 		return
 	}
 
@@ -737,8 +736,7 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 				Stage:    "complete",
 				Progress: 1.0,
 			})
-			dm.fanOutWg.Add(1)
-			go dm.fanOutPostOrganize(context.Background(), asinLog, book, enriched, finalPath)
+			dm.goFanOutPostOrganize(asinLog, book, enriched, finalPath)
 			return
 		}
 	}
@@ -851,17 +849,28 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 		Stage:    "complete",
 		Progress: 1.0,
 	})
+	dm.goFanOutPostOrganize(asinLog, book, enriched, finalPath)
+}
+
+// goFanOutPostOrganize launches fanOutPostOrganize as a tracked goroutine so
+// StopAndWait can join it before the process exits. Use this instead of a bare
+// "go fanOutPostOrganize(...)" at all goroutine call sites. Synchronous callers
+// in convert.go call fanOutPostOrganize directly and must NOT use this wrapper.
+func (dm *DownloadManager) goFanOutPostOrganize(asinLog *logging.Logger, book *database.Book, enriched *audnexus.EnrichedBook, finalPath string) {
 	dm.fanOutWg.Add(1)
-	go dm.fanOutPostOrganize(context.Background(), asinLog, book, enriched, finalPath)
+	go func() {
+		defer dm.fanOutWg.Done()
+		dm.fanOutPostOrganize(context.Background(), asinLog, book, enriched, finalPath)
+	}()
 }
 
 // fanOutPostOrganize runs OnBookOrganized across every enabled destination
 // (multi-dest path) or falls back to the legacy single mediaServer when
 // destinations isn't wired or returned zero results. Shared by the standard
 // download path, the chapter-split path, and the convert m4b<->mp3 paths.
-// Always launched as a goroutine; callers must call dm.fanOutWg.Add(1) first.
+// When launched as a goroutine, callers should use goFanOutPostOrganize
+// so that StopAndWait can track and join it.
 func (dm *DownloadManager) fanOutPostOrganize(ctx context.Context, asinLog *logging.Logger, book *database.Book, enriched *audnexus.EnrichedBook, finalPath string) {
-	defer dm.fanOutWg.Done()
 	organizedBook := mediaserver.OrganizedBook{
 		BookID:      book.ID,
 		ASIN:        book.ASIN,
