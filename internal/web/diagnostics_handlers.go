@@ -104,6 +104,7 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load books: " + err.Error()})
 		return
 	}
+	localASINPaths := scanLocalASINAudioPaths(s.audiobooksPath)
 	completeStatus := database.BookStatusComplete
 	_, completeBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
 	dests, _ := s.db.ListEnabledLibraryDestinations(ctx)
@@ -237,6 +238,31 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 		}
 	}
 
+	for _, book := range books {
+		if book.Status == database.BookStatusComplete {
+			continue
+		}
+		asin := strings.ToUpper(strings.TrimSpace(book.ASIN))
+		if asin == "" {
+			continue
+		}
+		path, ok := localASINPaths[asin]
+		if !ok {
+			continue
+		}
+		issues = append(issues, diagnosticsIssueItem{
+			ASIN:                book.ASIN,
+			Title:               book.Title,
+			Author:              book.Author,
+			FilePath:            path,
+			OnDisk:              true,
+			IssueSummary:        "Scanner mismatch: audio exists on disk but book is not marked complete",
+			DestinationStatuses: []diagnosticsBookDestinationStatus{},
+			CanTargetedScan:     true,
+			CanRedownload:       false,
+		})
+	}
+
 	sort.Slice(issues, func(i, j int) bool {
 		if issues[i].IssueSummary == issues[j].IssueSummary {
 			return strings.ToLower(issues[i].Title) < strings.ToLower(issues[j].Title)
@@ -259,6 +285,33 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 	}
 	webLog.Info().Int("issue_books", len(issues)).Int("disk_missing", diskMissing).Int("complete_books", completeBooks).Msg("diagnostics: compare complete")
 	c.JSON(http.StatusOK, response)
+}
+
+func scanLocalASINAudioPaths(root string) map[string]string {
+	index := map[string]string{}
+	if strings.TrimSpace(root) == "" {
+		return index
+	}
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d == nil || d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(d.Name()), "."))
+		switch ext {
+		case "m4b", "m4a", "mp3", "aax", "aaxc", "flac", "ogg", "wma", "aac", "opus":
+		default:
+			return nil
+		}
+		asin := library.ExtractASINFromPath(path)
+		if asin == "" {
+			return nil
+		}
+		if _, exists := index[asin]; !exists {
+			index[asin] = path
+		}
+		return nil
+	})
+	return index
 }
 
 func (s *Server) handleDiagnosticsTargetedScan(c *gin.Context) {

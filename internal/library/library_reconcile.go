@@ -284,7 +284,87 @@ func findBestFileForBook(ctx context.Context, book *database.Book, libraryRoot s
 		}
 	}
 
+	// Fourth choice: fuzzy title/author search across discovered paths.
+	// This helps preserve matches when users switch naming templates and older
+	// files no longer follow the generated candidate layout.
+	if path, size, ok := fuzzyMatchDiscoveredFile(book, discoveredFiles); ok {
+		return path, size, "fuzzy_title_author"
+	}
+
 	return "", 0, "no_match"
+}
+
+func fuzzyMatchDiscoveredFile(book *database.Book, discoveredFiles map[string]int64) (string, int64, bool) {
+	if book == nil {
+		return "", 0, false
+	}
+	titleKey := normalizeReconToken(book.Title)
+	if len(titleKey) < 6 {
+		return "", 0, false
+	}
+	authorKey := normalizeReconToken(book.Author)
+
+	type candidate struct {
+		path  string
+		size  int64
+		score int
+	}
+	matches := make([]candidate, 0, 4)
+	for path, size := range discoveredFiles {
+		name := normalizeReconToken(filepath.Base(path))
+		dir := normalizeReconToken(filepath.Base(filepath.Dir(path)))
+		whole := normalizeReconToken(path)
+
+		if !strings.Contains(name, titleKey) && !strings.Contains(dir, titleKey) && !strings.Contains(whole, titleKey) {
+			continue
+		}
+
+		score := 1
+		if authorKey != "" {
+			if strings.Contains(name, authorKey) || strings.Contains(dir, authorKey) || strings.Contains(whole, authorKey) {
+				score += 2
+			}
+		}
+		if strings.Contains(name, titleKey) {
+			score++
+		}
+		matches = append(matches, candidate{path: path, size: size, score: score})
+	}
+
+	if len(matches) == 0 {
+		return "", 0, false
+	}
+	if len(matches) == 1 {
+		return matches[0].path, matches[0].size, true
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].score != matches[j].score {
+			return matches[i].score > matches[j].score
+		}
+		return matches[i].path < matches[j].path
+	})
+
+	// Only accept when best candidate is strictly better than the next one.
+	if matches[0].score > matches[1].score {
+		return matches[0].path, matches[0].size, true
+	}
+
+	return "", 0, false
+}
+
+func normalizeReconToken(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	b := make([]rune, 0, len(s))
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b = append(b, r)
+		}
+	}
+	return string(b)
 }
 
 // asinPathRe matches both:

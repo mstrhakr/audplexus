@@ -399,6 +399,7 @@ func (s *Server) setupRoutes() {
 
 		api.GET("/events", s.handleSSE)
 		api.POST("/settings", s.handleSaveSettings)
+		api.POST("/library/reorganize", s.handleReorganizeLibrary)
 		api.POST("/restart", s.handleRestart)
 		api.GET("/settings/db-backup", s.handleDBBackup)
 		api.POST("/settings/factory-reset", s.handleFactoryReset)
@@ -1201,6 +1202,9 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 	downloadConcurrency := s.settingInt(ctx, "download_concurrency", 0)
 	decryptConcurrency := s.settingInt(ctx, "decrypt_concurrency", 0)
 	processConcurrency := s.settingInt(ctx, "process_concurrency", 0)
+	authorDirTemplate := s.settingString(ctx, organizer.SettingKeyAuthorDirTemplate, organizer.DefaultAuthorDirTemplate)
+	bookDirTemplate := s.settingString(ctx, organizer.SettingKeyBookDirTemplate, organizer.DefaultBookDirTemplate)
+	fileNameTemplate := s.settingString(ctx, organizer.SettingKeyFileNameTemplate, organizer.DefaultFileNameTemplate)
 
 	logLevel := logging.GetLevel()
 
@@ -1233,6 +1237,9 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 		"DownloadConcurrency":  downloadConcurrency,
 		"DecryptConcurrency":   decryptConcurrency,
 		"ProcessConcurrency":   processConcurrency,
+		"AuthorDirTemplate":   authorDirTemplate,
+		"BookDirTemplate":     bookDirTemplate,
+		"FileNameTemplate":    fileNameTemplate,
 		"LogLevel":             logLevel,
 		"Devices":              devices,
 		"Page":                 "settings",
@@ -1963,6 +1970,20 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 		}
 	}
 
+	if _, ok := c.GetPostForm("author_dir_template"); ok {
+		_ = setSetting(organizer.SettingKeyAuthorDirTemplate, strings.TrimSpace(c.PostForm("author_dir_template")))
+	}
+	if _, ok := c.GetPostForm("book_dir_template"); ok {
+		_ = setSetting(organizer.SettingKeyBookDirTemplate, strings.TrimSpace(c.PostForm("book_dir_template")))
+	}
+	if _, ok := c.GetPostForm("file_name_template"); ok {
+		_ = setSetting(organizer.SettingKeyFileNameTemplate, strings.TrimSpace(c.PostForm("file_name_template")))
+	}
+	authorTpl := s.settingString(ctx, organizer.SettingKeyAuthorDirTemplate, organizer.DefaultAuthorDirTemplate)
+	bookTpl := s.settingString(ctx, organizer.SettingKeyBookDirTemplate, organizer.DefaultBookDirTemplate)
+	fileTpl := s.settingString(ctx, organizer.SettingKeyFileNameTemplate, organizer.DefaultFileNameTemplate)
+	s.organizer.SetNamingTemplates(authorTpl, bookTpl, fileTpl)
+
 	// Boolean toggles: the hidden *_sent field tells us the field was present
 	// in the form, so unchecked = false rather than absent.
 	if _, ok := c.GetPostForm("embed_cover_sent"); ok {
@@ -2491,6 +2512,60 @@ func (s *Server) handleConvertBook(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "format": target})
+}
+
+// handleReorganizeLibrary queues complete books for reorganization through
+// the download pipeline's move stage, respecting current naming templates.
+func (s *Server) handleReorganizeLibrary(c *gin.Context) {
+	ctx := context.Background()
+	status := database.BookStatusComplete
+	books, _, err := s.db.ListBooks(ctx, database.BookFilter{Status: &status})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list books: " + err.Error()})
+		return
+	}
+
+	queued := 0
+	skipped := 0
+	failed := 0
+
+	for i := range books {
+		b := books[i]
+		if strings.TrimSpace(b.FilePath) == "" {
+			skipped++
+			continue
+		}
+		if _, statErr := os.Stat(b.FilePath); statErr != nil {
+			skipped++
+			continue
+		}
+
+		dl := &database.DownloadQueue{
+			BookID: b.ID,
+			ASIN:   b.ASIN,
+			Status: database.DownloadStatusReorganize,
+		}
+		if insertErr := s.db.EnqueueDownload(ctx, dl); insertErr != nil {
+			failed++
+			webLog.Warn().Err(insertErr).Str("asin", b.ASIN).Msg("reorganize: queue insert failed")
+			continue
+		}
+
+		queued++
+	}
+
+	msg := fmt.Sprintf("Reorganize queued: %d books, skipped %d (no file or missing), failed %d (queue insert)", queued, skipped, failed)
+	if c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": msg})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": msg,
+		"queued":  queued,
+		"skipped": skipped,
+		"failed":  failed,
+	})
 }
 
 

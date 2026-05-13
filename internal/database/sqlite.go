@@ -194,10 +194,13 @@ func (s *SQLiteDB) EnqueueDownload(ctx context.Context, item *DownloadQueue) err
 	now := time.Now()
 	item.CreatedAt = now
 	item.UpdatedAt = now
+	if strings.TrimSpace(string(item.Status)) == "" {
+		item.Status = DownloadStatusPending
+	}
 	result, err := s.db.ExecContext(ctx,
 		`INSERT INTO download_queue (book_id, asin, priority, status, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		item.BookID, item.ASIN, item.Priority, DownloadStatusPending, item.CreatedAt, item.UpdatedAt)
+		item.BookID, item.ASIN, item.Priority, item.Status, item.CreatedAt, item.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("enqueue download: %w", err)
 	}
@@ -216,8 +219,8 @@ func (s *SQLiteDB) GetNextPendingDownload(ctx context.Context) (*DownloadQueue, 
 
 	row := tx.QueryRowContext(ctx,
 		`SELECT id, book_id, asin, priority, status, progress, error, started_at, completed_at, created_at, updated_at
-		 FROM download_queue WHERE status = ? ORDER BY priority DESC, created_at ASC LIMIT 1`,
-		DownloadStatusPending)
+		 FROM download_queue WHERE status IN (?, ?) ORDER BY priority DESC, created_at ASC LIMIT 1`,
+		DownloadStatusPending, DownloadStatusReorganize)
 
 	var d DownloadQueue
 	if err := row.Scan(&d.ID, &d.BookID, &d.ASIN, &d.Priority, &d.Status, &d.Progress,
@@ -229,9 +232,13 @@ func (s *SQLiteDB) GetNextPendingDownload(ctx context.Context) (*DownloadQueue, 
 	}
 
 	now := time.Now()
+	claimStatus := DownloadStatusActive
+	if d.Status == DownloadStatusReorganize {
+		claimStatus = DownloadStatusReorganizing
+	}
 	_, err = tx.ExecContext(ctx,
 		`UPDATE download_queue SET status = ?, started_at = ?, updated_at = ? WHERE id = ?`,
-		DownloadStatusActive, now, now, d.ID)
+		claimStatus, now, now, d.ID)
 	if err != nil {
 		return nil, fmt.Errorf("claim download: %w", err)
 	}
@@ -240,7 +247,7 @@ func (s *SQLiteDB) GetNextPendingDownload(ctx context.Context) (*DownloadQueue, 
 		return nil, fmt.Errorf("commit tx: %w", err)
 	}
 
-	d.Status = DownloadStatusActive
+	d.Status = claimStatus
 	d.StartedAt = &now
 	return &d, nil
 }

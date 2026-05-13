@@ -360,7 +360,11 @@ func (dm *DownloadManager) requeueClaimedDownload(ctx context.Context, item *dat
 	if item == nil {
 		return
 	}
-	item.Status = database.DownloadStatusPending
+	if item.Status.IsReorganize() {
+		item.Status = database.DownloadStatusReorganize
+	} else {
+		item.Status = database.DownloadStatusPending
+	}
 	item.StartedAt = nil
 	if err := dm.db.UpdateDownload(ctx, item); err != nil {
 		dlLog.Warn().Err(err).Int64("queue_id", item.ID).Msg("failed to requeue claimed download while paused")
@@ -775,6 +779,12 @@ func (dm *DownloadManager) reconcileStatuses(ctx context.Context) {
 		dlLog.Error().Err(err).Msg("reconcile: failed to list active downloads")
 		return
 	}
+	reorgInProgressStatus := database.DownloadStatusReorganizing
+	reorgInProgress, err := dm.db.ListDownloads(ctx, &reorgInProgressStatus)
+	if err != nil {
+		dlLog.Error().Err(err).Msg("reconcile: failed to list reorganizing downloads")
+		return
+	}
 
 	// Reset all active downloads to pending on startup (they'll be retried)
 	for _, dl := range activeDownloads {
@@ -787,6 +797,14 @@ func (dm *DownloadManager) reconcileStatuses(ctx context.Context) {
 		// Clean up any partial files from the interrupted download
 		dm.cleanupDownloadFiles(dl.ASIN)
 		cleaned++
+	}
+
+	for _, dl := range reorgInProgress {
+		dlLog.Info().Str("asin", dl.ASIN).Msg("reconcile: resetting stuck reorganizing download to reorganize")
+		dl.Status = database.DownloadStatusReorganize
+		dl.StartedAt = nil
+		dl.Progress = 0
+		_ = dm.db.UpdateDownload(ctx, &dl)
 	}
 
 	activeBookIDs := make(map[int64]bool)
@@ -1158,6 +1176,8 @@ func (dm *DownloadManager) cleanupOrphanedFiles(ctx context.Context) {
 	for _, status := range []database.DownloadStatus{
 		database.DownloadStatusPending,
 		database.DownloadStatusActive,
+		database.DownloadStatusReorganize,
+		database.DownloadStatusReorganizing,
 	} {
 		downloads, err := dm.db.ListDownloads(ctx, &status)
 		if err != nil {
@@ -1229,6 +1249,7 @@ func (dm *DownloadManager) QueueBook(ctx context.Context, bookID int64, asin str
 		BookID:   bookID,
 		ASIN:     asin,
 		Priority: priority,
+		Status:   database.DownloadStatusPending,
 	}
 	if err := dm.db.EnqueueDownload(ctx, item); err != nil {
 		return false, fmt.Errorf("queue download: %w", err)
@@ -1284,6 +1305,8 @@ func (dm *DownloadManager) RefillQueue(ctx context.Context, queueLimit int) erro
 	for _, status := range []database.DownloadStatus{
 		database.DownloadStatusPending,
 		database.DownloadStatusActive,
+		database.DownloadStatusReorganize,
+		database.DownloadStatusReorganizing,
 	} {
 		downloads, err := dm.db.ListDownloads(ctx, &status)
 		if err != nil {

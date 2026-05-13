@@ -63,12 +63,18 @@ type DownloadQueue struct {
 type DownloadStatus string
 
 const (
-	DownloadStatusPending   DownloadStatus = "pending"
-	DownloadStatusActive    DownloadStatus = "active"
-	DownloadStatusComplete  DownloadStatus = "complete"
-	DownloadStatusFailed    DownloadStatus = "failed"
-	DownloadStatusCancelled DownloadStatus = "cancelled"
+	DownloadStatusPending    DownloadStatus = "pending"
+	DownloadStatusActive     DownloadStatus = "active"
+	DownloadStatusReorganize DownloadStatus = "reorganize"
+	DownloadStatusReorganizing DownloadStatus = "reorganizing"
+	DownloadStatusComplete   DownloadStatus = "complete"
+	DownloadStatusFailed     DownloadStatus = "failed"
+	DownloadStatusCancelled  DownloadStatus = "cancelled"
 )
+
+func (s DownloadStatus) IsReorganize() bool {
+	return s == DownloadStatusReorganize || s == DownloadStatusReorganizing
+}
 
 // SyncHistory records library sync operations.
 type SyncHistory struct {

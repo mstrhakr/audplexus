@@ -28,19 +28,27 @@ type PlexOrganizer struct {
 	embedCover    bool
 	chapterFile   bool
 	plexMatchFile bool
+	authorDirTpl  string
+	bookDirTpl    string
+	fileNameTpl   string
 	mu            sync.RWMutex
 }
 
 // NewPlexOrganizer creates a new Plex file organizer.
 func NewPlexOrganizer(db database.Database, ffmpeg *audio.FFmpeg, libraryRoot string, embedCover, chapterFile, plexMatchFile bool) *PlexOrganizer {
-	return &PlexOrganizer{
+	o := &PlexOrganizer{
 		db:            db,
 		ffmpeg:        ffmpeg,
 		libraryRoot:   libraryRoot,
 		embedCover:    embedCover,
 		chapterFile:   chapterFile,
 		plexMatchFile: plexMatchFile,
+		authorDirTpl:  DefaultAuthorDirTemplate,
+		bookDirTpl:    DefaultBookDirTemplate,
+		fileNameTpl:   DefaultFileNameTemplate,
 	}
+	o.loadNamingTemplatesFromDB(context.Background())
+	return o
 }
 
 // SetEmbedCover updates the embed cover setting at runtime.
@@ -94,11 +102,23 @@ func (o *PlexOrganizer) OrganizeWithProgress(ctx context.Context, book *database
 	if title == "" {
 		title = "Unknown Title"
 	}
-	filenameBase := buildFilenameBase(title, subtitle, series, seriesPosition, asin, region)
-	bookDirName := buildBookDirectoryName(title, asin, region)
+	duration := fmt.Sprintf("%d", book.Duration)
+	releaseDate := ""
+	if !book.ReleaseDate.IsZero() {
+		releaseDate = book.ReleaseDate.Format("2006-01-02")
+	}
+	purchaseDate := ""
+	if !book.PurchaseDate.IsZero() {
+		purchaseDate = book.PurchaseDate.Format("2006-01-02")
+	}
+	naming := buildNamingData(author, book.AuthorASIN, title, subtitle, series, seriesPosition, asin, region,
+		enriched.Narrator(), book.Publisher, book.Language, duration, releaseDate, purchaseDate, book.DRMType)
+	filenameBase := o.renderFileName(naming)
+	bookDirName := o.renderBookDirName(naming)
+	authorDirName := o.renderAuthorDirName(naming)
 
 	// Always use the configured libraryRoot for file placement
-	bookDir := filepath.Join(o.libraryRoot, sanitizePath(author), sanitizePath(bookDirName))
+	bookDir := filepath.Join(o.libraryRoot, authorDirName, bookDirName)
 	if err := os.MkdirAll(bookDir, 0750); err != nil {
 		return "", fmt.Errorf("create book directory: %w", err)
 	}
@@ -119,14 +139,19 @@ func (o *PlexOrganizer) OrganizeWithProgress(ctx context.Context, book *database
 	}
 
 	// File is already decrypted and tagged earlier in the pipeline.
+	movedViaCopy := false
 	if err := os.Rename(inputPath, finalPath); err != nil {
 		// Cross-device rename; fall back to copy+delete.
+		movedViaCopy = true
 		if err := copyFile(inputPath, finalPath, totalBytes, onMoveProgress, onStage); err != nil {
 			return "", fmt.Errorf("move file: %w", err)
 		}
 		_ = os.Remove(inputPath)
 	} else if onMoveProgress != nil {
 		onMoveProgress(totalBytes, totalBytes)
+	}
+	if onStage != nil && !movedViaCopy {
+		onStage("finalizing")
 	}
 
 	// Generate .plexmatch hint file for perfect Plex library scanning.
@@ -201,10 +226,22 @@ func (o *PlexOrganizer) OrganizeMultiFile(ctx context.Context, book *database.Bo
 	if title == "" {
 		title = "Unknown Title"
 	}
-	filenameBase := buildFilenameBase(title, subtitle, series, seriesPosition, asin, region)
-	bookDirName := buildBookDirectoryName(title, asin, region)
+	duration := fmt.Sprintf("%d", book.Duration)
+	releaseDate := ""
+	if !book.ReleaseDate.IsZero() {
+		releaseDate = book.ReleaseDate.Format("2006-01-02")
+	}
+	purchaseDate := ""
+	if !book.PurchaseDate.IsZero() {
+		purchaseDate = book.PurchaseDate.Format("2006-01-02")
+	}
+	naming := buildNamingData(author, book.AuthorASIN, title, subtitle, series, seriesPosition, asin, region,
+		enriched.Narrator(), book.Publisher, book.Language, duration, releaseDate, purchaseDate, book.DRMType)
+	filenameBase := o.renderFileName(naming)
+	bookDirName := o.renderBookDirName(naming)
+	authorDirName := o.renderAuthorDirName(naming)
 
-	bookDir := filepath.Join(o.libraryRoot, sanitizePath(author), sanitizePath(bookDirName))
+	bookDir := filepath.Join(o.libraryRoot, authorDirName, bookDirName)
 	if err := os.MkdirAll(bookDir, 0750); err != nil {
 		return "", fmt.Errorf("create book directory: %w", err)
 	}
@@ -237,6 +274,7 @@ func (o *PlexOrganizer) OrganizeMultiFile(ctx context.Context, book *database.Bo
 	// firstFinal is returned as a representative path for the book record.
 	firstFinal := ""
 	movedTotal := int64(0)
+	finalizingEmitted := false
 	for _, e := range chapterFiles {
 		src := filepath.Join(srcDir, e.Name())
 		dst := filepath.Join(bookDir, e.Name())
@@ -251,7 +289,14 @@ func (o *PlexOrganizer) OrganizeMultiFile(ctx context.Context, book *database.Bo
 			// Only pass onStage for the last file so it fires once at the end.
 			var stg func(string)
 			if e.Name() == chapterFiles[len(chapterFiles)-1].Name() {
-				stg = onStage
+				stg = func(stage string) {
+					if stage == "finalizing" {
+						finalizingEmitted = true
+					}
+					if onStage != nil {
+						onStage(stage)
+					}
+				}
 			}
 			subProgress := func(moved, _ int64) {
 				if onMoveProgress != nil {
@@ -276,6 +321,9 @@ func (o *PlexOrganizer) OrganizeMultiFile(ctx context.Context, book *database.Bo
 
 	if firstFinal == "" {
 		return "", fmt.Errorf("no chapter files found in %s", srcDir)
+	}
+	if onStage != nil && !finalizingEmitted {
+		onStage("finalizing")
 	}
 
 	// Generate .plexmatch hint file for perfect Plex library scanning.
@@ -320,6 +368,157 @@ func (o *PlexOrganizer) OrganizeMultiFile(ctx context.Context, book *database.Bo
 		Msg("audiobook organized successfully (chapter-split)")
 
 	return bookDir, nil
+}
+
+// ReorganizeInPlaceWithProgress re-maps an already-organized library path to
+// the current naming templates using atomic renames where possible. For
+// single-file books it performs bottom-up updates: file base rename first,
+// then book folder rename/move, and finally old parent cleanup.
+func (o *PlexOrganizer) ReorganizeInPlaceWithProgress(ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, onMoveProgress func(moved, total int64), onStage func(stage string)) (string, error) {
+	if book == nil || enriched == nil {
+		return "", fmt.Errorf("book metadata is required")
+	}
+	sourcePath := filepath.Clean(strings.TrimSpace(book.FilePath))
+	if sourcePath == "" {
+		return "", fmt.Errorf("book %s has no file path", book.ASIN)
+	}
+	st, err := os.Stat(sourcePath)
+	if err != nil {
+		return "", err
+	}
+
+	author := strings.TrimSpace(enriched.Author())
+	title := strings.TrimSpace(enriched.Title())
+	subtitle := strings.TrimSpace(enriched.Subtitle())
+	series := strings.TrimSpace(enriched.Series())
+	seriesPosition := strings.TrimSpace(enriched.SeriesPosition())
+	asin := strings.TrimSpace(book.ASIN)
+	region := strings.TrimSpace(enriched.Region())
+	if author == "" {
+		author = "Unknown Author"
+	}
+	if title == "" {
+		title = "Unknown Title"
+	}
+	duration := fmt.Sprintf("%d", book.Duration)
+	releaseDate := ""
+	if !book.ReleaseDate.IsZero() {
+		releaseDate = book.ReleaseDate.Format("2006-01-02")
+	}
+	purchaseDate := ""
+	if !book.PurchaseDate.IsZero() {
+		purchaseDate = book.PurchaseDate.Format("2006-01-02")
+	}
+	naming := buildNamingData(author, book.AuthorASIN, title, subtitle, series, seriesPosition, asin, region,
+		enriched.Narrator(), book.Publisher, book.Language, duration, releaseDate, purchaseDate, book.DRMType)
+	bookDirName := o.renderBookDirName(naming)
+	authorDirName := o.renderAuthorDirName(naming)
+	targetBookDir := filepath.Join(o.libraryRoot, authorDirName, bookDirName)
+
+	finalPath := sourcePath
+	if st.IsDir() {
+		oldBookDir := sourcePath
+		if oldBookDir != targetBookDir {
+			if err := os.MkdirAll(filepath.Dir(targetBookDir), 0750); err != nil {
+				return "", fmt.Errorf("create target author dir: %w", err)
+			}
+			if err := os.Rename(oldBookDir, targetBookDir); err != nil {
+				return "", fmt.Errorf("rename book directory: %w", err)
+			}
+			trimEmptyDir(filepath.Dir(oldBookDir), o.libraryRoot)
+		}
+		finalPath = targetBookDir
+		if onMoveProgress != nil {
+			onMoveProgress(book.FileSize, book.FileSize)
+		}
+	} else {
+		ext := filepath.Ext(sourcePath)
+		newBase := sanitizePath(o.renderFileName(naming))
+		oldBookDir := filepath.Dir(sourcePath)
+		oldBase := strings.TrimSuffix(filepath.Base(sourcePath), ext)
+
+		// Bottom-up step 1: rename primary file and known sidecars in current dir.
+		renamedFile := sourcePath
+		if oldBase != newBase {
+			newLocal := filepath.Join(oldBookDir, newBase+ext)
+			if sourcePath != newLocal {
+				if err := os.Rename(sourcePath, newLocal); err != nil {
+					return "", fmt.Errorf("rename primary file: %w", err)
+				}
+				renamedFile = newLocal
+			}
+			renameIfExists(filepath.Join(oldBookDir, oldBase+".chapters.txt"), filepath.Join(oldBookDir, newBase+".chapters.txt"))
+		}
+
+		// Bottom-up step 2: rename/move book directory to target.
+		if oldBookDir != targetBookDir {
+			if err := os.MkdirAll(filepath.Dir(targetBookDir), 0750); err != nil {
+				return "", fmt.Errorf("create target author dir: %w", err)
+			}
+			if err := os.Rename(oldBookDir, targetBookDir); err != nil {
+				return "", fmt.Errorf("rename book directory: %w", err)
+			}
+			trimEmptyDir(filepath.Dir(oldBookDir), o.libraryRoot)
+		}
+
+		finalPath = filepath.Join(targetBookDir, newBase+ext)
+		if onMoveProgress != nil {
+			if fi, statErr := os.Stat(finalPath); statErr == nil {
+				onMoveProgress(fi.Size(), fi.Size())
+			} else {
+				onMoveProgress(book.FileSize, book.FileSize)
+			}
+		}
+		_ = renamedFile
+	}
+
+	if onStage != nil {
+		onStage("finalizing")
+	}
+
+	book.FilePath = finalPath
+	if fi, statErr := os.Stat(finalPath); statErr == nil {
+		if fi.IsDir() {
+			book.FileSize = 0
+		} else {
+			book.FileSize = fi.Size()
+		}
+	}
+	book.Status = database.BookStatusComplete
+	if err := o.db.UpsertBook(ctx, book); err != nil {
+		return "", fmt.Errorf("update book record: %w", err)
+	}
+
+	return finalPath, nil
+}
+
+func renameIfExists(src, dst string) {
+	if strings.TrimSpace(src) == "" || strings.TrimSpace(dst) == "" || src == dst {
+		return
+	}
+	if _, err := os.Stat(src); err != nil {
+		return
+	}
+	if err := os.Rename(src, dst); err != nil {
+		orgLog.Debug().Err(err).Str("src", src).Str("dst", dst).Msg("sidecar rename skipped")
+	}
+}
+
+func trimEmptyDir(dir, root string) {
+	dir = filepath.Clean(dir)
+	root = filepath.Clean(root)
+	for dir != "" && dir != "." && dir != root {
+		ents, err := os.ReadDir(dir)
+		if err != nil || len(ents) > 0 {
+			return
+		}
+		_ = os.Remove(dir)
+		next := filepath.Dir(dir)
+		if next == dir {
+			return
+		}
+		dir = next
+	}
 }
 
 // buildFilenameBase builds a Plex-friendly filename with ASIN and optional region for easier scanning.

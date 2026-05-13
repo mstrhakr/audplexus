@@ -242,6 +242,24 @@
             </div>
 
             <div class="form-group">
+                <label for="author_dir_template">Author Directory Template</label>
+                <input type="text" id="author_dir_template" name="author_dir_template" value="{{.AuthorDirTemplate}}" placeholder="{author}">
+                <small>Supports data tokens: <code>{author}</code>, <code>{author_asin}</code>, <code>{title}</code>, <code>{subtitle}</code>, <code>{series}</code>, <code>{series_position}</code>, <code>{asin}</code>, <code>{region}</code>, <code>{narrator}</code>, <code>{publisher}</code>, <code>{language}</code>, <code>{duration}</code>, <code>{release_date}</code>, <code>{purchase_date}</code>, <code>{drm_type}</code>.</small>
+            </div>
+
+            <div class="form-group">
+                <label for="book_dir_template">Book Directory Template</label>
+                <input type="text" id="book_dir_template" name="book_dir_template" value="{{.BookDirTemplate}}" placeholder="{title}{ - series}{ [region]}">
+                <small>Use <code>/</code> for nested folders. Conditional segments work Sonarr-style: <code>{ - subtitle}</code>, <code>{ [region]}</code>, <code>{ (narrator)}</code>.</small>
+            </div>
+
+            <div class="form-group">
+                <label for="file_name_template">File Name Template</label>
+                <input type="text" id="file_name_template" name="file_name_template" value="{{.FileNameTemplate}}" placeholder="{title}{ - subtitle}{ - series} {series_position} {asin}{ [region]}">
+                <small>Extension is added automatically. Keep tokens data-only and place punctuation/spaces inside conditional blocks.</small>
+            </div>
+
+            <div class="form-group">
                 <label for="embed_cover">Embed Cover Art</label>
                 <label class="toggle-switch">
                     <input type="checkbox" id="embed_cover" name="embed_cover" value="true" {{if .EmbedCover}}checked{{end}}>
@@ -306,6 +324,7 @@
             <p class="muted">Note: sync schedule/mode, auto-queue-new, and worker concurrency changes are applied on next restart.</p>
 
             <button type="submit" class="btn btn-primary">Save Settings</button>
+            <button type="button" class="btn btn-secondary" hx-post="/api/library/reorganize" hx-target="#save-status" hx-swap="innerHTML">Reorganize Library To Current Scheme</button>
             <span id="save-status"></span>
         </form>
     </div>

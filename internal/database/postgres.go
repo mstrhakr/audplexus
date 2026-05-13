@@ -188,10 +188,13 @@ func (p *PostgresDB) EnqueueDownload(ctx context.Context, item *DownloadQueue) e
 	now := time.Now()
 	item.CreatedAt = now
 	item.UpdatedAt = now
+	if strings.TrimSpace(string(item.Status)) == "" {
+		item.Status = DownloadStatusPending
+	}
 	err := p.db.QueryRowContext(ctx,
 		`INSERT INTO download_queue (book_id, asin, priority, status, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		item.BookID, item.ASIN, item.Priority, DownloadStatusPending, item.CreatedAt, item.UpdatedAt).Scan(&item.ID)
+		item.BookID, item.ASIN, item.Priority, item.Status, item.CreatedAt, item.UpdatedAt).Scan(&item.ID)
 	if err != nil {
 		return fmt.Errorf("enqueue download: %w", err)
 	}
@@ -202,14 +205,25 @@ func (p *PostgresDB) GetNextPendingDownload(ctx context.Context) (*DownloadQueue
 	// Atomically claim the next pending item to prevent duplicate processing.
 	now := time.Now()
 	row := p.db.QueryRowContext(ctx,
-		`UPDATE download_queue SET status = $1, started_at = $2, updated_at = $2
-		 WHERE id = (
-		   SELECT id FROM download_queue WHERE status = $3
-		   ORDER BY priority DESC, created_at ASC LIMIT 1
+		`WITH next_item AS (
+		   SELECT id, status
+		   FROM download_queue
+		   WHERE status IN ($1, $2)
+		   ORDER BY priority DESC, created_at ASC
+		   LIMIT 1
 		   FOR UPDATE SKIP LOCKED
 		 )
-		 RETURNING id, book_id, asin, priority, status, progress, error, started_at, completed_at, created_at, updated_at`,
-		DownloadStatusActive, now, DownloadStatusPending)
+		 UPDATE download_queue dq
+		 SET status = CASE
+		     WHEN ni.status = $2 THEN $4
+		     ELSE $3
+		   END,
+		   started_at = $5,
+		   updated_at = $5
+		 FROM next_item ni
+		 WHERE dq.id = ni.id
+		 RETURNING dq.id, dq.book_id, dq.asin, dq.priority, dq.status, dq.progress, dq.error, dq.started_at, dq.completed_at, dq.created_at, dq.updated_at`,
+		DownloadStatusPending, DownloadStatusReorganize, DownloadStatusActive, DownloadStatusReorganizing, now)
 
 	var d DownloadQueue
 	if err := row.Scan(&d.ID, &d.BookID, &d.ASIN, &d.Priority, &d.Status, &d.Progress,

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -21,6 +22,10 @@ import (
 // as a stalled CDN connection. Audible's CDN normally resets within seconds
 // of an actual error, but we've seen connections sit silently for minutes.
 const downloadStallTimeout = 2 * time.Minute
+
+// Small UX delay so reorganize items remain visible briefly in the pipeline
+// list before completion clears them from the active state.
+const reorganizeCompleteVisibilityDelay = 200 * time.Millisecond
 
 // copyFileSimple copies src to dst, overwriting any existing file. Used for
 // best-effort sidecar writes (e.g. folder.jpg) where progress isn't needed.
@@ -67,6 +72,25 @@ func (dm *DownloadManager) handleDownloadStage(ctx context.Context, item *databa
 		Title:        bookTitle,
 		DownloadItem: item,
 		Book:         book,
+	}
+
+	// Skip actual download for reorganize jobs; jump straight to decrypt
+	if item.Status.IsReorganize() {
+		asinLog.Info().Msg("reorganize job: skipping download")
+		dm.startMetadataPrefetch(ctx, pipeItem)
+		now := time.Now()
+		item.StartedAt = &now
+		_ = dm.db.UpdateDownload(ctx, item)
+		_ = dm.db.UpdateBookStatus(ctx, item.BookID, database.BookStatusProcessing)
+		pipeItem.DecryptedPath = book.FilePath
+		dm.emit(DownloadEvent{ASIN: item.ASIN, BookID: item.BookID, Title: bookTitle, Type: "stage", Stage: "waiting_moving", Progress: 1.0, QueueDepth: len(dm.processQueue) + 1, QueueItem: true})
+		select {
+		case dm.processQueue <- pipeItem:
+			asinLog.Debug().Msg("reorganize job queued directly for move")
+		case <-ctx.Done():
+			asinLog.Warn().Msg("context cancelled while queuing for move")
+		}
+		return
 	}
 
 	// Per-item cancellable context: lets the user abort this download from
@@ -278,6 +302,50 @@ func (dm *DownloadManager) handleDecryptStage(parentCtx context.Context, item *p
 	_ = dm.db.UpdateBookStatus(ctx, item.BookID, database.BookStatusDecrypting)
 	dm.emit(DownloadEvent{ASIN: item.ASIN, BookID: item.BookID, Title: item.Title, Type: "stage", Stage: "decrypting"})
 
+	// Skip actual decrypt for reorganize jobs; use existing file path
+	if item.DownloadItem != nil && item.DownloadItem.Status.IsReorganize() {
+		asinLog.Info().Str("path", item.Book.FilePath).Msg("reorganize job: using existing file")
+		if strings.TrimSpace(item.Book.FilePath) == "" {
+			dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("reorganize: book has no file_path"))
+			return
+		}
+		if _, statErr := os.Stat(item.Book.FilePath); statErr != nil {
+			dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("reorganize: file not found at %s: %w", item.Book.FilePath, statErr))
+			return
+		}
+		item.DecryptedPath = item.Book.FilePath
+		if item.Enriched == nil {
+			item.Enriched = &audnexus.EnrichedBook{Book: item.Book}
+		}
+		asinLog.Info().Str("path", item.DecryptedPath).Msg("reorganize ready to move")
+		dm.emit(DownloadEvent{
+			ASIN:     item.ASIN,
+			BookID:   item.BookID,
+			Title:    item.Title,
+			Type:     "progress",
+			Stage:    "decrypting",
+			Progress: 1.0,
+		})
+		queueDepth := len(dm.processQueue) + 1
+		select {
+		case dm.processQueue <- item:
+			dm.emit(DownloadEvent{
+				ASIN:       item.ASIN,
+				BookID:     item.BookID,
+				Title:      item.Title,
+				Type:       "stage",
+				Stage:      "waiting_moving",
+				Progress:   1.0,
+				QueueDepth: queueDepth,
+				QueueItem:  true,
+			})
+			asinLog.Debug().Msg("pushed to process queue")
+		case <-ctx.Done():
+			asinLog.Warn().Msg("context cancelled while queuing for processing")
+		}
+		return
+	}
+
 	if item.EnrichDone != nil {
 		select {
 		case <-item.EnrichDone:
@@ -393,6 +461,111 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 	decryptedPath := item.DecryptedPath
 	if decryptedPath == "" {
 		decryptedPath = filepath.Join(dm.downloadDir, item.ASIN+".m4b")
+	}
+
+	// Reorganize jobs should not transcode/decrypt/download again; they should
+	// atomically rename existing on-disk paths into the current naming scheme.
+	if item.DownloadItem != nil && item.DownloadItem.Status.IsReorganize() {
+		totalBytes := int64(0)
+		if fi, statErr := os.Stat(decryptedPath); statErr == nil {
+			if fi.IsDir() {
+				totalBytes = book.FileSize
+			} else {
+				totalBytes = fi.Size()
+			}
+		}
+
+		moveStart := time.Now()
+		var lastEmit time.Time
+		onMoveProgress := func(moved, total int64) {
+			now := time.Now()
+			if now.Sub(lastEmit) < 300*time.Millisecond && moved < total {
+				return
+			}
+			lastEmit = now
+
+			if total <= 0 {
+				total = totalBytes
+			}
+			progress := 0.0
+			if total > 0 {
+				progress = float64(moved) / float64(total)
+				if progress > 1 {
+					progress = 1
+				}
+			}
+			speed := 0.0
+			if elapsed := now.Sub(moveStart).Seconds(); elapsed > 0 {
+				speed = float64(moved) / elapsed
+			}
+			dm.emit(DownloadEvent{
+				ASIN:         item.ASIN,
+				BookID:       item.BookID,
+				Title:        item.Title,
+				Type:         "progress",
+				Stage:        "moving",
+				Progress:     progress,
+				BytesWritten: moved,
+				TotalBytes:   total,
+				Speed:        speed,
+			})
+		}
+
+		onMoveProgress(0, totalBytes)
+		onStage := func(stage string) {
+			if stage == "finalizing" {
+				dm.emit(DownloadEvent{
+					ASIN:   item.ASIN,
+					BookID: item.BookID,
+					Title:  item.Title,
+					Type:   "stage",
+					Stage:  "finalizing",
+				})
+			}
+		}
+
+		finalPath, err := dm.organizer.ReorganizeInPlaceWithProgress(ctx, book, enriched, onMoveProgress, onStage)
+		if err != nil {
+			if parentCtx.Err() == nil && errors.Is(err, context.Canceled) {
+				err = fmt.Errorf("cancelled by user")
+			}
+			dm.failItem(parentCtx, item.DownloadItem, item.Title, fmt.Errorf("reorganize: %w", err))
+			return
+		}
+
+		now := time.Now()
+		if item.DownloadItem != nil {
+			item.DownloadItem.Status = database.DownloadStatusComplete
+			item.DownloadItem.Progress = 1.0
+			item.DownloadItem.Error = ""
+			item.DownloadItem.CompletedAt = &now
+			_ = dm.db.UpdateDownload(context.WithoutCancel(parentCtx), item.DownloadItem)
+		}
+
+		if reorganizeCompleteVisibilityDelay > 0 {
+			t := time.NewTimer(reorganizeCompleteVisibilityDelay)
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+			}
+			if !t.Stop() {
+				select {
+				case <-t.C:
+				default:
+				}
+			}
+		}
+
+		dm.emit(DownloadEvent{
+			ASIN:     item.ASIN,
+			BookID:   item.BookID,
+			Title:    item.Title,
+			Type:     "complete",
+			Stage:    "complete",
+			Progress: 1.0,
+		})
+		go dm.fanOutPostOrganize(context.Background(), asinLog, book, enriched, finalPath)
+		return
 	}
 
 	// If the user has selected MP3 (chapter-split) output, transcode the
@@ -526,19 +699,15 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 			_ = os.RemoveAll(stageDir)
 			dm.cleanupDownloadFiles(item.ASIN)
 
+			asinLog.Info().Str("path", finalPath).Msg("pipeline complete (chapter-split)")
 			now := time.Now()
 			if item.DownloadItem != nil {
 				item.DownloadItem.Status = database.DownloadStatusComplete
 				item.DownloadItem.Progress = 1.0
 				item.DownloadItem.Error = ""
 				item.DownloadItem.CompletedAt = &now
-				// Detach: the work is done, the row must commit even if
-				// the worker context is being torn down at shutdown.
 				_ = dm.db.UpdateDownload(context.WithoutCancel(parentCtx), item.DownloadItem)
 			}
-
-			asinLog.Info().Str("path", finalPath).Msg("pipeline complete (chapter-split)")
-			dm.fanOutPostOrganize(ctx, asinLog, book, enriched, finalPath)
 			dm.emit(DownloadEvent{
 				ASIN:     item.ASIN,
 				BookID:   item.BookID,
@@ -547,6 +716,7 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 				Stage:    "complete",
 				Progress: 1.0,
 			})
+			go dm.fanOutPostOrganize(context.Background(), asinLog, book, enriched, finalPath)
 			return
 		}
 	}
@@ -634,16 +804,8 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 	// Clean up intermediate files
 	dm.cleanupDownloadFiles(item.ASIN)
 
-	// Run media-server post-organize work BEFORE marking the download complete.
-	// Multi-destination fan-out: every enabled library_destinations row has its
-	// backend's OnBookOrganized invoked concurrently (bounded). Falls back to
-	// the legacy single-backend mediaServer when destinations isn't wired or
-	// no enabled rows exist (codex P1 — without this fallback, existing v0.2.x
-	// Plex installs that never set media_server_type lose post-download work).
-	dm.fanOutPostOrganize(ctx, asinLog, book, enriched, finalPath)
-
-	// Mark queue item complete only after the entire pipeline (including
-	// media-server post-organize work) has run.
+	// Mark queue item complete before destination fan-out so the UI leaves
+	// finalizing immediately even if a destination scan is slow.
 	now := time.Now()
 	if item.DownloadItem != nil {
 		item.DownloadItem.Status = database.DownloadStatusComplete
@@ -665,6 +827,7 @@ func (dm *DownloadManager) handleProcessStage(parentCtx context.Context, item *p
 		Stage:    "complete",
 		Progress: 1.0,
 	})
+	go dm.fanOutPostOrganize(context.Background(), asinLog, book, enriched, finalPath)
 }
 
 // fanOutPostOrganize runs OnBookOrganized across every enabled destination
