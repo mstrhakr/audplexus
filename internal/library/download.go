@@ -122,9 +122,11 @@ type WorkerPoolSnapshot struct {
 
 // PipelineSnapshot is the full runtime snapshot consumed by the web UI.
 type PipelineSnapshot struct {
-	Type  string               `json:"type"`
-	Pools []WorkerPoolSnapshot `json:"pools"`
-	Items []PipelineStateItem  `json:"items"`
+	Type             string               `json:"type"`
+	Pools            []WorkerPoolSnapshot `json:"pools"`
+	Items            []PipelineStateItem  `json:"items"`
+	QueuePaused      bool                 `json:"queue_paused"`
+	QueuePauseReason string               `json:"queue_pause_reason,omitempty"`
 }
 
 // QueueState reports whether downloads are paused and why.
@@ -543,9 +545,12 @@ func (dm *DownloadManager) PipelineSnapshot(ctx context.Context) PipelineSnapsho
 	items = append(items, pendingItems...)
 	items = append(items, waitDecrypt...)
 	items = append(items, waitMoving...)
+	queue := dm.QueueState()
 
 	return PipelineSnapshot{
-		Type: "pool_state",
+		Type:             "pool_state",
+		QueuePaused:      queue.Paused,
+		QueuePauseReason: queue.Reason,
 		Pools: []WorkerPoolSnapshot{
 			{
 				ID:         "download",

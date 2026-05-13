@@ -3,19 +3,13 @@
 
 <div class="actions-bar">
     <button hx-post="/api/downloads/retry-all" hx-target="#dl-status" hx-swap="innerHTML" class="btn btn-danger">Retry All Failed</button>
-    {{if .QueuePaused}}
-    <button hx-post="/api/downloads/resume" hx-swap="none" hx-on::after-request="window.location.reload()" class="btn btn-primary">Resume Queue</button>
-    {{else}}
-    <button hx-post="/api/downloads/pause" hx-swap="none" hx-on::after-request="window.location.reload()" class="btn btn-secondary">Pause Queue</button>
-    {{end}}
+    <button id="queue-toggle-btn" data-paused="{{if .QueuePaused}}1{{else}}0{{end}}" class="btn {{if .QueuePaused}}btn-primary{{else}}btn-secondary{{end}}">{{if .QueuePaused}}Resume Queue{{else}}Pause Queue{{end}}</button>
     <span id="dl-status"></span>
 </div>
 
-{{if .QueuePaused}}
-<div class="queue-paused-banner">
-    <strong>Queue paused:</strong> {{.QueuePauseReason}}
+<div id="queue-paused-banner" class="queue-paused-banner" {{if not .QueuePaused}}style="display:none"{{end}}>
+    <strong>Queue paused:</strong> <span id="queue-paused-reason">{{.QueuePauseReason}}</span>
 </div>
-{{end}}
 
 <h2>Worker Pools</h2>
 <div id="pipeline-pools" class="pool-grid"></div>

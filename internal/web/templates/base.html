@@ -229,6 +229,25 @@
             }
         }
 
+        function renderQueuePauseState(paused, reason) {
+            var toggle = document.getElementById('queue-toggle-btn');
+            if (toggle) {
+                toggle.setAttribute('data-paused', paused ? '1' : '0');
+                toggle.textContent = paused ? 'Resume Queue' : 'Pause Queue';
+                toggle.classList.remove('btn-primary', 'btn-secondary');
+                toggle.classList.add(paused ? 'btn-primary' : 'btn-secondary');
+            }
+
+            var banner = document.getElementById('queue-paused-banner');
+            var reasonEl = document.getElementById('queue-paused-reason');
+            if (reasonEl) {
+                reasonEl.textContent = reason || 'permission issue';
+            }
+            if (banner) {
+                banner.style.display = paused ? '' : 'none';
+            }
+        }
+
         function renderSyncPhase(p, opts) {
             opts = opts || {};
             var icon = '&#9675;';
@@ -553,13 +572,17 @@
             if (d.type === 'pool_state') {
                 renderPipelinePools(d);
                 renderSnapshotItems(d);
+                renderQueuePauseState(!!d.queue_paused, d.queue_pause_reason || '');
                 return;
             }
 
             if (d.type === 'paused' || d.type === 'resumed') {
+                var isPaused = d.type === 'paused';
+                renderQueuePauseState(isPaused, d.error || '');
+
                 var statusEl = document.getElementById('dl-status');
                 if (statusEl) {
-                    if (d.type === 'paused') {
+                    if (isPaused) {
                         statusEl.textContent = 'Queue paused: ' + (d.error || 'permission issue');
                         statusEl.className = 'status-msg error';
                     } else {
@@ -766,6 +789,7 @@
                 .then(function(state) {
                     renderPipelinePools(state);
                     renderSnapshotItems(state);
+                    renderQueuePauseState(!!state.queue_paused, state.queue_pause_reason || '');
                 })
                 .catch(function() {});
 
@@ -799,6 +823,39 @@
             closeEventSource();
             clearReconnectTimer();
         });
+
+        var queueToggleBtn = document.getElementById('queue-toggle-btn');
+        if (queueToggleBtn) {
+            queueToggleBtn.addEventListener('click', function() {
+                var paused = queueToggleBtn.getAttribute('data-paused') === '1';
+                var action = paused ? 'resume' : 'pause';
+                queueToggleBtn.disabled = true;
+                fetch('/api/downloads/' + action, { method: 'POST' })
+                    .then(function(r) {
+                        if (!r.ok) throw new Error('request failed');
+                        return r.json();
+                    })
+                    .then(function(resp) {
+                        var isPaused = !!resp.paused;
+                        renderQueuePauseState(isPaused, '');
+                        var statusEl = document.getElementById('dl-status');
+                        if (statusEl) {
+                            statusEl.textContent = isPaused ? 'Queue paused' : 'Queue resumed';
+                            statusEl.className = isPaused ? 'status-msg error' : 'status-msg success';
+                        }
+                    })
+                    .catch(function() {
+                        var statusEl = document.getElementById('dl-status');
+                        if (statusEl) {
+                            statusEl.textContent = 'Failed to update queue state';
+                            statusEl.className = 'status-msg error';
+                        }
+                    })
+                    .finally(function() {
+                        queueToggleBtn.disabled = false;
+                    });
+            });
+        }
 
         // Delegated handler for the Cancel button on active pipeline cards.
         document.addEventListener('click', function(ev) {
