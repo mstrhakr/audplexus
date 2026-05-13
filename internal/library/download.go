@@ -65,6 +65,7 @@ type DownloadManager struct {
 	stopCh   chan struct{}
 	cancelFn context.CancelFunc // cancels the context shared by all workers
 	workerWg sync.WaitGroup     // tracks active worker goroutines
+	fanOutWg sync.WaitGroup     // tracks post-organize fan-out goroutines
 
 	pauseMu     sync.RWMutex
 	paused      bool
@@ -848,10 +849,12 @@ func (dm *DownloadManager) Stop() {
 	}
 }
 
-// StopAndWait cancels all in-flight work and blocks until every worker exits.
+// StopAndWait cancels all in-flight work and blocks until every worker and
+// post-organize fan-out goroutine exits.
 func (dm *DownloadManager) StopAndWait() {
 	dm.Stop()
 	dm.workerWg.Wait()
+	dm.fanOutWg.Wait()
 	dlLog.Info().Msg("all pipeline workers stopped")
 }
 
