@@ -126,6 +126,57 @@ func TestExtractASINFromPathMatchesISBN10WithX(t *testing.T) {
 	}
 }
 
+// TestExtractASINFromPathIgnoresBWordFalsePositives guards the digit filter in
+// isLikelyRealASIN. The regex alternative for Audible ASINs is "B" followed by
+// 9 alphanumeric characters; without a digit-presence check it will happily
+// match English words like BRIGHTNESS or BLOODLINES (both 10 letters starting
+// with B). Real Audible ASINs always contain at least one digit, so the
+// extractor should skip pseudo-matches and keep walking. Here the real
+// identifier is the ISBN-10 1501966235 in the same folder name — we expect
+// that to win, not the leading word "Brightness".
+func TestExtractASINFromPathIgnoresBWordFalsePositives(t *testing.T) {
+	path := filepath.Join("root", "Guy Gavriel Kay", "A Brightness Long Ago 1501966235 [us]", "A Brightness Long Ago 1501966235 [us].m4b")
+	got := extractASINFromPath(path)
+	if got != "1501966235" {
+		t.Fatalf("extractASINFromPath() = %q, want %q (must skip the B-word 'Brightness')", got, "1501966235")
+	}
+}
+
+// TestExtractASINFromPathReturnsEmptyWhenOnlyBWordPresent covers the case
+// where a folder name contains a B-prefixed English word but no real ASIN /
+// ISBN at all. Earlier behavior would wrongly return the uppercased word; new
+// behavior should return "" so the caller can take its own missing-ASIN path.
+func TestExtractASINFromPathReturnsEmptyWhenOnlyBWordPresent(t *testing.T) {
+	path := filepath.Join("root", "Some Author", "Bloodlines [us]", "Bloodlines.m4b")
+	got := extractASINFromPath(path)
+	if got != "" {
+		t.Fatalf("extractASINFromPath() = %q, want \"\" (no real ASIN, just the word 'Bloodlines')", got)
+	}
+}
+
+// TestIsLikelyRealASIN exercises the digit-presence helper directly so the
+// filter stays correct even if extractASINFromPath grows new call sites.
+func TestIsLikelyRealASIN(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"B088C4DBYP", true},  // real Audible ASIN
+		{"B0DCCZ5MG2", true},  // real Audible ASIN
+		{"BRIGHTNESS", false}, // English word, no digits
+		{"BLOODLINES", false}, // English word, no digits
+		{"BOUNDARIES", false}, // another B-word for good measure
+		{"1501966235", true},  // ISBN-10
+		{"103940474X", true},  // ISBN-10 with X checksum
+		{"9780143127550", true}, // ISBN-13
+	}
+	for _, c := range cases {
+		if got := isLikelyRealASIN(c.in); got != c.want {
+			t.Errorf("isLikelyRealASIN(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
 func TestBuildASINIndexExtractsISBN10FromFolder(t *testing.T) {
 	// ISBN-10 in folder name should be indexed like any ASIN.
 	isbnPath := filepath.Join("root", "Author", "Book Title 0593393864 [us]", "Book Title.m4b")
