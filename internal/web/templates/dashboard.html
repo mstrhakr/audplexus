@@ -16,6 +16,12 @@
     <button hx-post="/api/downloads/retry-all" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-danger">
         Retry All Failed
     </button>
+    <button id="queue-toggle-btn" data-paused="{{if .QueuePaused}}1{{else}}0{{end}}" class="btn {{if .QueuePaused}}btn-primary{{else}}btn-secondary{{end}}">{{if .QueuePaused}}Resume Queue{{else}}Pause Queue{{end}}</button>
+    <span id="dl-status"></span>
+</div>
+
+<div id="queue-paused-banner" class="queue-paused-banner" {{if not .QueuePaused}}style="display:none"{{end}}>
+    <strong>Queue paused:</strong> <span id="queue-paused-reason">{{.QueuePauseReason}}</span>
 </div>
 
 <div class="sync-status-row">
