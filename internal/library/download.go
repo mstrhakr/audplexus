@@ -1373,12 +1373,19 @@ func (w *fileDownloadWriter) OnStart(asin string, contentLength int64, info *aud
 	defer infoFile.Close()
 
 	// Write info as JSON
-	enc := fmt.Sprintf(`{"content_type":"%s"`, info.ContentType)
-	if info.LicenseResponse != nil {
-		enc += fmt.Sprintf(`,"key":"%s","iv":"%s"`, info.LicenseResponse.Key, info.LicenseResponse.IV)
+	type voucherJSON struct {
+		ContentType string `json:"content_type"`
+		Key         string `json:"key,omitempty"`
+		IV          string `json:"iv,omitempty"`
 	}
-	enc += "}"
-	infoFile.WriteString(enc)
+	v := voucherJSON{ContentType: info.ContentType}
+	if info.LicenseResponse != nil {
+		v.Key = info.LicenseResponse.Key
+		v.IV = info.LicenseResponse.IV
+	}
+	if err := json.NewEncoder(infoFile).Encode(v); err != nil {
+		return fmt.Errorf("write info file: %w", err)
+	}
 
 	return nil
 }
