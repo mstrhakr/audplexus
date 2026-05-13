@@ -99,7 +99,7 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 		marketplace = creds.Marketplace
 	}
 
-	books, totalBooks, err := s.db.ListBooks(ctx, database.BookFilter{Limit: 10000, Offset: 0})
+	books, totalBooks, err := s.db.ListBooks(ctx, database.BookFilter{})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load books: " + err.Error()})
 		return

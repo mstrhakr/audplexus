@@ -137,7 +137,7 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 		Msg("fs_scan: ASIN index built")
 
 	// Phase 2: Load all books from the database
-	books, _, err := db.ListBooks(ctx, database.BookFilter{Limit: 10000, Offset: 0})
+	books, _, err := db.ListBooks(ctx, database.BookFilter{})
 	if err != nil {
 		return 0, err
 	}
