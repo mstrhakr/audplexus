@@ -1,5 +1,6 @@
 # Audplexus
 
+[![ghcr pulls](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fghcr-badge.elias.eu.org%2Fapi%2Fmstrhakr%2Faudplexus%2Faudplexus&query=downloadCount&label=ghcr+pulls&logo=github)](https://github.com/mstrhakr/audplexus/pkgs/container/audplexus/latest)
 [![Tests](https://github.com/mstrhakr/audplexus/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/mstrhakr/audplexus/actions/workflows/tests.yml)
 [![Docker Build and Publish](https://github.com/mstrhakr/audplexus/actions/workflows/docker-publish.yml/badge.svg?branch=master)](https://github.com/mstrhakr/audplexus/actions/workflows/docker-publish.yml)
 [![Latest Release](https://img.shields.io/github/v/release/mstrhakr/audplexus?display_name=tag)](https://github.com/mstrhakr/audplexus/releases)
