@@ -120,7 +120,14 @@ func (p *PlexBackend) OnBookOrganized(ctx context.Context, book OrganizedBook) [
 	if strings.TrimSpace(book.LocalPath) == "" {
 		outcomes = append(outcomes, Failed(OpScanTrigger, fmt.Errorf("empty local path"), "no path to scan"))
 	} else if scanPath, scanPathOK := p.resolveScanPath(scanCtx, plexURL, plexToken, sectionID, filepath.Dir(book.LocalPath)); !scanPathOK {
-		outcomes = append(outcomes, Failed(OpScanTrigger, fmt.Errorf("section path unavailable"), "plex section path could not be resolved"))
+		// Path translation can fail when Plex does not expose section Location
+		// details (or when only destination server-root is configured). Fall
+		// back to a full section refresh so indexing still proceeds.
+		if err := p.triggerSectionScan(scanCtx, plexURL, plexToken, sectionID, ""); err != nil {
+			outcomes = append(outcomes, Failed(OpScanTrigger, fmt.Errorf("section path unavailable: %w", err), "plex section path could not be resolved; full section scan fallback failed"))
+		} else {
+			outcomes = append(outcomes, Succeeded(OpScanTrigger, "section scan triggered without path filter (section path unavailable)", "", time.Since(scanStart)))
+		}
 	} else if err := p.triggerSectionScan(scanCtx, plexURL, plexToken, sectionID, scanPath); err != nil {
 		outcomes = append(outcomes, Failed(OpScanTrigger, err, "plex returned non-2xx on /refresh"))
 	} else {
@@ -390,14 +397,19 @@ func (p *PlexBackend) resolveScanPath(ctx context.Context, plexURL, plexToken, s
 	// on /mnt/exports/audiobooks) without colliding on a single global.
 	if p.destination != nil {
 		audiobookPath := strings.TrimSpace(p.destination.AudiobookPath)
+		if audiobookPath == "" {
+			// Legacy/synthesized destination rows persist only the server root
+			// (DestinationPath). Use the configured local library root as source.
+			audiobookPath = strings.TrimSpace(p.libraryDir)
+		}
 		destPath := strings.TrimSpace(p.destination.DestinationPath)
-		if audiobookPath != "" && destPath != "" {
-			scanPath, ok := translateScanPath(localScanPath, audiobookPath, destPath)
+		if destPath != "" {
+			scanPath, ok := translateScanPathWithFallback(localScanPath, audiobookPath, destPath)
 			if !ok {
 				msLog.Warn().Str("local_path", localScanPath).Str("audiobook_path", audiobookPath).Str("destination_path", destPath).Msg("plex: per-destination path translation failed")
-				return "", false
+			} else {
+				return scanPath, true
 			}
-			return scanPath, true
 		}
 	}
 
@@ -420,12 +432,25 @@ func (p *PlexBackend) resolveScanPath(ctx context.Context, plexURL, plexToken, s
 		return "", false
 	}
 
-	scanPath, ok := translateScanPath(localScanPath, strings.TrimSpace(p.libraryDir), plexPath)
+	scanPath, ok := translateScanPathWithFallback(localScanPath, strings.TrimSpace(p.libraryDir), plexPath)
 	if !ok {
 		msLog.Warn().Str("local_path", localScanPath).Str("library_root", p.libraryDir).Str("plex_section_path", plexPath).Msg("plex: unable to translate scan path")
 		return "", false
 	}
 	return scanPath, true
+}
+
+func translateScanPathWithFallback(localScanPath, localLibraryRoot, serverLibraryRoot string) (string, bool) {
+	if scanPath, ok := translateScanPath(localScanPath, localLibraryRoot, serverLibraryRoot); ok {
+		return scanPath, true
+	}
+	// Common deployment shape: audplexus writes under /audiobooks while Plex
+	// mounts the same content elsewhere. If configured local root is missing or
+	// stale, retry with /audiobooks as source root.
+	if scanPath, ok := translateScanPath(localScanPath, "/audiobooks", serverLibraryRoot); ok {
+		return scanPath, true
+	}
+	return "", false
 }
 
 func (p *PlexBackend) fetchSectionPath(ctx context.Context, plexURL, token, sectionID string) (string, error) {
@@ -475,7 +500,70 @@ func (p *PlexBackend) fetchSectionPath(ctx context.Context, plexURL, token, sect
 			}
 		}
 	}
-	return "", fmt.Errorf("no location path found for section %s", sectionID)
+
+	// Fallback: some Plex setups omit Location on section detail but include
+	// it on /library/sections.
+	listPath, listErr := p.fetchSectionPathFromList(ctx, plexURL, token, sectionID)
+	if listErr == nil {
+		return listPath, nil
+	}
+	return "", fmt.Errorf("no location path found for section %s (detail endpoint had no Location; list fallback failed: %v)", sectionID, listErr)
+}
+
+func (p *PlexBackend) fetchSectionPathFromList(ctx context.Context, plexURL, token, sectionID string) (string, error) {
+	base, err := url.Parse(strings.TrimRight(plexURL, "/"))
+	if err != nil {
+		return "", fmt.Errorf("invalid Plex URL: %w", err)
+	}
+	base.Path = strings.TrimRight(base.Path, "/") + "/library/sections"
+	q := base.Query()
+	q.Set("X-Plex-Token", token)
+	base.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String(), nil)
+	if err != nil {
+		return "", err
+	}
+	p.addHeaders(req, token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", fmt.Errorf("plex sections list returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var sections struct {
+		MediaContainer struct {
+			Directories []struct {
+				Key       string `json:"key"`
+				Locations []struct {
+					Path string `json:"path"`
+				} `json:"Location"`
+			} `json:"Directory"`
+		} `json:"MediaContainer"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&sections); err != nil {
+		return "", fmt.Errorf("parse sections list: %w", err)
+	}
+
+	for _, dir := range sections.MediaContainer.Directories {
+		if strings.TrimSpace(dir.Key) != strings.TrimSpace(sectionID) {
+			continue
+		}
+		for _, loc := range dir.Locations {
+			if path := strings.TrimSpace(loc.Path); path != "" {
+				return path, nil
+			}
+		}
+		break
+	}
+
+	return "", fmt.Errorf("no location path found for section %s in sections list", sectionID)
 }
 
 func (p *PlexBackend) triggerSectionScan(ctx context.Context, plexURL, token, sectionID, scanPath string) error {
