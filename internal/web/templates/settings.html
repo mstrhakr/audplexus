@@ -194,7 +194,7 @@
     <!-- Configuration Settings -->
     <div class="settings-section">
         <h2>Configuration</h2>
-        <form hx-post="/api/settings" hx-target="#save-status" hx-swap="innerHTML" class="settings-form">
+        <form hx-post="/api/settings" hx-target="#save-status" hx-swap="innerHTML" class="settings-form settings-form-wide">
             <div class="settings-form-grid">
             <div class="form-group">
                 <label for="sync_schedule">Sync Schedule (cron)</label>
@@ -590,8 +590,14 @@ function confirmRestart() {
 
     .auth-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 1.5rem;
+    }
+
+    @media (max-width: 960px) {
+        .auth-grid {
+            grid-template-columns: minmax(0, 1fr);
+        }
     }
 
     .auth-panel {
@@ -712,6 +718,22 @@ function confirmRestart() {
         flex-direction: column;
         gap: 1.5rem;
         max-width: 500px;
+    }
+
+    .settings-form-wide {
+        max-width: 100%;
+    }
+
+    .settings-form-wide .settings-form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1.25rem 2rem;
+    }
+
+    @media (max-width: 960px) {
+        .settings-form-wide .settings-form-grid {
+            grid-template-columns: minmax(0, 1fr);
+        }
     }
 
     .form-group {
