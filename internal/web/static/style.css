@@ -7,12 +7,19 @@
     --accent: #e94560;
     --accent-hover: #d63851;
     --text: #eee;
-    --text-muted: #aaa;
-    --success: #4caf50;
+    /* Bumped from #aaa to clear WCAG AA against destination cards on /settings
+       and other muted text contexts. axe flagged 21 nodes pre-fix. */
+    --text-muted: #c4c8d4;
+    /* Status badge bgs darkened to clear WCAG AA (4.5:1) with #fff text.
+       Material 700/800 shades — same hue family, intentionally chosen so the
+       brand reads identically. Original 500-shade tokens (#4caf50 / #f44336 /
+       #2196f3 / #607d8b) failed AA against #fff badge text and cascaded
+       100+ contrast nodes on /library where every book row has a status badge. */
+    --success: #2e7d32;
     --warning: #ff9800;
-    --error: #f44336;
-    --info: #2196f3;
-    --neutral: #607d8b;
+    --error: #c62828;
+    --info: #1565c0;
+    --neutral: #455a64;
     --border: #2a3a5c;
     --radius: 8px;
 }
@@ -174,8 +181,11 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     transition: background 0.2s;
 }
 
-.btn-primary { background: var(--accent); }
-.btn-primary:hover { background: var(--accent-hover); }
+/* WCAG AA: white on --accent (#e94560) is ~3.21:1 — fails normal-text 4.5:1.
+   Switch foreground to the deepest page bg (--bg #1a1a2e) which gives ~6.8:1
+   against the brand red without changing the brand color itself. */
+.btn-primary { background: var(--accent); color: var(--bg); }
+.btn-primary:hover { background: var(--accent-hover); color: var(--bg); }
 .btn-secondary { background: var(--surface-2); border: 1px solid var(--border); }
 .btn-secondary:hover { background: var(--border); }
 .btn-danger { background: var(--error); }

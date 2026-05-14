@@ -30,7 +30,8 @@
            hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
            hx-trigger="keyup changed delay:300ms" hx-include="[name='status'],[name='sort'],[name='dir']"
            value="{{.Filter.Search}}">
-    <select name="status" hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
+    <select name="status" aria-label="Filter books by status"
+            hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
             hx-trigger="change" hx-include="[name='search'],[name='sort'],[name='dir']">
         <option value="">All Statuses</option>
         <option value="new">New</option>
