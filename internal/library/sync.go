@@ -573,7 +573,14 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 		})
 		if fsErr != nil {
 			s.setPhase(PhaseFileScan, "failed", fsErr.Error())
-			syncLog.Warn().Err(fsErr).Msg("file scan phase failed")
+			syncLog.Error().Err(fsErr).Msg("file scan phase failed")
+			failedAt := time.Now()
+			syncRecord.CompletedAt = &failedAt
+			syncRecord.Status = "failed"
+			syncRecord.Error = fsErr.Error()
+			_ = s.db.UpdateSync(ctx, syncRecord)
+			s.finishProgressWithError(fsErr)
+			return 0, fsErr
 		} else {
 			s.mu.Lock()
 			s.progress.FilesFound = reconciled
@@ -587,7 +594,14 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 		if added > 0 {
 			reconciled, fsErr := reconcileExistingAudiobookFilesWithProgress(ctx, s.db, s.libraryDir, nil)
 			if fsErr != nil {
-				syncLog.Warn().Err(fsErr).Msg("quick reconcile failed")
+				syncLog.Error().Err(fsErr).Msg("quick reconcile failed")
+				failedAt := time.Now()
+				syncRecord.CompletedAt = &failedAt
+				syncRecord.Status = "failed"
+				syncRecord.Error = fsErr.Error()
+				_ = s.db.UpdateSync(ctx, syncRecord)
+				s.finishProgressWithError(fsErr)
+				return 0, fsErr
 			} else if reconciled > 0 {
 				syncLog.Info().Int("books_reconciled", reconciled).Msg("quick sync: reconciled new books against disk")
 			}

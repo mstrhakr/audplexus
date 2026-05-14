@@ -14,6 +14,8 @@ import (
 
 var unsafePathChars = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1f]`)
 
+var walkDir = filepath.WalkDir
+
 // supportedAudioExtensions lists all audio file formats that can be discovered
 var supportedAudioExtensions = map[string]bool{
 	"m4b":  true, // Apple audiobook format (primary)
@@ -66,11 +68,11 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 	statErrors := 0
 	discoveredByExt := make(map[string]int)
 	skippedByExt := make(map[string]int)
-	err := filepath.WalkDir(libraryRoot, func(path string, d os.DirEntry, err error) error {
+	err := walkDir(libraryRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			walkErrors++
-			syncLog.Debug().Err(err).Str("path", path).Msg("fs_scan: skipping entry (walk error)")
-			return nil // skip inaccessible directories
+			syncLog.Error().Err(err).Str("path", path).Msg("fs_scan: walk error")
+			return err
 		}
 		if d.IsDir() {
 			return nil
@@ -96,8 +98,8 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 		info, err := d.Info()
 		if err != nil {
 			statErrors++
-			syncLog.Debug().Err(err).Str("path", path).Msg("fs_scan: skipping audio file (stat error)")
-			return nil // skip files we can't stat
+			syncLog.Error().Err(err).Str("path", path).Msg("fs_scan: audio file stat error")
+			return err
 		}
 		discoveredFiles[path] = info.Size()
 		discoveredByExt[ext]++

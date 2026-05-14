@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -366,6 +367,36 @@ func TestReconcileExistingAudiobookFilesIgnoresUnmatchedFiles(t *testing.T) {
 	}
 	if db.upserted.ASIN != "B0ASIN0001" {
 		t.Fatalf("upserted ASIN = %q, want %q", db.upserted.ASIN, "B0ASIN0001")
+	}
+}
+
+func TestReconcileExistingAudiobookFilesFailsFastOnWalkError(t *testing.T) {
+	originalWalkDir := walkDir
+	walkDir = func(root string, fn fs.WalkDirFunc) error {
+		return fn(filepath.Join(root, "blocked"), nil, filepath.ErrBadPattern)
+	}
+	defer func() {
+		walkDir = originalWalkDir
+	}()
+
+	db := &reconcileMockDB{
+		books: []database.Book{{
+			ASIN:   "B0ASIN0002",
+			Title:  "Some Book",
+			Author: "Author",
+			Status: database.BookStatusNew,
+		}},
+	}
+
+	reconciled, err := reconcileExistingAudiobookFilesWithProgress(context.Background(), db, t.TempDir(), nil)
+	if err == nil {
+		t.Fatal("expected walk error")
+	}
+	if reconciled != 0 {
+		t.Fatalf("reconciled = %d, want 0", reconciled)
+	}
+	if db.upserted != nil {
+		t.Fatalf("unexpected upsert on walk error: %+v", db.upserted)
 	}
 }
 
