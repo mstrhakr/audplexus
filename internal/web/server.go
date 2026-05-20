@@ -233,6 +233,8 @@ func (s *Server) setupTemplates() {
 		"mul": func(a float64, b float64) float64 {
 			return a * b
 		},
+		"add": func(a, b int) int { return a + b },
+		"sub": func(a, b int) int { return a - b },
 		"deref": func(t *time.Time) time.Time {
 			if t == nil {
 				return time.Time{}
@@ -246,6 +248,25 @@ func (s *Server) setupTemplates() {
 			return template.HTML(htmlPolicy.Sanitize(raw))
 		},
 		"hasSuffix": strings.HasSuffix,
+		"coveragePct": func(part, total int) int {
+			if total <= 0 {
+				return 0
+			}
+			return int(float64(part) / float64(total) * 100)
+		},
+		"firstTwo": func(s string) string {
+			if len(s) <= 2 {
+				return strings.ToUpper(s)
+			}
+			return strings.ToUpper(s[:2])
+		},
+		"joinDestinationNames": func(dests []destinationSummaryView) string {
+			names := make([]string, 0, len(dests))
+			for _, d := range dests {
+				names = append(names, d.DisplayName)
+			}
+			return strings.Join(names, ", ")
+		},
 		"dict": func(values ...any) (map[string]any, error) {
 			if len(values)%2 != 0 {
 				return nil, fmt.Errorf("dict expects an even number of args")
@@ -304,6 +325,18 @@ func (s *Server) setupTemplates() {
 		r.templates[name] = partialSet
 	}
 
+	// Bare body fragments for the destination modal. Both files are
+	// full pages too (their `content` blocks render directly at
+	// /destinations/new and /destinations/:id/edit), but we also want to
+	// render JUST the inner form for modal swaps — so we expose the
+	// inner define blocks under their own keys. The multiRender's
+	// Instance() path takes the template name as the entry point, so
+	// "destination_picker_body" / "destination_form_body" execute the
+	// matching {{define …}} block directly without going through base.
+	destModalSet := template.Must(template.Must(template.New("dest_modal").Funcs(funcMap).ParseFS(templateFS, "templates/destinations_new.html", "templates/destinations_form.html")).Clone())
+	r.templates["destination_picker_body"] = destModalSet
+	r.templates["destination_form_body"] = destModalSet
+
 	s.router.HTMLRender = r
 }
 
@@ -317,6 +350,12 @@ func (s *Server) setupRoutes() {
 	})
 	static.StaticFS("/", http.FS(staticSub))
 
+	// First-run gate — runs before page handlers and redirects to the
+	// setup wizard on fresh installs (no auth + no "onboarded" setting).
+	// Settings, diagnostics, the wizard itself, and POST/api routes pass
+	// through so users can always escape and re-trigger the wizard.
+	s.router.Use(s.firstRunGate)
+
 	// Pages
 	s.router.GET("/", s.handleDashboard)
 	s.router.GET("/library", s.handleLibrary)
@@ -324,6 +363,14 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/downloads", s.handleDownloads)
 	s.router.GET("/settings", s.handleSettings)
 	s.router.GET("/diagnostics", s.handleDiagnostics)
+
+	// Setup wizard (5 steps). State is server-driven via ?step= so no JS
+	// is needed; "onboarded" setting tracks completion.
+	s.router.GET("/setup", s.handleSetupWizard)
+	s.router.POST("/setup/marketplace", s.handleSetupMarketplace)
+	s.router.POST("/setup/finish", s.handleSetupFinish)
+	s.router.GET("/setup/skip", s.handleSetupSkip)
+	s.router.POST("/setup/restart", s.handleSetupRestart)
 
 	// Auth
 	s.router.POST("/auth/marketplace", s.handleAudibleMarketplaceSelect)
@@ -339,9 +386,15 @@ func (s *Server) setupRoutes() {
 	// Library destinations CRUD (multi-destination model). Two-page flow
 	// for add (type picker → type-specific form) and delete (GET confirm
 	// → POST with confirm=1) keeps the UI JS-free + back-button-safe.
+	s.router.GET("/destinations", s.handleDestinations)
 	s.router.GET("/destinations/new", s.handleDestinationsNewPicker)
 	s.router.POST("/destinations/new", s.handleDestinationsNewForm)
 	s.router.POST("/destinations/create", s.handleDestinationsCreate)
+	// Modal counterparts — return bare body partials so any page can open
+	// the add-destination flow in an overlay (wizard step 3, Destinations
+	// page, settings shortcut). Same backend, same validation.
+	s.router.GET("/destinations/modal", s.handleDestinationsModalPicker)
+	s.router.POST("/destinations/modal/form", s.handleDestinationsModalForm)
 	// Test connection — runs a live LibraryItemCount probe with current
 	// form values. HTMX-targeted; renders a small HTML fragment.
 	s.router.POST("/destinations/test", s.handleDestinationTest)
@@ -406,6 +459,10 @@ func (s *Server) setupRoutes() {
 
 		api.GET("/diagnostics/compare", s.handleDiagnosticsCompare)
 		api.POST("/diagnostics/targeted-scan", s.handleDiagnosticsTargetedScan)
+		// DS-style ops tab — read-only system state. JSON so the
+		// browser can pretty-render in the diagnostics page.
+		api.GET("/diagnostics/env", s.handleDiagnosticsEnv)
+		api.GET("/diagnostics/logs/tail", s.handleDiagnosticsLogsTail)
 		api.POST("/downloads/redownload/:asin", s.handleRedownload)
 
 		// Per-book conversion between m4b and chapter-split mp3.
@@ -565,12 +622,14 @@ type destinationSummaryView struct {
 	TypeLabel     string
 	Enabled       bool
 	Configured    bool
+	URL           string
 	ItemCount     int
 	ItemCountSet  bool
 	Coverage      int
 	CoverageSet   bool
 	Health        string // "healthy" | "failed" | "never" | "not_configured"
 	HealthDetail  string // for failed: shorter human message
+	LastError     string
 	LastCheckedAt *time.Time
 }
 
@@ -600,7 +659,9 @@ func (s *Server) destinationSummaries(ctx context.Context, completeBooks int) []
 			TypeLabel:     destinationTypeLabel(row.Type),
 			Enabled:       row.Enabled,
 			Configured:    destinationConfigured(&row),
+			URL:           row.URL,
 			Health:        summarizeHealth(&row),
+			LastError:     row.LastHealthCheckErr,
 			LastCheckedAt: row.LastHealthCheckAt,
 		}
 
@@ -756,14 +817,25 @@ func (s *Server) handleDashboardDownloads(c *gin.Context) {
 func (s *Server) handleLibrary(c *gin.Context) {
 	ctx := c.Request.Context()
 
+	const pageSize = 50
+
+	pageNum := 1
+	if v := c.Query("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			pageNum = n
+		}
+	}
+
 	filter := database.BookFilter{
 		Search:  c.Query("search"),
 		SortBy:  c.DefaultQuery("sort", "purchase_date"),
 		SortDir: c.DefaultQuery("dir", "desc"),
-		Limit:   50,
+		Limit:   pageSize,
+		Offset:  (pageNum - 1) * pageSize,
 	}
 
-	if statusStr := c.Query("status"); statusStr != "" {
+	statusStr := c.Query("status")
+	if statusStr != "" {
 		status := database.BookStatus(statusStr)
 		filter.Status = &status
 	}
@@ -775,12 +847,33 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		return
 	}
 
+	counts := s.libraryStatusCounts(ctx)
+
+	totalPages := (total + pageSize - 1) / pageSize
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	from := filter.Offset + 1
+	to := filter.Offset + len(books)
+	if total == 0 {
+		from = 0
+		to = 0
+	}
+
 	data := gin.H{
-		"Books":       books,
-		"Total":       total,
-		"Filter":      filter,
-		"Page":        "library",
-		"BookActions": buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
+		"Books":        books,
+		"Total":        total,
+		"Filter":       filter,
+		"Page":         "library",
+		"BookActions":  buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
+		"StatusCounts": counts,
+		"ActiveStatus": statusStr,
+		"PageNum":      pageNum,
+		"TotalPages":   totalPages,
+		"PageSize":     pageSize,
+		"PageFrom":     from,
+		"PageTo":       to,
+		"PageNums":     paginationNumbers(pageNum, totalPages),
 	}
 
 	// For HTMX partial requests, render only the table body
@@ -789,6 +882,89 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		return
 	}
 	c.HTML(http.StatusOK, "library.html", data)
+}
+
+// libraryStatusCounts returns the count of books per status bucket used by
+// the filter tabs on the library page. We map fine-grained pipeline statuses
+// (downloading/decrypting/processing) into the "in_progress" bucket and
+// (queued/skipped) into "waiting" to mirror the dashboard mental model.
+func (s *Server) libraryStatusCounts(ctx context.Context) map[string]int {
+	out := map[string]int{
+		"all":         0,
+		"new":         0,
+		"in_progress": 0,
+		"waiting":     0,
+		"complete":    0,
+		"failed":      0,
+	}
+
+	_, total, err := s.db.ListBooks(ctx, database.BookFilter{Limit: 1})
+	if err != nil {
+		return out
+	}
+	out["all"] = total
+
+	for _, st := range []database.BookStatus{
+		database.BookStatusNew,
+		database.BookStatusComplete,
+		database.BookStatusFailed,
+		database.BookStatusQueued,
+		database.BookStatusDownloading,
+		database.BookStatusDecrypting,
+		database.BookStatusProcessing,
+	} {
+		s2 := st
+		_, n, err := s.db.ListBooks(ctx, database.BookFilter{Status: &s2, Limit: 1})
+		if err != nil {
+			continue
+		}
+		switch st {
+		case database.BookStatusNew:
+			out["new"] = n
+		case database.BookStatusComplete:
+			out["complete"] = n
+		case database.BookStatusFailed:
+			out["failed"] = n
+		case database.BookStatusQueued:
+			out["waiting"] += n
+		case database.BookStatusDownloading, database.BookStatusDecrypting, database.BookStatusProcessing:
+			out["in_progress"] += n
+		}
+	}
+	return out
+}
+
+// paginationNumbers returns a compact paginator sequence with ellipsis
+// markers. The marker is the literal "…" string, which the template
+// renders as a non-clickable span.
+func paginationNumbers(current, total int) []string {
+	if total <= 7 {
+		out := make([]string, 0, total)
+		for p := 1; p <= total; p++ {
+			out = append(out, strconv.Itoa(p))
+		}
+		return out
+	}
+	out := []string{"1"}
+	if current > 3 {
+		out = append(out, "…")
+	}
+	start := current - 1
+	if start < 2 {
+		start = 2
+	}
+	end := current + 1
+	if end > total-1 {
+		end = total - 1
+	}
+	for p := start; p <= end; p++ {
+		out = append(out, strconv.Itoa(p))
+	}
+	if current < total-2 {
+		out = append(out, "…")
+	}
+	out = append(out, strconv.Itoa(total))
+	return out
 }
 
 type libraryBookAction struct {
@@ -2141,12 +2317,15 @@ func (s *Server) handleFactoryReset(c *gin.Context) {
 	s.downloads.Start(context.Background())
 	webLog.Info().Msg("factory reset complete — database wiped, downloads cleared, credentials removed, pipeline restarted")
 
+	// db.Reset() truncates settings, so the onboarded flag is gone — the
+	// firstRunGate will already redirect to /setup on the next page hit.
+	// Send the user there explicitly so the flow is obvious.
 	if c.GetHeader("HX-Request") == "true" {
-		c.Header("HX-Redirect", "/settings")
-		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": "Factory reset complete. Redirecting…"})
+		c.Header("HX-Redirect", "/setup")
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": "Factory reset complete. Redirecting to setup…"})
 		return
 	}
-	c.Redirect(http.StatusSeeOther, "/settings")
+	c.Redirect(http.StatusSeeOther, "/setup")
 }
 
 // purgeDirectory removes all files and subdirectories inside dir, but keeps dir itself.
@@ -2343,6 +2522,15 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 	}
 
 	webLog.Info().Msg("authentication successful")
+
+	// If the user is still in onboarding, bounce back into the wizard at
+	// the Storage step rather than dropping them on Settings — the wizard
+	// is what kicked them out to Amazon in the first place.
+	if s.isFirstRun(ctx) {
+		c.Redirect(http.StatusSeeOther, "/setup?step=2")
+		return
+	}
+
 	s.renderAuthPage(c, http.StatusOK, gin.H{
 		"Authenticated": true,
 		"Success":       "Successfully authenticated with Audible!",
