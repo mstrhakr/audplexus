@@ -1,27 +1,37 @@
-{{define "content"}}
+{{define "destination_form_body"}}
+{{if .ModalSuccess}}
+<div class="alert ok" style="margin:0">
+    <span class="ico">✓</span>
+    <div>
+        <strong>{{.DestTypeLabel}} destination added.</strong>
+        <div class="muted" style="font-size:.85rem;margin-top:.25rem">Refreshing…</div>
+    </div>
+</div>
+{{else}}
 {{$isEdit := .Dest}}
 {{$dt := .DestType}}
-<div class="settings-page">
-    <header class="settings-header">
-        <h1>{{if $isEdit}}Edit {{.DestTypeLabel}} Destination{{else}}Add {{.DestTypeLabel}} Destination{{end}}</h1>
-        <p>
-            {{if $isEdit}}Update the connection details below. Leave the API key / token blank to keep the existing value.
-            {{else}}Fill in the connection details. Audplexus will fan out post-download work to this destination.{{end}}
-        </p>
-    </header>
+{{$modal := .ModalMode}}
+<header style="margin-bottom:1rem">
+    <h2 id="form-heading" style="margin:0">{{if $isEdit}}Edit {{.DestTypeLabel}} Destination{{else}}Add {{.DestTypeLabel}} Destination{{end}}</h2>
+    <p class="muted" style="margin:.35rem 0 0 0">
+        {{if $isEdit}}Update the connection details below. Leave the API key / token blank to keep the existing value.
+        {{else}}Fill in the connection details. Audplexus will fan out post-download work to this destination.{{end}}
+    </p>
+</header>
 
-    {{if .FormError}}
-    <div class="info-box" role="alert" style="border-color:var(--error);margin-bottom:1rem" id="form-error-summary" tabindex="-1">
-        <strong>Could not save:</strong> {{.FormError}}
-    </div>
-    {{end}}
+{{if .FormError}}
+<div class="info-box" role="alert" style="border-color:var(--error);margin-bottom:1rem" id="form-error-summary" tabindex="-1">
+    <strong>Could not save:</strong> {{.FormError}}
+</div>
+{{end}}
 
-    <section class="auth-grid">
-        <section class="auth-panel" aria-labelledby="form-heading">
-            <h2 id="form-heading">Connection</h2>
-            <form method="POST"
-                  action="{{if $isEdit}}/destinations/{{.Dest.ID}}{{else}}/destinations/create{{end}}"
-                  class="settings-form">
+<form method="POST"
+      action="{{if $isEdit}}/destinations/{{.Dest.ID}}{{else}}/destinations/create{{end}}"
+      {{if $modal}}hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}{{else}}/destinations/create{{end}}"
+      hx-target="#dest-modal-content"
+      hx-swap="innerHTML"
+      hx-headers='{"X-Dest-Modal":"1"}'{{end}}
+      class="settings-form">
                 {{if not $isEdit}}<input type="hidden" name="type" value="{{$dt}}">{{end}}
 
                 <div class="form-group">
@@ -409,7 +419,11 @@
                 <div id="test-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.75rem"></div>
 
                 <div style="display:flex;gap:.75rem;margin-top:1rem;flex-wrap:wrap">
-                    <a href="/settings#library-destinations" class="btn btn-outline">Cancel</a>
+                    {{if $modal}}
+                    <button type="button" class="btn btn-outline-ds" onclick="window.AudplexusDestModal && window.AudplexusDestModal.close()">Cancel</button>
+                    {{else}}
+                    <a href="/destinations" class="btn btn-outline-ds">Cancel</a>
+                    {{end}}
                     <button type="button" class="btn btn-secondary"
                             hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/test{{else}}/destinations/test{{end}}"
                             hx-include="closest form"
@@ -423,7 +437,19 @@
                     <button type="submit" class="btn btn-primary">{{if $isEdit}}Save Destination{{else}}Create Destination{{end}}</button>
                 </div>
             </form>
-        </section>
-    </section>
+{{end}}
+{{end}}
+
+{{define "content"}}
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1>{{if .Dest}}Edit Destination{{else}}Add Destination{{end}}</h1>
+            <div class="sub">{{.DestTypeLabel}} — connection details</div>
+        </div>
+    </div>
+    <div class="card" style="max-width:760px">
+        {{template "destination_form_body" .}}
+    </div>
 </div>
 {{end}}

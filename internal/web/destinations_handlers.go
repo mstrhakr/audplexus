@@ -100,13 +100,73 @@ func destinationConfigured(d *database.LibraryDestination) bool {
 	return false
 }
 
+// handleDestinations renders the standalone Destinations page — split out
+// of Settings so destination management has room for richer per-card detail
+// (item count, coverage, last error) and a clear top-level CTA to add more.
+func (s *Server) handleDestinations(c *gin.Context) {
+	ctx := c.Request.Context()
+	completeStatus := database.BookStatusComplete
+	_, completeBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
+
+	dests := s.destinationSummaries(ctx, completeBooks)
+
+	healthy := 0
+	for _, d := range dests {
+		if d.Health == "healthy" {
+			healthy++
+		}
+	}
+
+	data := s.authBaseData(ctx)
+	data["Page"] = "destinations"
+	data["Destinations"] = dests
+	data["HealthyCount"] = healthy
+	data["TotalCount"] = len(dests)
+	c.HTML(http.StatusOK, "destinations.html", data)
+}
+
 // handleDestinationsNewPicker renders the type-picker page (step 1 of 2
 // in the add flow). Two-page server flow rather than a JS-toggled single
 // form — simpler, validation cleaner, no JS dependency.
 func (s *Server) handleDestinationsNewPicker(c *gin.Context) {
 	data := s.authBaseData(c.Request.Context())
 	data["Page"] = "destinations_new_picker"
+	data["PickerAction"] = "/destinations/new"
+	data["ModalMode"] = false
 	c.HTML(http.StatusOK, "destinations_new.html", data)
+}
+
+// handleDestinationsModalPicker returns just the type-picker body (no
+// page chrome) for HTMX modal opens from the wizard, the Destinations
+// page, etc. Picker submits to /destinations/modal/form so the response
+// also comes back as a bare body that swaps into the same modal slot.
+func (s *Server) handleDestinationsModalPicker(c *gin.Context) {
+	data := s.authBaseData(c.Request.Context())
+	data["PickerAction"] = "/destinations/modal/form"
+	data["ModalMode"] = true
+	c.HTML(http.StatusOK, "destination_picker_body", data)
+}
+
+// handleDestinationsModalForm returns just the type-specific form body
+// (no page chrome) for the modal flow. Picks up where the modal picker
+// left off; on submit the form POSTs to /destinations/create with the
+// X-Dest-Modal header so handleDestinationsCreate knows to respond with
+// an HX-Trigger close instead of redirecting to /destinations.
+func (s *Server) handleDestinationsModalForm(c *gin.Context) {
+	t := strings.ToLower(strings.TrimSpace(c.PostForm("type")))
+	if !validDestinationType(t) {
+		c.HTML(http.StatusBadRequest, "destination_picker_body", gin.H{
+			"PickerAction": "/destinations/modal/form",
+			"ModalMode":    true,
+			"Error":        "Pick a destination type.",
+		})
+		return
+	}
+	data := s.authBaseData(c.Request.Context())
+	data["DestType"] = t
+	data["DestTypeLabel"] = destinationTypeLabel(database.LibraryDestinationType(t))
+	data["ModalMode"] = true
+	c.HTML(http.StatusOK, "destination_form_body", data)
 }
 
 // handleDestinationsNewForm renders the type-specific config form (step 2)
@@ -896,26 +956,65 @@ func writeSensitiveHTML(c *gin.Context, body string) {
 }
 
 // handleDestinationsCreate persists a new destination after the form submit.
+// Behaves differently depending on the modal-mode header:
+//
+//   - X-Dest-Modal=1: render an HX-Trigger response so the modal closes
+//     and the parent page (Destinations list, wizard step 3) refreshes
+//     without a full reload.
+//   - otherwise: legacy redirect to /destinations (full-page form path).
 func (s *Server) handleDestinationsCreate(c *gin.Context) {
+	modal := c.GetHeader("X-Dest-Modal") == "1"
+
 	d, err := s.destinationFromForm(c, "")
 	if err != nil {
+		if modal {
+			data := s.authBaseData(c.Request.Context())
+			data["DestType"] = c.PostForm("type")
+			data["DestTypeLabel"] = destinationTypeLabel(database.LibraryDestinationType(c.PostForm("type")))
+			data["ModalMode"] = true
+			data["FormError"] = err.Error()
+			c.HTML(http.StatusBadRequest, "destination_form_body", data)
+			return
+		}
 		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": err.Error()})
 		return
 	}
 	// Disambiguate display names — turns "Plex" + "Plex" into "Plex" +
 	// "Plex (2)". Only fires when a collision exists, so a single Plex
-	// destination stays plainly named "Plex". The Plex server-picker
-	// onchange autofills display_name from the discovered server name
-	// when present, so the typical Plex flow never hits this fallback.
+	// destination stays plainly named "Plex".
 	d.DisplayName = s.uniqueDisplayName(c.Request.Context(), d.DisplayName, "")
 	d.ID = uuid.NewString()
 	d.Enabled = true
 	d.CreatedAt = time.Now().UTC()
 	if err := s.db.CreateLibraryDestination(c.Request.Context(), d); err != nil {
+		if modal {
+			data := s.authBaseData(c.Request.Context())
+			data["DestType"] = string(d.Type)
+			data["DestTypeLabel"] = destinationTypeLabel(d.Type)
+			data["ModalMode"] = true
+			data["FormError"] = "Could not create destination: " + err.Error()
+			c.HTML(http.StatusInternalServerError, "destination_form_body", data)
+			return
+		}
 		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Could not create destination: " + err.Error()})
 		return
 	}
-	c.Redirect(http.StatusSeeOther, "/settings#library-destinations")
+
+	if modal {
+		// HX-Trigger fires a "dest-created" event on document.body so the
+		// page that opened the modal can refresh its destinations list /
+		// advance its state. The body is the success confirmation that
+		// replaces the form inside the modal until the page reacts.
+		c.Header("HX-Trigger", `{"dest-created":{"id":"`+d.ID+`","name":"`+d.DisplayName+`"}}`)
+		c.HTML(http.StatusOK, "destination_form_body", gin.H{
+			"ModalMode":     true,
+			"ModalSuccess":  true,
+			"DestTypeLabel": destinationTypeLabel(d.Type),
+			"Dest":          d,
+		})
+		return
+	}
+	c.Redirect(http.StatusSeeOther, "/destinations")
 }
 
 // uniqueDisplayName appends " (2)", " (3)", … to candidate when another

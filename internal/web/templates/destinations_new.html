@@ -1,30 +1,41 @@
-{{define "content"}}
-<div class="settings-page">
-    <header class="settings-header">
-        <h1>Add Library Destination</h1>
-        <p>Pick the kind of server Audplexus should push to. The next step asks for the type-specific configuration.</p>
-    </header>
+{{define "destination_picker_body"}}
+{{/*
+  Type picker — shown both on the standalone /destinations/new page AND
+  inside the modal opened from the wizard, Destinations page, etc.
+  Forms post to /destinations/new (legacy full-page) or
+  /destinations/modal/form (modal mode); the chrome decides which.
+*/}}
+<form method="POST" action="{{.PickerAction}}" class="settings-form"
+      {{if .ModalMode}}hx-post="{{.PickerAction}}" hx-target="#dest-modal-content" hx-swap="innerHTML"{{end}}>
+    <fieldset class="form-group destination-type-group" style="border:0;padding:0;margin:0">
+        <legend class="visually-hidden">Choose a destination type</legend>
+        <p class="destination-type-help muted" id="destination-type-help">One click to continue to that destination's setup form.</p>
+        <div class="destination-type-grid" role="group" aria-describedby="destination-type-help">
+            <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="plex">Plex</button>
+            <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="emby">Emby</button>
+            <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="jellyfin">Jellyfin</button>
+            <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="abs">Audiobookshelf</button>
+        </div>
+    </fieldset>
+    {{if not .ModalMode}}
+    <div style="display:flex;gap:.75rem;margin-top:1rem;align-items:center">
+        <a href="/destinations" class="btn btn-outline-ds">Cancel</a>
+        <span class="muted" style="font-size:.9rem">Pick a destination type above.</span>
+    </div>
+    {{end}}
+</form>
+{{end}}
 
-    <section class="auth-grid">
-        <section class="auth-panel" aria-labelledby="dest-type-heading">
-            <h2 id="dest-type-heading">Destination type</h2>
-            <form method="POST" action="/destinations/new" class="settings-form">
-                <fieldset class="form-group destination-type-group" style="border:0;padding:0;margin:0">
-                    <legend class="visually-hidden">Choose a destination type</legend>
-                    <p class="destination-type-help muted" id="destination-type-help">One click to continue to that destination's setup flow.</p>
-                    <div class="destination-type-grid" role="group" aria-describedby="destination-type-help">
-                        <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="plex">Plex</button>
-                        <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="emby">Emby</button>
-                        <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="jellyfin">Jellyfin</button>
-                        <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="abs">Audiobookshelf</button>
-                    </div>
-                </fieldset>
-                <div style="display:flex;gap:.75rem;margin-top:1rem;align-items:center">
-                    <a href="/settings#library-destinations" class="btn btn-outline">Cancel</a>
-                    <span class="muted" style="font-size:.9rem">Pick a destination type above.</span>
-                </div>
-            </form>
-        </section>
-    </section>
+{{define "content"}}
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1>Add Library Destination</h1>
+            <div class="sub">Pick the kind of server Audplexus should push to. The next step asks for the type-specific configuration.</div>
+        </div>
+    </div>
+    <div class="card" style="max-width:720px">
+        {{template "destination_picker_body" .}}
+    </div>
 </div>
 {{end}}

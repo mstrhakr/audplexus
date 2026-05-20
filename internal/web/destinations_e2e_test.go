@@ -53,8 +53,8 @@ func TestHandleDestinationsCreate_E2E(t *testing.T) {
 	if w.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusSeeOther)
 	}
-	if got := w.Header().Get("Location"); got != "/settings#library-destinations" {
-		t.Fatalf("Location = %q, want /settings#library-destinations", got)
+	if got := w.Header().Get("Location"); got != "/destinations" {
+		t.Fatalf("Location = %q, want /destinations", got)
 	}
 
 	rows, err := db.ListLibraryDestinations(context.Background())

@@ -1,0 +1,110 @@
+{{define "content"}}
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1>Destinations</h1>
+            <div class="sub">
+                Media servers Audplexus pushes processed audiobooks into.
+                {{if gt .TotalCount 0}}{{.HealthyCount}} of {{.TotalCount}} healthy.{{end}}
+            </div>
+        </div>
+        <div class="actions">
+            <button type="button" class="btn btn-primary"
+                    hx-get="/destinations/modal"
+                    hx-target="#dest-modal-content"
+                    hx-swap="innerHTML">Add destination</button>
+        </div>
+    </div>
+
+    {{if .Destinations}}
+    <div class="dest-grid">
+        {{range .Destinations}}
+        <div class="dest-card {{.Type}}" aria-labelledby="dest-{{.ID}}-name">
+            <span class="dest-ribbon"></span>
+            <div class="dest-head">
+                <span class="type-icon">{{firstTwo .TypeLabel}}</span>
+                <div style="min-width:0;flex:1">
+                    <div class="dest-name" id="dest-{{.ID}}-name">{{.DisplayName}}</div>
+                    <div class="dest-url">{{if .URL}}{{.URL}}{{else}}{{.TypeLabel}}{{end}}</div>
+                </div>
+                <div>
+                    {{if not .Enabled}}<span class="badge badge-inactive" role="status">Disabled</span>
+                    {{else if eq .Health "healthy"}}<span class="badge badge-success" role="status">Healthy</span>
+                    {{else if eq .Health "failed"}}<span class="badge badge-error" role="status">Failed</span>
+                    {{else if eq .Health "never"}}<span class="badge badge-inactive" role="status">Never checked</span>
+                    {{else}}<span class="badge badge-warning" role="status">Not configured</span>{{end}}
+                </div>
+            </div>
+
+            {{if .ItemCountSet}}
+            <div class="dest-row">
+                <span><b>{{.ItemCount}}</b> items</span>
+                {{if .CoverageSet}}
+                <span class="coverage-meter" aria-label="Coverage {{.Coverage}}%">
+                    <span class="fill{{if lt .Coverage 50}} bad{{else if lt .Coverage 90}} warn{{end}}" style="display:block;width:{{.Coverage}}%;height:100%"></span>
+                </span>
+                <b style="font-size:.76rem">{{.Coverage}}%</b>
+                {{end}}
+            </div>
+            {{end}}
+
+            {{if and (eq .Health "failed") .LastError}}
+            <div class="alert err" style="font-size:.75rem;padding:.45rem .6rem" id="dest-{{.ID}}-err">
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;min-width:0">{{.LastError}}</span>
+            </div>
+            {{else if .HealthDetail}}
+            <div class="dest-row" style="color:#ff9b9b;font-size:.72rem">{{.HealthDetail}}</div>
+            {{end}}
+
+            <div class="dest-row" style="align-items:center">
+                {{if .LastCheckedAt}}
+                <span class="dest-checked">
+                    Last checked <time datetime="{{(.LastCheckedAt).Format "2006-01-02T15:04:05Z07:00"}}">{{formatDate (.LastCheckedAt | deref)}}</time>
+                </span>
+                {{else}}
+                <span class="dest-checked">Never checked</span>
+                {{end}}
+                <span style="margin-left:auto;display:flex;gap:.35rem;flex-wrap:wrap">
+                    <button type="button" class="btn btn-ghost btn-small"
+                        hx-post="/destinations/{{.ID}}/test"
+                        hx-swap="none"
+                        hx-on::before-request="this.disabled=true;this.textContent='Testing…'"
+                        hx-on::after-request="setTimeout(function(){location.reload()},600)"
+                        {{if and (eq .Health "failed") .LastError}}aria-describedby="dest-{{.ID}}-err"{{end}}>
+                        Test
+                    </button>
+                    <a href="/destinations/{{.ID}}/edit" class="btn btn-outline-ds btn-small"
+                        {{if and (eq .Health "failed") .LastError}}aria-describedby="dest-{{.ID}}-err"{{end}}>
+                        Edit<span class="visually-hidden"> {{.DisplayName}}</span>
+                    </a>
+                    <form method="POST" action="/destinations/{{.ID}}/toggle" style="margin:0;display:inline">
+                        <button type="submit" class="btn btn-outline-ds btn-small">
+                            {{if .Enabled}}Disable{{else}}Enable{{end}}<span class="visually-hidden"> {{.DisplayName}}</span>
+                        </button>
+                    </form>
+                    <form method="POST" action="/destinations/{{.ID}}/delete" style="margin:0;display:inline">
+                        <button type="submit" class="btn btn-danger btn-small"
+                            onclick="return confirm('Delete destination {{.DisplayName}}? This cannot be undone.')">
+                            Delete<span class="visually-hidden"> {{.DisplayName}}</span>
+                        </button>
+                    </form>
+                </span>
+            </div>
+        </div>
+        {{end}}
+    </div>
+    {{else}}
+    <button type="button" class="empty-card"
+            hx-get="/destinations/modal"
+            hx-target="#dest-modal-content"
+            hx-swap="innerHTML"
+            style="display:block;width:100%;background:var(--surface);border:1px dashed var(--border);color:inherit;cursor:pointer;text-align:left;padding:2.5rem 2rem;font:inherit">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:.6rem;color:var(--text-muted)">
+            <div style="width:48px;height:48px;border-radius:999px;background:var(--surface-2);display:flex;align-items:center;justify-content:center;color:var(--text);font-size:1.6rem">+</div>
+            <span style="font-weight:600;color:var(--text);font-size:1rem">Add your first destination</span>
+            <span style="font-size:.85rem">Plex · Emby · Jellyfin · Audiobookshelf</span>
+        </div>
+    </button>
+    {{end}}
+</div>
+{{end}}
