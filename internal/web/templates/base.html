@@ -11,6 +11,8 @@
 </head>
 <body>
     {{$sb := .Sidebar}}
+    {{$isWizard := eq .Page "setup"}}
+    {{if not $isWizard}}
     <nav class="sidebar">
         <div class="sidebar-header">
             <img src="/static/logo.svg" alt="Audplexus Logo" class="sidebar-logo" />
@@ -92,6 +94,9 @@
             {{template "content" .}}
         </main>
     </div>
+    {{else}}
+        {{template "content" .}}
+    {{end}}
 
     {{/*
       Global add-destination modal. Any page can open it by triggering

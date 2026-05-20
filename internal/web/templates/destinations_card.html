@@ -59,9 +59,10 @@
             <button type="button" class="btn btn-ghost btn-small"
                 hx-post="/destinations/{{.ID}}/test"
                 hx-swap="none"
-                hx-on::before-request="this.disabled=true;this.textContent='Testing…'"
+                hx-on::before-request="this.disabled=true"
                 hx-on::after-request="setTimeout(function(){location.reload()},600)"
                 {{if and (eq .Health "failed") .LastError}}aria-describedby="dest-{{.ID}}-err"{{end}}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
                 Test
             </button>
             <button type="button" class="btn btn-outline-ds btn-small"
@@ -69,18 +70,26 @@
                 hx-target="#dest-modal-content"
                 hx-swap="innerHTML"
                 {{if and (eq .Health "failed") .LastError}}aria-describedby="dest-{{.ID}}-err"{{end}}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
                 Edit<span class="visually-hidden"> {{.DisplayName}}</span>
             </button>
             <button type="button" class="btn btn-outline-ds btn-small"
                 hx-post="/destinations/{{.ID}}/toggle"
                 hx-target="#dest-card-{{.ID}}"
                 hx-swap="outerHTML">
-                {{if .Enabled}}Disable{{else}}Enable{{end}}<span class="visually-hidden"> {{.DisplayName}}</span>
+                {{if .Enabled}}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+                Disable
+                {{else}}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                Enable
+                {{end}}<span class="visually-hidden"> {{.DisplayName}}</span>
             </button>
             <button type="button" class="btn btn-danger btn-small"
                 hx-get="/destinations/{{.ID}}/delete"
                 hx-target="#dest-modal-content"
                 hx-swap="innerHTML">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
                 Delete<span class="visually-hidden"> {{.DisplayName}}</span>
             </button>
         </span>

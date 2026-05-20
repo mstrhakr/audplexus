@@ -25,18 +25,33 @@
             {{if eq .CurrentStep 0}}
                 <h2>Let's get your library moving.</h2>
                 <p class="sub">Audplexus syncs your Audible purchases, decrypts and converts them to m4b, then pushes them into your media servers. Setup takes about 4 minutes.</p>
-                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:.75rem;margin-top:1.5rem">
-                    <div class="card">
-                        <div style="font-weight:600;font-size:.95rem;margin-bottom:4px">Sync</div>
-                        <div style="font-size:.78rem;color:var(--text-muted);line-height:1.45">Pull your Audible catalog on a schedule.</div>
+                <div class="onboard-feature-grid">
+                    <div class="onboard-feature">
+                        <span class="onboard-feature-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
+                        </span>
+                        <div class="onboard-feature-body">
+                            <div class="onboard-feature-title">Sync</div>
+                            <div class="onboard-feature-desc">Pull your Audible catalog on a schedule.</div>
+                        </div>
                     </div>
-                    <div class="card">
-                        <div style="font-weight:600;font-size:.95rem;margin-bottom:4px">Process</div>
-                        <div style="font-size:.78rem;color:var(--text-muted);line-height:1.45">Download, decrypt, tag, and organize.</div>
+                    <div class="onboard-feature">
+                        <span class="onboard-feature-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        </span>
+                        <div class="onboard-feature-body">
+                            <div class="onboard-feature-title">Process</div>
+                            <div class="onboard-feature-desc">Download, decrypt, tag, and organize.</div>
+                        </div>
                     </div>
-                    <div class="card">
-                        <div style="font-weight:600;font-size:.95rem;margin-bottom:4px">Distribute</div>
-                        <div style="font-size:.78rem;color:var(--text-muted);line-height:1.45">Push to Plex, Emby, Jellyfin, or Audiobookshelf.</div>
+                    <div class="onboard-feature">
+                        <span class="onboard-feature-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                        </span>
+                        <div class="onboard-feature-body">
+                            <div class="onboard-feature-title">Distribute</div>
+                            <div class="onboard-feature-desc">Push to Plex, Emby, Jellyfin, or Audiobookshelf.</div>
+                        </div>
                     </div>
                 </div>
                 <div class="alert" style="margin-top:1.5rem">
@@ -97,7 +112,7 @@
                     <div class="hint">Temporary working directory for in-flight downloads. Doesn't need to be visible to media servers.</div>
                 </div>
                 <div class="alert">
-                    <div>Naming templates and tagging options are configurable later from <a href="/settings" target="_blank" rel="noopener">Settings</a>.</div>
+                    <div>Naming templates and tagging options are configurable later from <b>Settings</b>.</div>
                 </div>
             {{end}}
 

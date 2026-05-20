@@ -1,38 +1,99 @@
 /* Audible Plex Downloader - UI Styles */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500&display=swap");
 
 :root {
+    /* Surfaces */
     --bg: #1a1a2e;
     --surface: #16213e;
     --surface-2: #0f3460;
+    --border: #2a3a5c;
+
+    /* Brand */
     --accent: #e94560;
     --accent-hover: #d63851;
-    --text: #eee;
-    /* Bumped from #aaa to clear WCAG AA against destination cards on /settings
+    --plex-cyan: #7cc9ff;
+    --plex-aqua: #1DDBE9;
+    --plex-deep: #114E88;
+    --audible-teal: #67C4B1;
+    --audible-blue: #0F6191;
+
+    /* Foreground */
+    --text: #eeeeee;
+    --text-strong: #f5f8ff;
+    /* Bumped from DS #aaa to clear WCAG AA against destination cards on /settings
        and other muted text contexts. axe flagged 21 nodes pre-fix. */
     --text-muted: #c4c8d4;
-    /* Status badge bgs darkened to clear WCAG AA (4.5:1) with #fff text.
+    --text-link: #78b7ff;
+    --text-link-hover: #9cc9ff;
+
+    /* Semantic — darkened from DS to clear WCAG AA (4.5:1) with #fff text.
        Material 700/800 shades — same hue family, intentionally chosen so the
-       brand reads identically. Original 500-shade tokens (#4caf50 / #f44336 /
-       #2196f3 / #607d8b) failed AA against #fff badge text and cascaded
-       100+ contrast nodes on /library where every book row has a status badge. */
+       brand reads identically. */
     --success: #2e7d32;
     --warning: #ff9800;
     --error: #c62828;
     --info: #1565c0;
     --neutral: #455a64;
-    --border: #2a3a5c;
+    --inactive: #444444;
+    --type-tag-bg: #2a3a4f;
+    --type-tag-fg: #cfe1ff;
+
+    /* Geometry */
     --radius: 8px;
+    --radius-sm: 4px;
+    --radius-pill: 999px;
+
+    /* Elevation */
+    --shadow-logo: 0 8px 18px rgba(0, 0, 0, 0.35);
+    --shadow-modal: 0 22px 48px rgba(0, 0, 0, 0.45);
+    --shadow-text: 0 1px 2px rgba(0, 0, 0, 0.4);
+
+    /* Sidebar gradient */
+    --sidebar-header-bg: linear-gradient(160deg, rgba(15, 52, 96, 0.55), rgba(22, 33, 62, 0.9));
+    --sidebar-header-glow: radial-gradient(circle, rgba(31, 200, 245, 0.28), rgba(31, 200, 245, 0));
+
+    /* Spacing */
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-5: 1.25rem;
+    --space-6: 1.5rem;
+    --space-8: 2rem;
+
+    /* Typography */
+    --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --fs-eyebrow: 0.56rem;
+    --fs-xs: 0.70rem;
+    --fs-sm: 0.75rem;
+    --fs-base: 0.85rem;
+    --fs-md: 0.90rem;
+    --fs-lg: 1.00rem;
+    --fs-h1: 1.50rem;
+    --fs-h2: 1.20rem;
+    --fs-stat: 2.00rem;
+    --lh-tight: 1.05;
+    --lh-body: 1.6;
+    --tracking-eyebrow: 0.18em;
+    --tracking-th: 0.05em;
+    --tracking-tight: 0.01em;
+    --topbar-h: 56px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
     background: var(--bg);
     color: var(--text);
     display: flex;
     min-height: 100vh;
 }
+
+/* Wizard pages (setup) render without sidebar; let onboard-shell flex-fill */
+body:has(> .onboard-shell) { display: block; }
 
 /* Sidebar */
 .sidebar {
@@ -55,7 +116,7 @@ body {
     align-items: center;
     gap: 0.7rem;
     overflow: hidden;
-    background: linear-gradient(160deg, rgba(15, 52, 96, 0.55), rgba(22, 33, 62, 0.9));
+    background: var(--sidebar-header-bg);
 }
 
 .sidebar-header::before {
@@ -66,7 +127,7 @@ body {
     right: -42px;
     top: -46px;
     border-radius: 999px;
-    background: radial-gradient(circle, rgba(31, 200, 245, 0.28), rgba(31, 200, 245, 0));
+    background: var(--sidebar-header-glow);
     pointer-events: none;
 }
 
@@ -157,23 +218,27 @@ body {
 .nav-badge {
     margin-left: auto;
     font-size: 0.65rem;
-    padding: 1px 6px;
+    padding: 2px 7px;
     border-radius: 999px;
     background: var(--accent);
     color: #fff;
-    font-weight: 600;
-    min-width: 18px;
+    font-weight: 700;
+    min-width: 20px;
     text-align: center;
     line-height: 1.3;
+    border: 1px solid rgba(233, 69, 96, 0.45);
+    font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
 }
 .nav-badge.muted {
     background: var(--surface-2);
-    color: var(--text-muted);
+    color: var(--text);
     border: 1px solid var(--border);
 }
 .nav-badge.danger {
     background: var(--error);
     color: #fff;
+    border-color: rgba(244, 67, 54, 0.45);
 }
 
 /* Footer (health dot + version + uptime) */
@@ -1302,26 +1367,36 @@ label.form-row.inline:hover .toggle-slider { border-color: var(--accent); }
 
 /* Buttons */
 .btn {
-    display: inline-block;
-    padding: 0.5rem 1rem;
-    border: none;
-    border-radius: var(--radius);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.95rem;
+    border: 1px solid transparent;
+    border-radius: 7px;
     cursor: pointer;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
+    font-family: inherit;
+    font-weight: 500;
     color: var(--text);
-    transition: background 0.2s;
+    background: var(--surface-2);
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
+.btn:hover { background: var(--border); text-decoration: none; }
 
 /* WCAG AA: white on --accent (#e94560) is ~3.21:1 — fails normal-text 4.5:1.
    Switch foreground to the deepest page bg (--bg #1a1a2e) which gives ~6.8:1
    against the brand red without changing the brand color itself. */
-.btn-primary { background: var(--accent); color: var(--bg); }
-.btn-primary:hover { background: var(--accent-hover); color: var(--bg); }
-.btn-secondary { background: var(--surface-2); border: 1px solid var(--border); }
-.btn-secondary:hover { background: var(--border); }
-.btn-danger { background: var(--error); }
-.btn-danger:hover { background: #c62828; }
-.btn-small { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
+.btn-primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+.btn-primary:hover { background: var(--accent-hover); color: var(--bg); border-color: var(--accent-hover); }
+.btn-secondary { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+.btn-secondary:hover { background: var(--border); color: var(--text); }
+.btn-danger { background: var(--error); color: #fff; border-color: var(--error); }
+.btn-danger:hover { background: #a91d1d; border-color: #a91d1d; color: #fff; }
+.btn-small { padding: 0.3rem 0.6rem; font-size: 0.78rem; }
+a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
 
 .actions-bar {
     display: flex;
@@ -1769,27 +1844,85 @@ label.form-row.inline:hover .toggle-slider { border-color: var(--accent); }
 .settings-form { max-width: 500px; }
 
 .form-group {
-    margin-bottom: 1.25rem;
+    margin-bottom: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
 }
 
 .form-group label {
     display: block;
-    margin-bottom: 0.35rem;
+    font-size: 0.78rem;
     font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
 }
 
 .form-group input,
-.form-group select {
+.form-group select,
+.form-group textarea {
     width: 100%;
-    padding: 0.5rem 0.75rem;
+    padding: 0.55rem 0.75rem;
     background: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: 7px;
     font-size: 0.9rem;
+    font-family: inherit;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(233, 69, 96, 0.18);
 }
 
-.form-group small { color: var(--text-muted); }
+.form-group small,
+.form-group .muted {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+.form-group small code,
+.form-group .muted code {
+    font-family: var(--font-mono);
+    background: var(--surface-2);
+    color: var(--plex-cyan);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.78rem;
+}
+.form-group details {
+    margin-top: 0.25rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+.form-group details summary {
+    cursor: pointer;
+    color: var(--plex-cyan);
+    user-select: none;
+    list-style: none;
+}
+.form-group details summary::-webkit-details-marker { display: none; }
+.form-group details summary::before {
+    content: "▸ ";
+    display: inline-block;
+    transition: transform 0.15s;
+}
+.form-group details[open] summary::before { transform: rotate(90deg); }
+.form-group details ol,
+.form-group details ul { color: var(--text); line-height: 1.5; }
+.form-group details code {
+    font-family: var(--font-mono);
+    background: var(--surface-2);
+    color: var(--plex-cyan);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.76rem;
+}
 
 .status-msg { margin-left: 0.75rem; font-size: 0.9rem; }
 .status-msg.success { color: var(--success); }
@@ -2124,3 +2257,214 @@ label.form-row.inline:hover .toggle-slider { border-color: var(--accent); }
     .auth-panel { padding: 1rem; border-radius: 10px; }
     .destination-type-grid { grid-template-columns: 1fr; }
 }
+
+/* =====================================================================
+   DesignSystem port — classes referenced by templates that were missing
+   from the app stylesheet. Ported verbatim from DesignSystem/styles.css
+   where possible. Keep this block self-contained so future DS bumps can
+   diff cleanly against the reference.
+   ===================================================================== */
+
+/* ── Alerts ──────────────────────────────────────────────────────── */
+.alert {
+    display: flex; gap: 0.65rem; align-items: flex-start;
+    padding: 0.75rem 0.9rem; border-radius: 8px;
+    background: rgba(33, 150, 243, 0.08);
+    border: 1px solid rgba(33, 150, 243, 0.25);
+    font-size: 0.85rem; line-height: 1.5;
+}
+.alert.warn { background: rgba(255, 152, 0, 0.08); border-color: rgba(255, 152, 0, 0.28); color: #ffc36a; }
+.alert.err  { background: rgba(244, 67, 54, 0.08); border-color: rgba(244, 67, 54, 0.28); color: #ff9b9b; }
+.alert.ok   { background: rgba(76, 175, 80, 0.08); border-color: rgba(76, 175, 80, 0.28); color: #8ddc91; }
+.alert .ico { font-size: 1rem; line-height: 1; margin-top: 1px; flex-shrink: 0; }
+.alert b { color: inherit; }
+
+/* ── Status dot inline marker ────────────────────────────────────── */
+.dot-status { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.8rem; }
+.dot-status::before { content: ""; width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
+.dot-status.ok { color: var(--success); }
+.dot-status.warn { color: var(--warning); }
+.dot-status.err { color: var(--error); }
+.dot-status.idle { color: var(--text-muted); }
+
+/* ── Onboarding / Setup wizard ───────────────────────────────────── */
+.onboard-shell {
+    min-height: 100vh; width: 100%; flex: 1 1 auto;
+    display: flex; align-items: center; justify-content: center;
+    padding: 2rem; background: var(--bg); position: relative;
+}
+.onboard-shell::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background:
+        radial-gradient(circle at 15% 20%, rgba(31, 200, 245, 0.10), transparent 50%),
+        radial-gradient(circle at 85% 80%, rgba(233, 69, 96, 0.08), transparent 50%);
+}
+.onboard {
+    position: relative; z-index: 1; width: 100%; max-width: 720px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; box-shadow: 0 30px 60px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+}
+.onboard-head {
+    padding: 1.25rem 1.75rem; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 0.85rem;
+    background: var(--sidebar-header-bg);
+    position: relative; overflow: hidden;
+}
+.onboard-head::before {
+    content: ""; position: absolute; width: 200px; height: 200px;
+    right: -50px; top: -100px; border-radius: 999px;
+    background: var(--sidebar-header-glow);
+}
+.onboard-head img {
+    width: 36px; height: 36px; border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: var(--shadow-logo); position: relative;
+}
+.onboard-head .t { position: relative; }
+.onboard-head .t h1 { font-size: 1.1rem; font-weight: 800; color: var(--text-strong); }
+.onboard-head .t p {
+    font-size: 0.65rem; color: var(--plex-cyan);
+    letter-spacing: 0.18em; text-transform: uppercase; margin-top: 2px;
+}
+.onboard-body { padding: 1.75rem 1.75rem 1.25rem; min-height: 320px; position: relative; z-index: 1; }
+.onboard-body h2 { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.35rem; }
+.onboard-body .sub { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.25rem; max-width: 540px; line-height: 1.5; }
+.onboard-foot {
+    padding: 1rem 1.75rem; border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 0.5rem;
+    position: relative; z-index: 1; background: var(--surface);
+}
+.onboard-foot .right { margin-left: auto; display: flex; gap: 0.5rem; }
+
+/* Stepper */
+.steps {
+    display: flex; align-items: center; gap: 0;
+    padding: 1rem 1.75rem; border-bottom: 1px solid var(--border);
+    background: var(--bg); list-style: none; margin: 0;
+    position: relative; z-index: 1;
+}
+.step { display: flex; align-items: center; gap: 0.5rem; flex: 1; min-width: 0; }
+.step .num {
+    width: 24px; height: 24px; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    color: var(--text-muted); font-size: 0.75rem; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; text-decoration: none;
+}
+.step.done .num { background: var(--success); border-color: var(--success); color: #fff; }
+.step.active .num {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+    box-shadow: 0 0 0 4px rgba(233, 69, 96, 0.18);
+}
+.step .lbl {
+    font-size: 0.75rem; color: var(--text-muted); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    text-decoration: none;
+}
+.step.active .lbl { color: var(--text); font-weight: 600; }
+.step.done .lbl { color: var(--text); }
+.step .bar { flex: 1; height: 1px; background: var(--border); margin: 0 0.5rem; }
+.step.done .bar { background: var(--success); }
+
+/* ── Pickers (region / destination type / format) ────────────────── */
+.picker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0.65rem;
+}
+.picker {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 0.9rem 1rem; cursor: pointer; transition: all 0.15s;
+    display: flex; flex-direction: column; gap: 0.35rem; text-align: left;
+    color: var(--text); font-family: inherit;
+}
+.picker:hover { border-color: var(--text-muted); }
+.picker.selected {
+    border-color: var(--accent);
+    background: rgba(233, 69, 96, 0.07);
+    box-shadow: 0 0 0 3px rgba(233, 69, 96, 0.12);
+}
+.picker .lg {
+    font-size: 0.92rem; font-weight: 600;
+    display: flex; align-items: center; gap: 0.5rem;
+    min-width: 0; word-break: break-word; line-height: 1.25;
+}
+.picker .lg .pill {
+    width: 28px; height: 28px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 0.75rem; font-weight: 700; flex-shrink: 0;
+}
+.picker .desc { color: var(--text-muted); font-size: 0.76rem; line-height: 1.4; }
+
+.picker-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.picker-list .picker { flex-direction: row; align-items: center; gap: 0.85rem; }
+.picker-list .picker .lg { flex: 1; }
+.picker-list .picker .meta { color: var(--text-muted); font-size: 0.76rem; }
+
+/* ── Region radio list (setup step 1) ────────────────────────────── */
+.region-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 0.5rem;
+}
+.region-list label {
+    display: flex; align-items: center; gap: 0.55rem;
+    padding: 0.55rem 0.7rem;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 7px; cursor: pointer; font-size: 0.85rem;
+}
+.region-list label.checked {
+    border-color: var(--accent);
+    background: rgba(233, 69, 96, 0.06);
+}
+.region-list label input { accent-color: var(--accent); }
+
+/* ── Onboard feature grid (setup step 0) ─────────────────────────── */
+.onboard-feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+}
+.onboard-feature {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.85rem 0.95rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+}
+.onboard-feature-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, rgba(31, 200, 245, 0.18), rgba(233, 69, 96, 0.18));
+    border: 1px solid var(--border);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--plex-cyan);
+    flex-shrink: 0;
+}
+.onboard-feature-body { min-width: 0; }
+.onboard-feature-title {
+    font-weight: 600;
+    font-size: 0.92rem;
+    margin-bottom: 2px;
+    color: var(--text);
+}
+.onboard-feature-desc {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    line-height: 1.45;
+}
+
+/* ── Utility aliases used in templates ───────────────────────────── */
+.muted { color: var(--text-muted); font-size: 0.85rem; }
+.text-muted { color: var(--text-muted); }
+.spacer { flex: 1; }
+
+/* ── btn-outline-ds → match DS .btn-outline ──────────────────────── */
+/* (already defined at line ~847; this is a no-op anchor for grep) */
