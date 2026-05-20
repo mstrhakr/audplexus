@@ -1,0 +1,181 @@
+{{define "content"}}
+<div class="onboard-shell">
+    <div class="onboard">
+        <div class="onboard-head">
+            <img src="/static/logo.svg" alt="" />
+            <div class="t"><h1>Welcome to Audplexus</h1><p>Audible &rarr; Your Library · Setup</p></div>
+        </div>
+
+        <ol class="steps" aria-label="Setup progress">
+            {{range $i, $s := .Steps}}
+            <li class="step {{if lt $i $.CurrentStep}}done{{else if eq $i $.CurrentStep}}active{{end}}">
+                {{if lt $i $.CurrentStep}}
+                    <a href="/setup?step={{$i}}" class="num" aria-current="false">{{$s.NumLabel}}</a>
+                    <a href="/setup?step={{$i}}" class="lbl">{{$s.Label}}</a>
+                {{else}}
+                    <span class="num" {{if eq $i $.CurrentStep}}aria-current="step"{{end}}>{{$s.NumLabel}}</span>
+                    <span class="lbl">{{$s.Label}}</span>
+                {{end}}
+                {{if lt $i (sub (len $.Steps) 1)}}<span class="bar"></span>{{end}}
+            </li>
+            {{end}}
+        </ol>
+
+        <div class="onboard-body">
+            {{if eq .CurrentStep 0}}
+                <h2>Let's get your library moving.</h2>
+                <p class="sub">Audplexus syncs your Audible purchases, decrypts and converts them to m4b, then pushes them into your media servers. Setup takes about 4 minutes.</p>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:.75rem;margin-top:1.5rem">
+                    <div class="card">
+                        <div style="font-weight:600;font-size:.95rem;margin-bottom:4px">Sync</div>
+                        <div style="font-size:.78rem;color:var(--text-muted);line-height:1.45">Pull your Audible catalog on a schedule.</div>
+                    </div>
+                    <div class="card">
+                        <div style="font-weight:600;font-size:.95rem;margin-bottom:4px">Process</div>
+                        <div style="font-size:.78rem;color:var(--text-muted);line-height:1.45">Download, decrypt, tag, and organize.</div>
+                    </div>
+                    <div class="card">
+                        <div style="font-weight:600;font-size:.95rem;margin-bottom:4px">Distribute</div>
+                        <div style="font-size:.78rem;color:var(--text-muted);line-height:1.45">Push to Plex, Emby, Jellyfin, or Audiobookshelf.</div>
+                    </div>
+                </div>
+                <div class="alert" style="margin-top:1.5rem">
+                    <div>You'll need your Audible login and at least one media server URL. We never store your Audible password — only an activation token.</div>
+                </div>
+            {{end}}
+
+            {{if eq .CurrentStep 1}}
+                <h2>Connect your Audible account</h2>
+                <p class="sub">Pick your Audible region. The next step redirects you through Amazon's official sign-in to capture an activation token — we never see your password.</p>
+
+                {{if .Authenticated}}
+                <div class="alert ok">
+                    <span class="ico">✓</span>
+                    <div><b>Already signed in.</b> Audible region: <code>{{.CurrentMarketplace}}</code>. Continue to the next step.</div>
+                </div>
+                {{else if .AuthURL}}
+                <div class="alert">
+                    <div>
+                        <b>Step 1 of 2 — Sign in with Amazon</b><br>
+                        <a href="{{.AuthURL}}" rel="noopener" class="btn btn-primary" style="margin-top:.6rem">Open Amazon sign-in →</a>
+                        <p class="hint" style="margin-top:.5rem">Amazon will redirect you back here when done.</p>
+                    </div>
+                </div>
+                {{else}}
+                <form method="POST" action="/setup/marketplace" class="form-row">
+                    <label>Region</label>
+                    <div class="region-list">
+                        {{range .Marketplaces}}
+                        <label class="{{if eq $.CurrentMarketplace .CountryCode}}checked{{end}}">
+                            <input type="radio" name="marketplace" value="{{.CountryCode}}" {{if eq $.CurrentMarketplace .CountryCode}}checked{{end}}>
+                            <span style="flex:1">
+                                <div style="font-weight:600">{{.Name}}</div>
+                                <div class="hint" style="margin:0">audible.{{.Domain}}</div>
+                            </span>
+                        </label>
+                        {{end}}
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="margin-top:1rem">Continue to Amazon sign-in →</button>
+                </form>
+                {{if .Error}}
+                <div class="alert err" style="margin-top:1rem"><div>{{.Error}}</div></div>
+                {{end}}
+                {{end}}
+            {{end}}
+
+            {{if eq .CurrentStep 2}}
+                <h2>Storage</h2>
+                <p class="sub">Audplexus writes processed audiobooks to the path mounted into the container. Your media servers should be able to read this same path.</p>
+                <div class="form-row">
+                    <label>Library root</label>
+                    <div class="code">{{.AudiobooksPath}}</div>
+                    <div class="hint">Configured at container startup. If this isn't right, mount a different volume to <code>/audiobooks</code> in your compose file.</div>
+                </div>
+                <div class="form-row">
+                    <label>Downloads cache</label>
+                    <div class="code">{{.DownloadsPath}}</div>
+                    <div class="hint">Temporary working directory for in-flight downloads. Doesn't need to be visible to media servers.</div>
+                </div>
+                <div class="alert">
+                    <div>Naming templates and tagging options are configurable later from <a href="/settings" target="_blank" rel="noopener">Settings</a>.</div>
+                </div>
+            {{end}}
+
+            {{if eq .CurrentStep 3}}
+                <h2>Add a destination</h2>
+                <p class="sub">Connect at least one media server so Audplexus knows where to push processed files. You can add more later.</p>
+
+                {{if .Destinations}}
+                <div class="picker-list">
+                    {{range .Destinations}}
+                    <div class="picker selected" style="cursor:default">
+                        <span class="lg">
+                            <span class="pill" style="background:linear-gradient(135deg,#1ddbe9,#114e88)">{{firstTwo .TypeLabel}}</span>
+                            {{.DisplayName}}
+                        </span>
+                        <span class="meta">{{if .URL}}{{.URL}}{{else}}{{.TypeLabel}}{{end}}</span>
+                    </div>
+                    {{end}}
+                </div>
+                <button type="button" class="btn btn-outline-ds" style="margin-top:.75rem"
+                        hx-get="/destinations/modal"
+                        hx-target="#dest-modal-content"
+                        hx-swap="innerHTML">+ Add another</button>
+                {{else}}
+                <button type="button" class="btn btn-primary"
+                        hx-get="/destinations/modal"
+                        hx-target="#dest-modal-content"
+                        hx-swap="innerHTML">+ Add destination</button>
+                <p class="hint" style="margin-top:.5rem">Or skip for now — files will still be written to disk.</p>
+                {{end}}
+
+                <div class="alert" style="margin-top:1.25rem">
+                    <div>You can also skip this step and add destinations from the Destinations page anytime.</div>
+                </div>
+            {{end}}
+
+            {{if eq .CurrentStep 4}}
+                <h2>You're all set.</h2>
+                <p class="sub">Audplexus is ready to run its first sync. You can change anything from Settings later.</p>
+                <div class="card">
+                    <dl style="display:grid;grid-template-columns:max-content 1fr;gap:.4rem 1.5rem;font-size:.88rem;margin:0">
+                        <dt style="color:var(--text-muted)">Region</dt><dd>{{.CurrentMarketplace}}</dd>
+                        <dt style="color:var(--text-muted)">Audible</dt><dd>{{if .Authenticated}}<span style="color:var(--success)">Signed in ✓</span>{{else}}<span style="color:var(--warning)">Not signed in</span>{{end}}</dd>
+                        <dt style="color:var(--text-muted)">Library</dt><dd class="cell-mono">{{.AudiobooksPath}}</dd>
+                        <dt style="color:var(--text-muted)">Destinations</dt>
+                        <dd>
+                            {{if .Destinations}}{{joinDestinationNames .Destinations}}{{else}}<span style="color:var(--text-muted)">None — skipped</span>{{end}}
+                        </dd>
+                    </dl>
+                </div>
+                {{if .Authenticated}}
+                <div class="alert ok" style="margin-top:1rem"><span class="ico">✓</span><div><b>First sync will start automatically.</b> Expect 1–3 minutes for a typical library.</div></div>
+                {{else}}
+                <div class="alert warn" style="margin-top:1rem"><span class="ico">!</span><div><b>You're not signed in to Audible yet.</b> You can finish setup and connect later from Settings, but nothing will sync until you do.</div></div>
+                {{end}}
+            {{end}}
+        </div>
+
+        <div class="onboard-foot">
+            {{if gt .CurrentStep 0}}
+                <a href="/setup?step={{sub .CurrentStep 1}}" class="btn btn-ghost">Back</a>
+            {{else}}
+                <a href="/setup/skip" class="btn btn-ghost"
+                   onclick="return confirm('Skip setup? You can re-run the wizard later from Settings.')">Skip setup</a>
+            {{end}}
+            <div class="right" style="margin-left:auto;display:flex;gap:.5rem">
+                {{if lt .CurrentStep (sub (len .Steps) 1)}}
+                    {{if and (eq .CurrentStep 1) (not .Authenticated)}}
+                        <a href="/setup?step={{add .CurrentStep 1}}" class="btn btn-ghost">Skip sign-in for now</a>
+                    {{end}}
+                    <a href="/setup?step={{add .CurrentStep 1}}" class="btn btn-primary">Continue →</a>
+                {{else}}
+                    <form method="POST" action="/setup/finish" style="margin:0">
+                        <button type="submit" class="btn btn-primary">Start sync</button>
+                    </form>
+                {{end}}
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
