@@ -1039,6 +1039,158 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     .settings-nav-link.active { border-left: 0; border-bottom-color: var(--accent); }
 }
 
+/* ── DS form primitives ──────────────────────────────────────
+   Pulled from the DesignSystem mock. Used by the wizard, the
+   destinations modal, Settings, and anything else that wants the
+   standard label-input-hint stack with consistent spacing.
+   ──────────────────────────────────────────────────────────── */
+.input, .select, .textarea {
+    width: 100%;
+    padding: 0.55rem 0.7rem;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    font-size: 0.85rem;
+    font-family: inherit;
+    outline: none;
+    color-scheme: dark;
+}
+.input:focus, .select:focus, .textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(233, 69, 96, 0.15);
+}
+.input::placeholder { color: var(--text-muted); }
+.textarea { resize: vertical; min-height: 5rem; }
+
+.checkbox {
+    width: 16px;
+    height: 16px;
+    appearance: none;
+    -webkit-appearance: none;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    border-radius: 4px;
+    cursor: pointer;
+    position: relative;
+    flex-shrink: 0;
+}
+.checkbox:checked { background: var(--accent); border-color: var(--accent); }
+.checkbox:checked::after {
+    content: "✓";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+
+.toggle {
+    position: relative;
+    display: inline-block;
+    width: 28px;
+    height: 16px;
+    flex-shrink: 0;
+}
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+.toggle-slider::before {
+    content: "";
+    position: absolute;
+    height: 10px;
+    width: 10px;
+    left: 2px;
+    top: 2px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    transition: 0.2s;
+}
+.toggle input:checked + .toggle-slider {
+    background: rgba(233, 69, 96, 0.28);
+    border-color: var(--accent);
+}
+.toggle input:checked + .toggle-slider::before {
+    transform: translateX(12px);
+    background: var(--accent);
+}
+
+.form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 1.1rem;
+}
+.form-row > label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text);
+}
+.form-row .hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    line-height: 1.45;
+}
+.form-row .hint code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.72rem;
+    color: #7cc9ff;
+}
+.form-row.inline {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.75rem;
+}
+.form-row.inline > label:first-child,
+.form-row.inline > .row-label {
+    flex: 1;
+    margin-bottom: 0;
+}
+.form-row.inline label.toggle,
+.form-row.inline span.toggle { flex: 0 0 auto; }
+label.form-row.inline { cursor: pointer; }
+label.form-row.inline:hover .toggle-slider { border-color: var(--accent); }
+
+/* .card-head — heading row inside .card cards. */
+.card-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.75rem;
+}
+.card-head h3 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0;
+}
+.card-head .right { margin-left: auto; display: flex; gap: 0.4rem; }
+
+/* Code block — for read-only paths and small command examples. */
+.code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.65rem 0.85rem;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    color: #7cc9ff;
+    line-height: 1.6;
+    overflow-x: auto;
+}
+
 /* Link button — semantic <button> styled to look like an inline link.
    Used where the action is a real button (opens a modal, submits a
    request) but the visual treatment is the unobtrusive link form. */
