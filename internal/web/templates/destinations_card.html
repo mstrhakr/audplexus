@@ -11,7 +11,7 @@
   page that's $dest inside a range.
 */}}
 {{with .Dest}}
-<div class="dest-card {{.Type}}" id="dest-card-{{.ID}}" aria-labelledby="dest-{{.ID}}-name">
+<div class="dest-card {{.Type}}{{if not .Enabled}} dest-card-disabled{{end}}" id="dest-card-{{.ID}}" aria-labelledby="dest-{{.ID}}-name">
     <span class="dest-ribbon"></span>
 
     <div class="dest-head">
@@ -89,11 +89,9 @@
             {{end}}
         </span>
         <span class="dest-actions-buttons">
-            <button type="button" class="btn btn-ghost btn-small"
+            <button type="button" class="btn btn-ghost btn-small" data-test-button data-test-reload
                 hx-post="/destinations/{{.ID}}/test"
                 hx-swap="none"
-                hx-on::before-request="this.disabled=true"
-                hx-on::after-request="setTimeout(function(){location.reload()},600)"
                 {{if and (eq .Health "failed") .LastError}}aria-describedby="dest-{{.ID}}-err"{{end}}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
                 Test

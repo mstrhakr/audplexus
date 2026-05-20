@@ -791,6 +791,16 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     font-size: 0.72rem;
     color: var(--text-muted);
 }
+.dest-card-disabled {
+    background: #222837;
+}
+.dest-card-disabled .dest-name,
+.dest-card-disabled .type-icon {
+    opacity: 0.7;
+}
+.dest-card-disabled .dest-ribbon {
+    opacity: 0.35;
+}
 .dest-card .dest-head-text { min-width: 0; flex: 1; }
 .dest-card .dest-head-status { flex-shrink: 0; }
 .dest-card .dest-row-help {
@@ -1602,6 +1612,61 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     flex-shrink: 0;
 }
 .btn-icon svg { display: block; }
+
+/* ── Test-connection button states ───────────────────────────────────
+   The button keeps its default content; while the request is in flight
+   or right after, an overlay icon hides the content. JS toggles a
+   `data-test-state` attribute: "loading" | "ok" | "fail". When idle the
+   attribute is absent and the default content shows normally. */
+.btn[data-test-state] {
+    position: relative;
+    pointer-events: none;
+}
+.btn[data-test-state] > * { visibility: hidden; }
+.btn[data-test-state]::after {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    font-weight: 700;
+}
+.btn[data-test-state="loading"]::after {
+    content: "";
+    background:
+        conic-gradient(from 0deg, transparent 0deg, currentColor 270deg, transparent 360deg);
+    -webkit-mask: radial-gradient(circle, transparent 5px, #000 6px);
+            mask: radial-gradient(circle, transparent 5px, #000 6px);
+    width: 16px;
+    height: 16px;
+    margin: auto;
+    inset: 0;
+    border-radius: 999px;
+    animation: btn-test-spin 0.7s linear infinite;
+}
+.btn[data-test-state="ok"] {
+    background: rgba(76, 175, 80, 0.18);
+    border-color: var(--success);
+    color: var(--success);
+}
+.btn[data-test-state="ok"]::after {
+    content: "\2713";
+    color: var(--success);
+}
+.btn[data-test-state="fail"] {
+    background: rgba(244, 67, 54, 0.18);
+    border-color: var(--error);
+    color: var(--error);
+}
+.btn[data-test-state="fail"]::after {
+    content: "\2715";
+    color: var(--error);
+}
+
+@keyframes btn-test-spin {
+    to { transform: rotate(360deg); }
+}
 
 /* ── Dashboard table links (Recent completions / failures) ───────── */
 .tbl a.book-detail-link,

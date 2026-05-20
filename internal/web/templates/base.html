@@ -982,6 +982,58 @@
     </script>
 
     <script>
+    // Global Test-Connection feedback. Any button marked
+    // data-test-button gets:
+    //   • data-test-state="loading" while the HTMX request is in flight
+    //   • data-test-state="ok" / "fail" for ~2.4s based on the response
+    //   • attribute removed after the linger window so the default icon
+    //     comes back
+    // The response body is the renderTestResult fragment ("Connected." /
+    // "Failed."), so we just look at the prefix.
+    (function() {
+        var LINGER_MS = 2400;
+        var clearTimers = new WeakMap();
+
+        function scheduleClear(btn) {
+            var existing = clearTimers.get(btn);
+            if (existing) clearTimeout(existing);
+            var t = setTimeout(function() {
+                btn.removeAttribute('data-test-state');
+                clearTimers.delete(btn);
+            }, LINGER_MS);
+            clearTimers.set(btn, t);
+        }
+
+        document.body.addEventListener('htmx:beforeRequest', function(ev) {
+            var btn = ev.target;
+            if (!(btn instanceof HTMLElement) || !btn.hasAttribute('data-test-button')) return;
+            var existing = clearTimers.get(btn);
+            if (existing) {
+                clearTimeout(existing);
+                clearTimers.delete(btn);
+            }
+            btn.setAttribute('data-test-state', 'loading');
+        });
+
+        document.body.addEventListener('htmx:afterRequest', function(ev) {
+            var btn = ev.target;
+            if (!(btn instanceof HTMLElement) || !btn.hasAttribute('data-test-button')) return;
+            var xhr = ev.detail && ev.detail.xhr;
+            var text = xhr ? String(xhr.responseText || '') : '';
+            var ok = !!(ev.detail && ev.detail.successful) && text.indexOf('Connected.') !== -1;
+            btn.setAttribute('data-test-state', ok ? 'ok' : 'fail');
+            scheduleClear(btn);
+            // After the icon-state linger, reload the page so the card's
+            // health badge / last-checked timestamp picks up the new
+            // values. Only buttons opted into this via data-test-reload.
+            if (btn.hasAttribute('data-test-reload')) {
+                setTimeout(function() { location.reload(); }, LINGER_MS + 200);
+            }
+        });
+    })();
+    </script>
+
+    <script>
     // AudplexusDestModal — global helper that drives the add-destination
     // modal. Pages open it via hx-get="/destinations/modal" with target
     // "#dest-modal-content"; the helper observes HTMX swaps to flip the

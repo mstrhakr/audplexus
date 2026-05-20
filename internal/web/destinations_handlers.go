@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	neturl "net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -226,7 +227,11 @@ func (s *Server) recordDestinationHealth(ctx context.Context, destID string, ok 
 	now := time.Now().UTC()
 	row.LastHealthCheckAt = &now
 	row.LastHealthCheckOK = &ok
-	row.LastHealthCheckErr = errMsg
+	// Strip embedded HTML / collapse whitespace before persisting so the
+	// dashboard's stored last_health_check_err is fit for direct render.
+	// The original raw err already flowed through the debug log path on
+	// the caller side, so we're not losing forensic detail here.
+	row.LastHealthCheckErr = cleanErrorForDisplay(errMsg)
 	if err := s.db.UpdateLibraryDestination(ctx, row); err != nil {
 		webLog.Debug().Err(err).Str("destination_id", destID).Msg("recordDestinationHealth: update failed")
 	}
@@ -915,12 +920,72 @@ func renderTestResult(c *gin.Context, ok bool, success, fail string) {
 	}
 	c.String(http.StatusOK,
 		`<div class="info-box" style="border-color:var(--error);margin:.5rem 0" tabindex="-1" id="test-result-failure">`+
-			`<strong>Failed.</strong> `+htmlEscape(fail)+`</div>`)
+			`<strong>Failed.</strong> `+htmlEscape(cleanErrorForDisplay(fail))+`</div>`)
 }
 
 func htmlEscape(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;")
 	return r.Replace(s)
+}
+
+// errTagRe matches an HTML tag for stripping. The bodies our backends
+// embed in error strings are typically tiny upstream-server error pages
+// (Plex / Emby / Jellyfin / ABS), so a regex is cheaper than spinning
+// up html/parser and we don't need element-level fidelity here.
+var errTagRe = regexp.MustCompile(`<[^>]*>`)
+
+// errSpaceRe collapses runs of whitespace (including the newlines left
+// behind after stripping <head>/<body>/<title> blocks) into a single space.
+var errSpaceRe = regexp.MustCompile(`\s+`)
+
+// errHTTPCodeRe extracts the numeric status code from a "<verb> returned
+// <code>: <body>" error string. The first capture is the code itself.
+var errHTTPCodeRe = regexp.MustCompile(`returned (\d{3})[:\s]`)
+
+// cleanErrorForDisplay turns a raw backend error message — which may
+// embed an HTML error page from Plex/Emby/Jellyfin/ABS — into something
+// that fits on one line in a UI badge. It:
+//   - strips HTML tags
+//   - collapses whitespace
+//   - rewrites common HTTP status codes into friendly hints
+//   - truncates very long messages so a 2KB upstream body doesn't
+//     blow out the card layout
+//
+// The raw error is still logged at recordDestinationHealth's caller
+// chain (debug log), so we don't lose forensic detail.
+func cleanErrorForDisplay(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+
+	var hint string
+	if m := errHTTPCodeRe.FindStringSubmatch(s); m != nil {
+		switch m[1] {
+		case "401":
+			hint = "Authentication failed — check the token or API key."
+		case "403":
+			hint = "Authentication accepted but the account is not authorized for this resource."
+		case "404":
+			hint = "Server reachable but the configured library/section was not found."
+		case "500", "502", "503", "504":
+			hint = "Upstream server error — the media server returned " + m[1] + "."
+		}
+	}
+
+	s = errTagRe.ReplaceAllString(s, " ")
+	s = errSpaceRe.ReplaceAllString(s, " ")
+	s = strings.TrimSpace(s)
+
+	const maxLen = 200
+	if len(s) > maxLen {
+		s = strings.TrimSpace(s[:maxLen]) + "…"
+	}
+
+	if hint != "" {
+		return hint
+	}
+	return s
 }
 
 // writeSensitiveHTML emits an HTML fragment that may carry secrets
