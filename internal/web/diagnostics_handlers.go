@@ -10,13 +10,16 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
+	"github.com/mstrhakr/audplexus/internal/logging"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
 )
 
@@ -930,3 +933,53 @@ func normalizeDiagnosticsPathKey(p string) string {
 	return strings.ToLower(strings.Join(parts, "/"))
 }
 
+
+// handleDiagnosticsEnv returns a JSON snapshot of runtime + path
+// info for the DS-style "Logs & Environment" diagnostics tab. Read-only.
+func (s *Server) handleDiagnosticsEnv(c *gin.Context) {
+	ctx := c.Request.Context()
+	marketplace := "us"
+	if stored, _ := s.db.GetSetting(ctx, "audible_marketplace"); strings.TrimSpace(stored) != "" {
+		marketplace = strings.TrimSpace(stored)
+	} else if creds := s.audible.GetCredentials(); creds != nil && creds.Marketplace != "" {
+		marketplace = creds.Marketplace
+	}
+
+	var lastSyncOut gin.H
+	if last, err := s.db.GetLastSync(ctx); err == nil && last != nil {
+		lastSyncOut = gin.H{
+			"started_at":   last.StartedAt,
+			"completed_at": last.CompletedAt,
+			"status":       last.Status,
+			"books_found":  last.BooksFound,
+			"books_added":  last.BooksAdded,
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"go_version":      runtime.Version(),
+		"os_arch":         runtime.GOOS + "/" + runtime.GOARCH,
+		"num_cpu":         runtime.NumCPU(),
+		"audiobooks_path": s.audiobooksPath,
+		"downloads_path":  s.downloadsPath,
+		"config_path":     s.configPath,
+		"log_level":       logging.GetLevel(),
+		"authenticated":   s.audible.IsAuthenticated(),
+		"marketplace":     marketplace,
+		"last_sync":       lastSyncOut,
+		"server_time":     time.Now(),
+	})
+}
+
+// handleDiagnosticsLogsTail returns the most recent log lines from the
+// in-memory ring buffer (capped at 1024). Polled by the diagnostics
+// page every 2s while the Logs panel is visible.
+func (s *Server) handleDiagnosticsLogsTail(c *gin.Context) {
+	n := 200
+	if v := c.Query("n"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 1024 {
+			n = parsed
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"entries": logging.TailLogs(n)})
+}

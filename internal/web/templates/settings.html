@@ -1,9 +1,25 @@
 {{define "content"}}
-<h1>Settings</h1>
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1>Settings</h1>
+            <div class="sub">Server configuration. Changes save inline; some apply only after restart.</div>
+        </div>
+    </div>
 
-<div class="settings-container">
+    <div class="settings-layout">
+        <nav class="settings-nav" aria-label="Settings sections">
+            <div class="settings-nav-label">On this page</div>
+            <a href="#section-auth" data-section="section-auth" class="settings-nav-link active"><span class="settings-nav-dot"></span>Authentication</a>
+            <a href="#section-system" data-section="section-system" class="settings-nav-link"><span class="settings-nav-dot"></span>System Information</a>
+            <a href="#section-config" data-section="section-config" class="settings-nav-link"><span class="settings-nav-dot"></span>Configuration</a>
+            {{if .Devices}}<a href="#section-devices" data-section="section-devices" class="settings-nav-link"><span class="settings-nav-dot"></span>Registered Devices</a>{{end}}
+            <a href="#section-danger" data-section="section-danger" class="settings-nav-link"><span class="settings-nav-dot"></span>Danger Zone</a>
+        </nav>
+
+        <div class="settings-content settings-container">
     <!-- Authentication & Integrations -->
-    <div class="settings-section" id="auth-settings">
+    <div class="settings-section" id="section-auth" data-section="section-auth">
         <h2>Authentication & Integrations</h2>
 
         {{if .Error}}
@@ -106,64 +122,18 @@
 
             <section class="auth-panel" aria-labelledby="library-destinations-heading" id="library-destinations" style="grid-column: 1 / -1;">
                 <h3 id="library-destinations-heading">Library Destinations</h3>
-                <p class="muted" style="margin-top:.25rem;margin-bottom:.75rem">Where Audplexus pushes scans, item-matching, and series-collection work after each download. Multiple destinations of the same type are allowed (e.g. household + parents' Plex).</p>
-
-                {{if .Destinations}}
-                <ul role="list" class="destinations-list" style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.75rem">
-                    {{range .Destinations}}
-                    <li class="destination-card" aria-labelledby="dest-{{.ID}}-name" style="padding:.75rem;border:1px solid var(--border, #2a2f3a);border-radius:6px;">
-                        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem">
-                            <div>
-                                <h4 id="dest-{{.ID}}-name" style="margin:0 0 .25rem 0;font-size:1rem">{{.DisplayName}}</h4>
-                                <p style="margin:0;font-size:.85rem">
-                                    <span class="badge badge-type">{{.TypeLabel}}</span>
-                                    <span aria-hidden="true" class="muted">&middot;</span>
-                                    <span class="visually-hidden">Status: </span>
-                                    {{if eq .Health "healthy"}}<span class="badge badge-success">Healthy</span>
-                                    {{else if eq .Health "failed"}}<span class="badge badge-error">Failed</span>
-                                    {{else if eq .Health "never"}}<span class="badge badge-inactive">Never checked</span>
-                                    {{else}}<span class="badge badge-warning">Not configured</span>{{end}}
-                                    <span aria-hidden="true" class="muted">&middot;</span>
-                                    <span class="muted">Enabled: {{if .Enabled}}yes{{else}}no{{end}}</span>
-                                    {{if .URL}}<span aria-hidden="true" class="muted">&middot;</span> <span class="muted">{{.URL}}</span>{{end}}
-                                </p>
-                                {{if and (eq .Health "failed") .LastError}}
-                                <p style="margin:.25rem 0 0 0;font-size:.85rem"><small id="dest-{{.ID}}-err" class="muted">{{.LastError}}</small></p>
-                                {{end}}
-                            </div>
-                            <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-                                <a href="/destinations/{{.ID}}/edit" class="btn btn-outline btn-sm"
-                                   {{if and (eq .Health "failed") .LastError}}aria-describedby="dest-{{.ID}}-err"{{end}}>
-                                    Edit<span class="visually-hidden"> {{.DisplayName}}</span>
-                                </a>
-                                <form method="POST" action="/destinations/{{.ID}}/toggle" style="margin:0">
-                                    <button type="submit" class="btn btn-outline btn-sm">
-                                        {{if .Enabled}}Disable{{else}}Enable{{end}}<span class="visually-hidden"> {{.DisplayName}}</span>
-                                    </button>
-                                </form>
-                                <form method="POST" action="/destinations/{{.ID}}/delete" style="margin:0">
-                                    <button type="submit" class="btn btn-danger btn-sm">
-                                        Delete<span class="visually-hidden"> {{.DisplayName}}</span>
-                                    </button>
-                                </form>
-                            </div>
-                        </div>
-                    </li>
-                    {{end}}
-                </ul>
-                {{else}}
-                <p class="muted">No destinations configured yet. Add one to start fanning out scans, or set <code>MEDIA_SERVER</code> + per-type env vars and restart for first-boot synthesis.</p>
-                {{end}}
-
-                <p style="margin:1rem 0 0 0">
-                    <a href="/destinations/new" class="btn btn-primary">Add destination</a>
+                <p class="muted" style="margin-top:.25rem;margin-bottom:.75rem">
+                    Destination management moved to its own page so you can see item counts, coverage, and recent health alongside each server.
+                </p>
+                <p style="margin:.5rem 0 0 0">
+                    <a href="/destinations" class="btn btn-primary">Manage destinations →</a>
                 </p>
             </section>
         </div>
     </div>
 
     <!-- System Information -->
-    <div class="settings-section">
+    <div class="settings-section" id="section-system" data-section="section-system">
         <h2>System Information</h2>
 
         <h3 class="path-group-title">Audiobooks</h3>
@@ -192,7 +162,7 @@
     </div>
 
     <!-- Configuration Settings -->
-    <div class="settings-section">
+    <div class="settings-section" id="section-config" data-section="section-config">
         <h2>Configuration</h2>
         <form hx-post="/api/settings" hx-target="#save-status" hx-swap="innerHTML" class="settings-form settings-form-wide">
             <div class="settings-form-grid">
@@ -331,7 +301,7 @@
 
     <!-- Registered Devices -->
     {{if .Devices}}
-    <div class="settings-section">
+    <div class="settings-section" id="section-devices" data-section="section-devices">
         <h2>Registered Devices</h2>
         <table class="data-table">
             <thead>
@@ -357,7 +327,7 @@
     {{end}}
 
     <!-- Danger Zone -->
-    <div class="settings-section danger-section">
+    <div class="settings-section danger-section" id="section-danger" data-section="section-danger">
         <h2>Danger Zone</h2>
         <p class="danger-description">These actions are destructive and cannot be undone.</p>
 
@@ -372,15 +342,27 @@
 
             <div class="danger-action">
                 <div>
+                    <strong>Re-run Setup Wizard</strong>
+                    <p>Clear the "onboarded" flag and walk through the first-run wizard again. Doesn't touch books, downloads, or destinations — useful for testing the wizard or revisiting region/auth steps.</p>
+                </div>
+                <form method="POST" action="/setup/restart" style="margin:0">
+                    <button type="submit" class="btn btn-outline-ds">Re-run Wizard</button>
+                </form>
+            </div>
+
+            <div class="danger-action">
+                <div>
                     <strong>Factory Reset</strong>
-                    <p>Wipe all books, downloads, sync history, settings, and device registrations. Your audiobook files on disk will NOT be deleted.</p>
+                    <p>Wipe all books, downloads, sync history, settings, and device registrations. Your audiobook files on disk will NOT be deleted. After reset you'll be sent through the setup wizard again.</p>
                 </div>
                 <button type="button" class="btn btn-danger" onclick="confirmFactoryReset()">Factory Reset</button>
             </div>
         </div>
         <span id="reset-status"></span>
     </div>
-</div>
+</div>{{/* /.settings-content */}}
+    </div>{{/* /.settings-layout */}}
+</div>{{/* /.page */}}
 
 <!-- Restart confirmation modal -->
 <div id="restart-modal" class="modal-overlay restart-modal" style="display:none">
@@ -1022,5 +1004,50 @@ function confirmRestart() {
         border-color: #ff4444;
     }
 </style>
+
+<script>
+// Settings TOC scroll-spy — highlights the left-rail link whose section
+// is closest to the top of the viewport. Pure JS, no deps.
+(function() {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.settings-nav-link[data-section]'));
+    if (!links.length) return;
+    var sections = links
+        .map(function(a) { return document.getElementById(a.getAttribute('data-section')); })
+        .filter(Boolean);
+    if (!sections.length) return;
+
+    function setActive(id) {
+        links.forEach(function(a) {
+            if (a.getAttribute('data-section') === id) a.classList.add('active');
+            else a.classList.remove('active');
+        });
+    }
+
+    var obs = new IntersectionObserver(function(entries) {
+        // Pick the visible section nearest the top.
+        var visible = entries
+            .filter(function(e) { return e.isIntersecting; })
+            .sort(function(a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
+        if (visible[0]) setActive(visible[0].target.id);
+    }, { rootMargin: '-100px 0px -55% 0px', threshold: [0, 0.1, 0.5] });
+    sections.forEach(function(s) { obs.observe(s); });
+
+    // Smooth-scroll on link click (browsers do this for #anchor, but we
+    // also want to set active immediately so the highlight doesn't lag
+    // the scroll animation).
+    links.forEach(function(a) {
+        a.addEventListener('click', function(ev) {
+            var id = a.getAttribute('data-section');
+            var el = document.getElementById(id);
+            if (!el) return;
+            ev.preventDefault();
+            setActive(id);
+            var y = el.getBoundingClientRect().top + window.scrollY - 72;
+            window.scrollTo({ top: y, behavior: 'smooth' });
+            history.replaceState(null, '', '#' + id);
+        });
+    });
+})();
+</script>
 
 {{end}}

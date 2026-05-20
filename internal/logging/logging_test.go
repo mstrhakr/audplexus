@@ -2,7 +2,7 @@ package logging
 
 import (
 	"errors"
-	"os"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -43,15 +43,66 @@ func TestInitAndSetLevel(t *testing.T) {
 }
 
 func TestOutputWriterMode(t *testing.T) {
+	// outputWriter() now returns an io.MultiWriter that tees to both
+	// stderr (or ConsoleWriter) AND the in-memory ring buffer so the
+	// diagnostics page can serve a recent-log tail. The test asserts the
+	// mode-dependent behavior end-to-end: a JSON-mode write reaches the
+	// ring buffer as raw JSON, while console mode reaches it as the
+	// pretty-printed ConsoleWriter format. Both prove the writer is wired.
+	// Reset state BEFORE calling outputWriter(): the MultiWriter closes
+	// over the *current* ringBuf value, so swapping the package var
+	// after construction would write to a stale buffer. Also reset the
+	// zerolog global level — sibling tests (TestInitAndSetLevel) can
+	// leave it at "error", which would filter our Info() writes before
+	// they ever reach the writer.
+	ringBuf = newRingBuffer(16)
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	useJSONOutput = true
 	w := outputWriter()
-	if w != os.Stderr {
-		t.Fatalf("outputWriter() in json mode should return stderr")
+	if w == nil {
+		t.Fatalf("outputWriter() returned nil in json mode")
+	}
+	zl := zerolog.New(w).With().Timestamp().Logger()
+	zl.Info().Str("k", "v").Msg("json-mode")
+	jsonTail := ringBuf.Snapshot(0)
+	if len(jsonTail) == 0 || !strings.Contains(jsonTail[len(jsonTail)-1].Line, `"k":"v"`) {
+		t.Fatalf("json-mode writer did not reach ring buffer; tail=%v", jsonTail)
 	}
 
+	ringBuf = newRingBuffer(16)
 	useJSONOutput = false
-	if _, ok := outputWriter().(zerolog.ConsoleWriter); !ok {
-		t.Fatalf("outputWriter() in console mode should return zerolog.ConsoleWriter")
+	w2 := outputWriter()
+	if w2 == nil {
+		t.Fatalf("outputWriter() returned nil in console mode")
+	}
+	zl2 := zerolog.New(w2).With().Timestamp().Logger()
+	zl2.Info().Str("k", "v").Msg("console-mode")
+	consoleTail := ringBuf.Snapshot(0)
+	if len(consoleTail) == 0 || !strings.Contains(consoleTail[len(consoleTail)-1].Line, "console-mode") {
+		t.Fatalf("console-mode writer did not reach ring buffer; tail=%v", consoleTail)
+	}
+}
+
+func TestTailLogsRingBufferOrder(t *testing.T) {
+	ringBuf = newRingBuffer(3)
+	// Three writes, no eviction yet.
+	_, _ = ringBuf.Write([]byte("a\n"))
+	_, _ = ringBuf.Write([]byte("b\n"))
+	_, _ = ringBuf.Write([]byte("c\n"))
+	got := TailLogs(0)
+	if len(got) != 3 || got[0].Line != "a" || got[2].Line != "c" {
+		t.Fatalf("expected oldest-first [a b c], got %+v", got)
+	}
+	// Fourth write evicts the oldest.
+	_, _ = ringBuf.Write([]byte("d\n"))
+	got = TailLogs(0)
+	if len(got) != 3 || got[0].Line != "b" || got[2].Line != "d" {
+		t.Fatalf("expected [b c d] after eviction, got %+v", got)
+	}
+	// Limit n.
+	got = TailLogs(2)
+	if len(got) != 2 || got[0].Line != "c" || got[1].Line != "d" {
+		t.Fatalf("expected last 2 = [c d], got %+v", got)
 	}
 }
 
