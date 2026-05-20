@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -63,6 +64,13 @@ type Server struct {
 	// to render uptime ("6d 14h"). Not used for any business logic, so
 	// no need to plumb it through; reads from time.Since(s.startedAt).
 	startedAt time.Time
+	// onboarded mirrors the "onboarded" setting so firstRunGate (which
+	// runs on every GET) can answer from memory instead of hitting the
+	// DB. Seeded from the DB once in NewServer and flipped whenever
+	// handleSetupFinish/Skip/Restart or handleFactoryReset write the
+	// underlying setting. atomic.Bool because reads are middleware and
+	// writes are spread across a handful of handler goroutines.
+	onboarded atomic.Bool
 	// destItemCountCache caches per-destination LibraryItemCount results
 	// (30s TTL) so the dashboard's 12s poll doesn't hammer remote servers.
 	// Keyed by destination ID; entries expire independently.
@@ -110,6 +118,13 @@ func NewServer(
 		downloadsPath:  downloadsPath,
 		configPath:     configPath,
 		startedAt:      time.Now(),
+	}
+
+	// Seed the onboarded flag from the DB once. firstRunGate (which
+	// runs on every GET) reads s.onboarded.Load() after this — no per-
+	// request DB hit for the flag check.
+	if v, err := db.GetSetting(context.Background(), settingKeyOnboarded); err == nil && (v == "true" || v == "1") {
+		s.onboarded.Store(true)
 	}
 
 	// Wire up the media-server sync callbacks. With multi-destination, the
@@ -2583,7 +2598,11 @@ func (s *Server) handleFactoryReset(c *gin.Context) {
 	s.downloads.Start(context.Background())
 	webLog.Info().Msg("factory reset complete — database wiped, downloads cleared, credentials removed, pipeline restarted")
 
-	// db.Reset() truncates settings, so the onboarded flag is gone — the
+	// db.Reset() truncated the persisted onboarded flag along with
+	// every other setting. The in-memory mirror needs to follow so the
+	// firstRunGate sees first-run state on the next request.
+	s.onboarded.Store(false)
+
 	// firstRunGate will already redirect to /setup on the next page hit.
 	// Send the user there explicitly so the flow is obvious.
 	if c.GetHeader("HX-Request") == "true" {

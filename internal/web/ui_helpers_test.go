@@ -180,8 +180,11 @@ func TestFirstRunGate_OnceOnboarded(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newWebTestDB(t)
 	s := &Server{db: db}
-	if err := db.SetSetting(t.Context(), settingKeyOnboarded, "1"); err != nil {
-		t.Fatalf("SetSetting() error = %v", err)
+	// Flip the in-memory mirror via the same helper handlers use, so
+	// firstRunGate's atomic.Bool.Load() returns true. setOnboarded
+	// also persists "1" to the DB for symmetry with the real boot path.
+	if err := s.setOnboarded(t.Context(), true); err != nil {
+		t.Fatalf("setOnboarded() error = %v", err)
 	}
 
 	for _, path := range []string{"/", "/library", "/downloads", "/destinations"} {
@@ -198,6 +201,40 @@ func TestFirstRunGate_OnceOnboarded(t *testing.T) {
 				t.Fatalf("status = %d, want 200 (onboarded should pass through); Location=%q", w.Code, w.Header().Get("Location"))
 			}
 		})
+	}
+}
+
+// TestSetOnboarded round-trips the onboarded flag through both the
+// in-memory atomic and the DB. Reset+seed cycle mirrors the real
+// flow: handleSetupFinish → setOnboarded(true) → firstRunGate stops
+// redirecting; handleSetupRestart / handleFactoryReset →
+// setOnboarded(false) → firstRunGate resumes redirecting.
+func TestSetOnboarded(t *testing.T) {
+	db := newWebTestDB(t)
+	s := &Server{db: db}
+
+	if s.onboarded.Load() != false {
+		t.Fatalf("fresh Server.onboarded = true, want false")
+	}
+
+	if err := s.setOnboarded(t.Context(), true); err != nil {
+		t.Fatalf("setOnboarded(true): %v", err)
+	}
+	if !s.onboarded.Load() {
+		t.Fatalf("after setOnboarded(true): atomic still false")
+	}
+	if v, _ := db.GetSetting(t.Context(), settingKeyOnboarded); v != "1" {
+		t.Fatalf("DB onboarded = %q, want \"1\"", v)
+	}
+
+	if err := s.setOnboarded(t.Context(), false); err != nil {
+		t.Fatalf("setOnboarded(false): %v", err)
+	}
+	if s.onboarded.Load() {
+		t.Fatalf("after setOnboarded(false): atomic still true")
+	}
+	if v, _ := db.GetSetting(t.Context(), settingKeyOnboarded); v != "" {
+		t.Fatalf("DB onboarded = %q, want empty string", v)
 	}
 }
 

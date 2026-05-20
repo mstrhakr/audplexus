@@ -32,10 +32,31 @@ var setupSteps = []setupStep{
 }
 
 // isFirstRun returns true when the wizard has neither been completed nor
-// skipped yet. Used by the dashboard gate to redirect new installs to
-// /setup automatically.
+// skipped yet. Reads from s.onboarded (atomic.Bool) so firstRunGate can
+// answer for free on every GET — the DB-backed setting is the source
+// of truth, but it's only read once at boot in NewServer and on
+// targeted writes via setOnboarded.
+//
+// ctx kept in the signature for symmetry with the rest of the auth-
+// adjacent helpers, even though the atomic read doesn't need it.
 func (s *Server) isFirstRun(ctx context.Context) bool {
-	return !s.settingBool(ctx, settingKeyOnboarded, false)
+	return !s.onboarded.Load()
+}
+
+// setOnboarded persists the onboarded flag to the DB and updates the
+// in-memory mirror in lockstep. value=true writes "1" and flips the
+// atomic on; value=false writes "" (empty string is treated as not-
+// onboarded by GetSetting → settingBool conventions) and flips it off.
+func (s *Server) setOnboarded(ctx context.Context, value bool) error {
+	stored := ""
+	if value {
+		stored = "1"
+	}
+	if err := s.db.SetSetting(ctx, settingKeyOnboarded, stored); err != nil {
+		return err
+	}
+	s.onboarded.Store(value)
+	return nil
 }
 
 // handleSetupWizard renders the onboarding wizard. ?step= selects which
@@ -103,7 +124,7 @@ func (s *Server) handleSetupMarketplace(c *gin.Context) {
 // nothing to sync against.
 func (s *Server) handleSetupFinish(c *gin.Context) {
 	ctx := c.Request.Context()
-	_ = s.db.SetSetting(ctx, settingKeyOnboarded, "1")
+	_ = s.setOnboarded(ctx, true)
 
 	if s.audible.IsAuthenticated() {
 		// Fire-and-forget — sync runs asynchronously; UI will show progress
@@ -122,7 +143,7 @@ func (s *Server) handleSetupFinish(c *gin.Context) {
 // the "Skip setup" link on step 0. Useful for testing or for users who
 // configured everything via env vars before first boot.
 func (s *Server) handleSetupSkip(c *gin.Context) {
-	_ = s.db.SetSetting(c.Request.Context(), settingKeyOnboarded, "1")
+	_ = s.setOnboarded(c.Request.Context(), true)
 	c.Redirect(http.StatusSeeOther, "/")
 }
 
@@ -130,7 +151,7 @@ func (s *Server) handleSetupSkip(c *gin.Context) {
 // to step 0. Triggered by the "Re-run setup wizard" button in Settings
 // (for testing) and from the post-factory-reset redirect.
 func (s *Server) handleSetupRestart(c *gin.Context) {
-	_ = s.db.SetSetting(c.Request.Context(), settingKeyOnboarded, "")
+	_ = s.setOnboarded(c.Request.Context(), false)
 	c.Redirect(http.StatusSeeOther, "/setup")
 }
 
