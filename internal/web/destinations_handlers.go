@@ -1124,20 +1124,41 @@ func (s *Server) handleDestinationUpdate(c *gin.Context) {
 	})
 }
 
-// handleDestinationToggle flips the enabled flag.
+// handleDestinationToggle flips the enabled flag. HTMX callers get the
+// rebuilt card body back (outerHTML swap target); plain POSTs (curl,
+// scripts) get a redirect to /destinations.
 func (s *Server) handleDestinationToggle(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
-	d, err := s.db.GetLibraryDestination(c.Request.Context(), id)
+	d, err := s.db.GetLibraryDestination(ctx, id)
 	if err != nil || d == nil {
-		s.renderAuthPage(c, http.StatusNotFound, gin.H{"Error": "Destination not found."})
+		if c.GetHeader("HX-Request") == "true" {
+			c.String(http.StatusNotFound, "Destination not found.")
+			return
+		}
+		c.String(http.StatusNotFound, "Destination not found.")
 		return
 	}
 	d.Enabled = !d.Enabled
-	if err := s.db.UpdateLibraryDestination(c.Request.Context(), d); err != nil {
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Could not toggle: " + err.Error()})
+	if err := s.db.UpdateLibraryDestination(ctx, d); err != nil {
+		if c.GetHeader("HX-Request") == "true" {
+			c.String(http.StatusInternalServerError, "Could not toggle: "+err.Error())
+			return
+		}
+		c.String(http.StatusInternalServerError, "Could not toggle: "+err.Error())
 		return
 	}
-	c.Redirect(http.StatusSeeOther, "/settings#library-destinations")
+
+	if c.GetHeader("HX-Request") == "true" {
+		v := s.singleDestinationSummary(ctx, id)
+		if v == nil {
+			c.String(http.StatusInternalServerError, "Could not reload destination view.")
+			return
+		}
+		c.HTML(http.StatusOK, "destination_card_body", gin.H{"Dest": v})
+		return
+	}
+	c.Redirect(http.StatusSeeOther, "/destinations")
 }
 
 // handleDestinationDeleteModal returns the delete-confirm body that opens

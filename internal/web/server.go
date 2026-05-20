@@ -293,7 +293,7 @@ func (s *Server) setupTemplates() {
 	base := template.Must(template.New("base").Funcs(funcMap).ParseFS(templateFS, "templates/base.html"))
 
 	// Parse all partial/fragment templates that may be referenced by page templates
-	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html", "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html"}
+	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html", "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html", "templates/destinations_card.html"}
 	baseWithPartials := template.Must(template.Must(base.Clone()).ParseFS(templateFS, partials...))
 
 	r := &multiRender{templates: make(map[string]*template.Template)}
@@ -338,10 +338,11 @@ func (s *Server) setupTemplates() {
 	// point, so "destination_picker_body" / "destination_form_body" /
 	// "destination_delete_body" execute the matching {{define …}} block
 	// directly without going through base.
-	destModalSet := template.Must(template.Must(template.New("dest_modal").Funcs(funcMap).ParseFS(templateFS, "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html")).Clone())
+	destModalSet := template.Must(template.Must(template.New("dest_modal").Funcs(funcMap).ParseFS(templateFS, "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html", "templates/destinations_card.html")).Clone())
 	r.templates["destination_picker_body"] = destModalSet
 	r.templates["destination_form_body"] = destModalSet
 	r.templates["destination_delete_body"] = destModalSet
+	r.templates["destination_card_body"] = destModalSet
 
 	s.router.HTMLRender = r
 }
@@ -662,57 +663,79 @@ func (s *Server) destinationSummaries(ctx context.Context, completeBooks int) []
 	out := make([]destinationSummaryView, 0, len(rows))
 	for _, r := range rows {
 		row := r
-		v := destinationSummaryView{
-			ID:            row.ID,
-			DisplayName:   row.DisplayName,
-			Type:          string(row.Type),
-			TypeLabel:     destinationTypeLabel(row.Type),
-			Enabled:       row.Enabled,
-			Configured:    destinationConfigured(&row),
-			URL:           row.URL,
-			Health:        summarizeHealth(&row),
-			LastError:     row.LastHealthCheckErr,
-			LastCheckedAt: row.LastHealthCheckAt,
-		}
-
-		if !v.Enabled || !v.Configured {
-			out = append(out, v)
-			continue
-		}
-
-		// Construct a backend instance bound to this destination row so
-		// LibraryItemCount uses the row's URL/api_key, not the legacy
-		// settings table.
-		backend, err := s.buildDestinationBackend(&row)
-		if err != nil {
-			v.HealthDetail = err.Error()
-			out = append(out, v)
-			continue
-		}
-
-		count, err := s.getCachedDestinationItemCount(ctx, row.ID, backend)
-		if err != nil {
-			webLog.Debug().Err(err).Str("destination_id", row.ID).Str("destination_name", row.DisplayName).Msg("dashboard: destination item count failed")
-			v.Health = "failed"
-			v.HealthDetail = err.Error()
-		} else {
-			v.ItemCount = count
-			v.ItemCountSet = true
-			if completeBooks > 0 {
-				cov := int(math.Round((float64(count) / float64(completeBooks)) * 100))
-				if cov < 0 {
-					cov = 0
-				}
-				if cov > 100 {
-					cov = 100
-				}
-				v.Coverage = cov
-				v.CoverageSet = true
-			}
-		}
-		out = append(out, v)
+		out = append(out, s.buildDestinationSummary(ctx, &row, completeBooks))
 	}
 	return out
+}
+
+// singleDestinationSummary returns the same view-model the destinations
+// page builds for one row. Used by handleDestinationToggle /
+// handleDestinationTest to swap a single card after a mutation without
+// reloading the whole grid. Returns nil if the destination doesn't
+// exist or the lookup fails.
+func (s *Server) singleDestinationSummary(ctx context.Context, id string) *destinationSummaryView {
+	row, err := s.db.GetLibraryDestination(ctx, id)
+	if err != nil || row == nil {
+		return nil
+	}
+	// Coverage % is relative to the count of complete books; we need
+	// that number for the meter to render the same as it does on the
+	// full grid. Cheap LIMIT-1 count.
+	completeStatus := database.BookStatusComplete
+	_, completeBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
+	v := s.buildDestinationSummary(ctx, row, completeBooks)
+	return &v
+}
+
+// buildDestinationSummary is the per-row factory shared by the grid
+// builder and the single-row swap path. Probes LibraryItemCount (with
+// the 30s cache) only for enabled+configured destinations so toggling
+// a disabled row stays cheap.
+func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, completeBooks int) destinationSummaryView {
+	v := destinationSummaryView{
+		ID:            row.ID,
+		DisplayName:   row.DisplayName,
+		Type:          string(row.Type),
+		TypeLabel:     destinationTypeLabel(row.Type),
+		Enabled:       row.Enabled,
+		Configured:    destinationConfigured(row),
+		URL:           row.URL,
+		Health:        summarizeHealth(row),
+		LastError:     row.LastHealthCheckErr,
+		LastCheckedAt: row.LastHealthCheckAt,
+	}
+
+	if !v.Enabled || !v.Configured {
+		return v
+	}
+
+	backend, err := s.buildDestinationBackend(row)
+	if err != nil {
+		v.HealthDetail = err.Error()
+		return v
+	}
+
+	count, err := s.getCachedDestinationItemCount(ctx, row.ID, backend)
+	if err != nil {
+		webLog.Debug().Err(err).Str("destination_id", row.ID).Str("destination_name", row.DisplayName).Msg("dashboard: destination item count failed")
+		v.Health = "failed"
+		v.HealthDetail = err.Error()
+		return v
+	}
+	v.ItemCount = count
+	v.ItemCountSet = true
+	if completeBooks > 0 {
+		cov := int(math.Round((float64(count) / float64(completeBooks)) * 100))
+		if cov < 0 {
+			cov = 0
+		}
+		if cov > 100 {
+			cov = 100
+		}
+		v.Coverage = cov
+		v.CoverageSet = true
+	}
+	return v
 }
 
 // buildDestinationBackend delegates to DestinationManager.BuildBackend
