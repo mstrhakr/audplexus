@@ -40,6 +40,8 @@
     <div id="dashboard-downloads" hx-get="/api/dashboard/downloads" hx-trigger="load, every 12s queue:last" hx-swap="innerHTML">
         {{template "dashboard_downloads.html" .}}
     </div>
+
+    {{template "book_detail_modal.html" .}}
 </div>
 
 <style>

@@ -1593,6 +1593,30 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     flex-shrink: 0;
 }
 
+/* ── Icon-only square button ─────────────────────────────────────── */
+.btn-icon {
+    padding: 0.35rem;
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
+    flex-shrink: 0;
+}
+.btn-icon svg { display: block; }
+
+/* ── Dashboard table links (Recent completions / failures) ───────── */
+.tbl a.book-detail-link,
+.tbl a.book-detail-link:hover,
+.tbl a.book-detail-link:visited {
+    color: inherit;
+    text-decoration: none;
+}
+.tbl a.book-detail-link:hover { color: var(--accent); }
+.tbl a.book-detail-link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+}
+
 .empty { text-align: center; color: var(--text-muted); padding: 2rem; }
 .result-count { color: var(--text-muted); margin-bottom: 0.75rem; font-size: 0.9rem; }
 

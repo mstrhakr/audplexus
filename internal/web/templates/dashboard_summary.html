@@ -40,11 +40,65 @@
         </span>
     </div>
     {{if .DestinationSummaries}}
-    <div class="dest-grid destination-summary-list">
+    <ul role="list" aria-live="polite" aria-atomic="false" class="dest-grid destination-summary-list" style="list-style:none;padding:0;margin:0">
         {{range .DestinationSummaries}}
-        {{template "destination_card_body" (dict "Dest" .)}}
+        <li class="dest-card {{.Type}}" id="dest-card-{{.ID}}" aria-labelledby="dest-sum-{{.ID}}-name">
+            <span class="dest-ribbon"></span>
+            <div class="dest-head">
+                <span class="type-icon">{{firstTwo .TypeLabel}}</span>
+                <div class="dest-head-text">
+                    <div class="dest-name" id="dest-sum-{{.ID}}-name">{{.DisplayName}}</div>
+                    <div class="dest-url">{{if .URL}}{{.URL}}{{else}}{{.TypeLabel}}{{end}}</div>
+                </div>
+                <div class="dest-head-status">
+                    {{if not .Enabled}}<span class="badge badge-inactive" role="status">Disabled</span>
+                    {{else if eq .Health "healthy"}}<span class="badge badge-success" role="status">Healthy</span>
+                    {{else if eq .Health "failed"}}<span class="badge badge-error" role="status">Failed</span>
+                    {{else if eq .Health "never"}}<span class="badge badge-inactive" role="status">Never checked</span>
+                    {{else}}<span class="badge badge-warning" role="status">Not configured</span>{{end}}
+                </div>
+            </div>
+            {{if .ItemCountSet}}
+            <div class="dest-row">
+                <span><b aria-live="off">{{.ItemCount}}</b> items</span>
+                {{if .CoverageSet}}
+                <span class="coverage-meter" aria-label="Coverage {{.Coverage}}%">
+                    <span class="fill{{if lt .Coverage 50}} bad{{else if lt .Coverage 90}} warn{{end}}" style="display:block;width:{{.Coverage}}%;height:100%"></span>
+                </span>
+                <b aria-live="off" style="font-size:.76rem">{{.Coverage}}%</b>
+                {{end}}
+            </div>
+            {{end}}
+            {{if .HealthDetail}}
+            <div class="dest-row" style="color:#ff9b9b;font-size:.72rem">{{.HealthDetail}}</div>
+            {{end}}
+            <div class="dest-actions">
+                <span class="dest-checked">
+                    {{if .LastCheckedAt}}
+                    Last check <time datetime="{{(.LastCheckedAt).Format "2006-01-02T15:04:05Z07:00"}}">{{formatDate (.LastCheckedAt | deref)}}</time>
+                    {{else}}Never checked{{end}}
+                </span>
+                <span class="dest-actions-buttons">
+                    <button type="button" class="btn btn-ghost btn-icon"
+                        hx-post="/destinations/{{.ID}}/test"
+                        hx-swap="none"
+                        hx-on::before-request="this.disabled=true"
+                        hx-on::after-request="setTimeout(function(){location.reload()},600)"
+                        title="Test connection" aria-label="Test {{.DisplayName}}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    </button>
+                    <button type="button" class="btn btn-ghost btn-icon"
+                        hx-get="/destinations/{{.ID}}/edit"
+                        hx-target="#dest-modal-content"
+                        hx-swap="innerHTML"
+                        title="Configure" aria-label="Configure {{.DisplayName}}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    </button>
+                </span>
+            </div>
+        </li>
         {{end}}
-    </div>
+    </ul>
     {{else}}
     <div class="empty-card">
         No destinations configured.
