@@ -87,6 +87,22 @@ func summarizeHealth(d *database.LibraryDestination) string {
 	return "failed"
 }
 
+// setDestModalTrigger sets the HX-Trigger header to fire `event` on
+// document.body with the given payload. Uses encoding/json so that
+// user-controlled fields (DisplayName especially) can't break out of
+// the JSON envelope or smuggle in sibling events.
+//
+// json.Marshal can't fail for map[string]map[string]string, so we
+// ignore the error — the alternative (skipping the header on error)
+// would silently break the modal's auto-close.
+func setDestModalTrigger(c *gin.Context, event string, payload map[string]string) {
+	if payload == nil {
+		payload = map[string]string{}
+	}
+	encoded, _ := json.Marshal(map[string]map[string]string{event: payload})
+	c.Header("HX-Trigger", string(encoded))
+}
+
 func destinationConfigured(d *database.LibraryDestination) bool {
 	if strings.TrimSpace(d.URL) == "" {
 		return false
@@ -972,7 +988,7 @@ func (s *Server) handleDestinationsCreate(c *gin.Context) {
 		// page that opened the modal can refresh its destinations list /
 		// advance its state. The body is the success confirmation that
 		// replaces the form inside the modal until the page reacts.
-		c.Header("HX-Trigger", `{"dest-created":{"id":"`+d.ID+`","name":"`+d.DisplayName+`"}}`)
+		setDestModalTrigger(c, "dest-created", map[string]string{"id": d.ID, "name": d.DisplayName})
 		c.HTML(http.StatusOK, "destination_form_body", gin.H{
 			"ModalMode":     true,
 			"ModalSuccess":  true,
@@ -1097,7 +1113,7 @@ func (s *Server) handleDestinationUpdate(c *gin.Context) {
 		return
 	}
 
-	c.Header("HX-Trigger", `{"dest-updated":{"id":"`+updated.ID+`","name":"`+updated.DisplayName+`"}}`)
+	setDestModalTrigger(c, "dest-updated", map[string]string{"id": updated.ID, "name": updated.DisplayName})
 	c.HTML(http.StatusOK, "destination_form_body", gin.H{
 		"ModalSuccess":     true,
 		"ModalSuccessVerb": "updated",
@@ -1192,7 +1208,7 @@ func (s *Server) handleDestinationDelete(c *gin.Context) {
 		return
 	}
 
-	c.Header("HX-Trigger", `{"dest-deleted":{"id":"`+d.ID+`"}}`)
+	setDestModalTrigger(c, "dest-deleted", map[string]string{"id": d.ID})
 	c.HTML(http.StatusOK, "destination_delete_body", gin.H{
 		"ModalSuccess": true,
 		"Dest": destinationView{
