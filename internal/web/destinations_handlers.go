@@ -938,48 +938,51 @@ func writeSensitiveHTML(c *gin.Context, body string) {
 	c.String(http.StatusOK, body)
 }
 
-// handleDestinationsCreate persists a new destination after the form submit.
-// Behaves differently depending on the modal-mode header:
+// handleDestinationsCreate persists a new destination after the form
+// submit. Invoked from the modal (HTMX, X-Dest-Modal=1 header) on the
+// happy path; non-modal callers (raw POST from curl/scripts) still
+// work and get a plain redirect.
 //
-//   - X-Dest-Modal=1: render an HX-Trigger response so the modal closes
-//     and the parent page (Destinations list, wizard step 3) refreshes
-//     without a full reload.
-//   - otherwise: legacy redirect to /destinations (full-page form path).
+// On modal success we set the HX-Trigger header so the global modal
+// helper closes the overlay and reloads the parent page. On modal
+// failure we re-render the form body with FormError set so the user
+// can correct and resubmit without losing the in-progress values
+// they've already typed.
 func (s *Server) handleDestinationsCreate(c *gin.Context) {
 	modal := c.GetHeader("X-Dest-Modal") == "1"
+	ctx := c.Request.Context()
 
 	d, err := s.destinationFromForm(c, "")
 	if err != nil {
 		if modal {
-			data := s.authBaseData(c.Request.Context())
-			data["DestType"] = c.PostForm("type")
-			data["DestTypeLabel"] = destinationTypeLabel(database.LibraryDestinationType(c.PostForm("type")))
-			data["ModalMode"] = true
-			data["FormError"] = err.Error()
-			c.HTML(http.StatusBadRequest, "destination_form_body", data)
+			t := c.PostForm("type")
+			c.HTML(http.StatusBadRequest, "destination_form_body", gin.H{
+				"DestType":      t,
+				"DestTypeLabel": destinationTypeLabel(database.LibraryDestinationType(t)),
+				"FormError":     err.Error(),
+			})
 			return
 		}
-		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": err.Error()})
+		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
 	// Disambiguate display names — turns "Plex" + "Plex" into "Plex" +
 	// "Plex (2)". Only fires when a collision exists, so a single Plex
 	// destination stays plainly named "Plex".
-	d.DisplayName = s.uniqueDisplayName(c.Request.Context(), d.DisplayName, "")
+	d.DisplayName = s.uniqueDisplayName(ctx, d.DisplayName, "")
 	d.ID = uuid.NewString()
 	d.Enabled = true
 	d.CreatedAt = time.Now().UTC()
-	if err := s.db.CreateLibraryDestination(c.Request.Context(), d); err != nil {
+	if err := s.db.CreateLibraryDestination(ctx, d); err != nil {
 		if modal {
-			data := s.authBaseData(c.Request.Context())
-			data["DestType"] = string(d.Type)
-			data["DestTypeLabel"] = destinationTypeLabel(d.Type)
-			data["ModalMode"] = true
-			data["FormError"] = "Could not create destination: " + err.Error()
-			c.HTML(http.StatusInternalServerError, "destination_form_body", data)
+			c.HTML(http.StatusInternalServerError, "destination_form_body", gin.H{
+				"DestType":      string(d.Type),
+				"DestTypeLabel": destinationTypeLabel(d.Type),
+				"FormError":     "Could not create destination: " + err.Error(),
+			})
 			return
 		}
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Could not create destination: " + err.Error()})
+		c.String(http.StatusInternalServerError, "Could not create destination: "+err.Error())
 		return
 	}
 
@@ -990,7 +993,6 @@ func (s *Server) handleDestinationsCreate(c *gin.Context) {
 		// replaces the form inside the modal until the page reacts.
 		setDestModalTrigger(c, "dest-created", map[string]string{"id": d.ID, "name": d.DisplayName})
 		c.HTML(http.StatusOK, "destination_form_body", gin.H{
-			"ModalMode":     true,
 			"ModalSuccess":  true,
 			"DestTypeLabel": destinationTypeLabel(d.Type),
 			"Dest":          d,
