@@ -1,16 +1,27 @@
 {{define "library_row.html"}}
 <tr id="book-row-{{.Book.ID}}">
-    <td class="cover-cell">
+    <td class="col-cover">
         {{if .Book.CoverURL}}<img src="{{.Book.CoverURL}}" alt="" class="cover-thumb">{{end}}
     </td>
     <td>
-        <a href="/library/{{.Book.ID}}" class="book-detail-link" data-book-id="{{.Book.ID}}">{{.Book.Title}}</a>
-        {{if .Book.Series}}<br><small>{{.Book.Series}} #{{.Book.SeriesPosition}}</small>{{end}}
+        <div class="cell-title">
+            <a href="/library/{{.Book.ID}}" class="book-detail-link" data-book-id="{{.Book.ID}}">{{.Book.Title}}</a>
+            {{if .Book.Narrator}}<small>narr. {{.Book.Narrator}}</small>{{end}}
+        </div>
     </td>
     <td>{{.Book.Author}}</td>
-    <td>{{formatDuration .Book.Duration}}</td>
+    <td>
+        {{if .Book.Series}}<span class="cell-mono" style="color:var(--text)">{{.Book.Series}} #{{.Book.SeriesPosition}}</span>
+        {{else}}<span class="cell-mono">—</span>{{end}}
+    </td>
+    <td class="cell-mono">{{formatDuration .Book.Duration}}</td>
+    <td class="cell-mono">{{formatDate .Book.PurchaseDate}}</td>
     <td><span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span></td>
     <td>
+        {{if .Book.FilePath}}<span class="dest-chip abs" title="On disk">A</span>
+        {{else}}<span class="cell-mono">—</span>{{end}}
+    </td>
+    <td class="col-actions">
         <div class="table-actions" id="book-actions-{{.Book.ID}}" data-book-id="{{.Book.ID}}" data-asin="{{.Book.ASIN}}">
             <div class="library-row-default-actions{{if .BookAction.ShowCancel}} is-hidden{{end}}">
             {{if eq (printf "%s" .Book.Status) "new"}}
@@ -31,7 +42,7 @@
                 hx-confirm="{{.BookAction.DeleteConfirm}}"
                 hx-target="#book-row-{{.Book.ID}}"
                 hx-swap="outerHTML"
-                class="btn btn-small btn-danger">Delete Files</button>
+                class="btn btn-small btn-danger">Delete</button>
             {{end}}
             </div>
 

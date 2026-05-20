@@ -1,57 +1,82 @@
 {{define "content"}}
-<h1>Library</h1>
-
-<div class="actions-bar">
-    <div class="btn-group">
-        <button hx-post="/api/sync/quick" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-secondary" title="Update Audible library only — fast check for new books">
-            Quick Sync
-        </button>
-        <button hx-post="/api/sync/full" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-primary" title="Full sync: Audible + filesystem scan + media server library check">
-            Full Sync
-        </button>
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1>Library</h1>
+            <div class="sub">{{.Total}} items synced from Audible.</div>
+        </div>
+        <div class="actions">
+            <div class="btn-group">
+                <button hx-post="/api/sync/quick" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-secondary" title="Update Audible library only — fast check for new books">Quick Sync</button>
+                <button hx-post="/api/sync/full" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-primary" title="Full sync: Audible + filesystem scan + media server library check">Full Sync</button>
+            </div>
+            <button hx-post="/api/downloads/queue-all" hx-swap="none" class="btn btn-primary">Queue New ({{index .StatusCounts "new"}})</button>
+            <button hx-post="/api/downloads/retry-all" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-danger">Retry Failed</button>
+        </div>
     </div>
-    <button hx-post="/api/downloads/queue-all" hx-swap="none" class="btn btn-secondary">
-        Queue All New
-    </button>
-    <button hx-post="/api/downloads/retry-all" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-danger">
-        Retry All Failed
-    </button>
-    <button hx-post="/api/library/reorganize" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-secondary">
-        Reorganize Library
-    </button>
-</div>
 
-<div class="sync-status-row">
     <span id="sync-status" class="sync-status-wrap" hx-get="/api/sync/status" hx-trigger="load" hx-swap="innerHTML"></span>
-</div>
 
-<div class="search-bar">
-    <input type="text" name="search" placeholder="Search books..."
-           hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
-           hx-trigger="keyup changed delay:300ms" hx-include="[name='status'],[name='sort'],[name='dir']"
-           value="{{.Filter.Search}}">
-    <select name="status" aria-label="Filter books by status"
-            hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
-            hx-trigger="change" hx-include="[name='search'],[name='sort'],[name='dir']">
-        <option value="">All Statuses</option>
-        <option value="new">New</option>
-        <option value="queued">Queued</option>
-        <option value="downloading">Downloading</option>
-        <option value="complete">Complete</option>
-        <option value="failed">Failed</option>
-    </select>
-</div>
+    {{$active := .ActiveStatus}}
+    {{$search := .Filter.Search}}
+    <div class="tabs" role="tablist" aria-label="Filter library by status">
+        <a href="/library{{if $search}}?search={{$search}}{{end}}" class="{{if eq $active ""}}active{{end}}" role="tab">All <span class="count">{{index .StatusCounts "all"}}</span></a>
+        <a href="/library?status=new{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "new"}}active{{end}}" role="tab">New <span class="count">{{index .StatusCounts "new"}}</span></a>
+        <a href="/library?status=downloading{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "downloading"}}active{{end}}" role="tab">In Progress <span class="count">{{index .StatusCounts "in_progress"}}</span></a>
+        <a href="/library?status=queued{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "queued"}}active{{end}}" role="tab">Waiting <span class="count">{{index .StatusCounts "waiting"}}</span></a>
+        <a href="/library?status=complete{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "complete"}}active{{end}}" role="tab">Complete <span class="count">{{index .StatusCounts "complete"}}</span></a>
+        <a href="/library?status=failed{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "failed"}}active{{end}}" role="tab">Failed <span class="count">{{index .StatusCounts "failed"}}</span></a>
+    </div>
 
-<div class="table-container" id="book-table">
-    {{template "library_table.html" .}}
-</div>
+    <div class="filter-bar">
+        <div class="search-input">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" name="search" placeholder="Search title, author, narrator, ASIN…"
+                   hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
+                   hx-trigger="keyup changed delay:300ms"
+                   hx-include="[name='status'],[name='sort'],[name='dir']"
+                   value="{{$search}}">
+        </div>
+        <select name="status" aria-label="Filter books by status"
+                hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
+                hx-trigger="change"
+                hx-include="[name='search'],[name='sort'],[name='dir']">
+            <option value="" {{if eq $active ""}}selected{{end}}>All statuses</option>
+            <option value="new" {{if eq $active "new"}}selected{{end}}>New</option>
+            <option value="queued" {{if eq $active "queued"}}selected{{end}}>Queued</option>
+            <option value="downloading" {{if eq $active "downloading"}}selected{{end}}>Downloading</option>
+            <option value="complete" {{if eq $active "complete"}}selected{{end}}>Complete</option>
+            <option value="failed" {{if eq $active "failed"}}selected{{end}}>Failed</option>
+        </select>
+        <select name="sort" aria-label="Sort by"
+                hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
+                hx-trigger="change"
+                hx-include="[name='search'],[name='status'],[name='dir']">
+            <option value="purchase_date" {{if eq .Filter.SortBy "purchase_date"}}selected{{end}}>Purchased</option>
+            <option value="title" {{if eq .Filter.SortBy "title"}}selected{{end}}>Title</option>
+            <option value="author" {{if eq .Filter.SortBy "author"}}selected{{end}}>Author</option>
+            <option value="status" {{if eq .Filter.SortBy "status"}}selected{{end}}>Status</option>
+        </select>
+        <select name="dir" aria-label="Sort direction"
+                hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
+                hx-trigger="change"
+                hx-include="[name='search'],[name='status'],[name='sort']">
+            <option value="desc" {{if eq .Filter.SortDir "desc"}}selected{{end}}>Desc</option>
+            <option value="asc" {{if eq .Filter.SortDir "asc"}}selected{{end}}>Asc</option>
+        </select>
+    </div>
 
-<div id="book-detail-modal" class="library-modal" aria-hidden="true" style="display:none;">
-    <div class="library-modal-backdrop" data-close-book-modal></div>
-    <div class="library-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="book-detail-modal-title">
-        <button type="button" class="library-modal-close" data-close-book-modal aria-label="Close details">&times;</button>
-        <div id="book-detail-modal-content" class="library-modal-content">
-            <p class="muted">Loading book details...</p>
+    <div id="book-table">
+        {{template "library_table.html" .}}
+    </div>
+
+    <div id="book-detail-modal" class="library-modal" aria-hidden="true" style="display:none;">
+        <div class="library-modal-backdrop" data-close-book-modal></div>
+        <div class="library-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="book-detail-modal-title">
+            <button type="button" class="library-modal-close" data-close-book-modal aria-label="Close details">&times;</button>
+            <div id="book-detail-modal-content" class="library-modal-content">
+                <p class="muted">Loading book details...</p>
+            </div>
         </div>
     </div>
 </div>
@@ -178,19 +203,8 @@
 </script>
 
 <style>
-.library-modal {
-    position: fixed;
-    inset: 0;
-    z-index: 1200;
-}
-
-.library-modal-backdrop {
-    position: absolute;
-    inset: 0;
-    background: rgba(7, 10, 18, 0.72);
-    backdrop-filter: blur(1px);
-}
-
+.library-modal { position: fixed; inset: 0; z-index: 1200; }
+.library-modal-backdrop { position: absolute; inset: 0; background: rgba(7, 10, 18, 0.72); backdrop-filter: blur(1px); }
 .library-modal-dialog {
     position: relative;
     width: min(960px, calc(100vw - 2rem));
@@ -202,7 +216,6 @@
     box-shadow: 0 22px 48px rgba(0, 0, 0, 0.45);
     overflow: auto;
 }
-
 .library-modal-close {
     position: sticky;
     top: 0.5rem;
@@ -219,25 +232,11 @@
     line-height: 1;
     z-index: 1;
 }
-
-.library-modal-content {
-    padding: 1rem 1.5rem 1.5rem;
-}
-
-.library-modal-content .book-detail {
-    margin-top: 0.5rem;
-}
-
+.library-modal-content { padding: 1rem 1.5rem 1.5rem; }
+.library-modal-content .book-detail { margin-top: 0.5rem; }
 @media (max-width: 860px) {
-    .library-modal-dialog {
-        width: calc(100vw - 1rem);
-        margin: 0.5rem auto;
-        max-height: calc(100vh - 1rem);
-    }
-
-    .library-modal-content {
-        padding: 0.75rem;
-    }
+    .library-modal-dialog { width: calc(100vw - 1rem); margin: 0.5rem auto; max-height: calc(100vh - 1rem); }
+    .library-modal-content { padding: 0.75rem; }
 }
 </style>
 {{end}}
