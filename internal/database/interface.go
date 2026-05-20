@@ -14,6 +14,11 @@ type Database interface {
 	GetBook(ctx context.Context, id int64) (*Book, error)
 	GetBookByASIN(ctx context.Context, asin string) (*Book, error)
 	ListBooks(ctx context.Context, filter BookFilter) ([]Book, int, error)
+	// CountBooksByStatus returns the row count of each book status in
+	// one query. Keys are the BookStatus values present in the table;
+	// statuses with zero books are omitted. Used by the library page's
+	// filter tabs so we don't fire 7 LIMIT-1 counts per page render.
+	CountBooksByStatus(ctx context.Context) (map[BookStatus]int, error)
 	UpsertBook(ctx context.Context, book *Book) error
 	UpdateBookStatus(ctx context.Context, id int64, status BookStatus) error
 	DeleteBook(ctx context.Context, id int64) error

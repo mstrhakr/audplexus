@@ -48,6 +48,7 @@ func (s *StubDB) GetBookByASIN(ctx context.Context, asin string) (*Book, error) 
 func (s *StubDB) ListBooks(ctx context.Context, f BookFilter) ([]Book, int, error) {
 	return nil, 0, nil
 }
+func (s *StubDB) CountBooksByStatus(ctx context.Context) (map[BookStatus]int, error) { return nil, nil }
 func (s *StubDB) UpsertBook(ctx context.Context, b *Book) error                       { return nil }
 func (s *StubDB) UpdateBookStatus(ctx context.Context, id int64, st BookStatus) error { return nil }
 func (s *StubDB) DeleteBook(ctx context.Context, id int64) error { return nil }

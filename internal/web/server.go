@@ -921,6 +921,9 @@ func (s *Server) handleLibrary(c *gin.Context) {
 // the filter tabs on the library page. We map fine-grained pipeline statuses
 // (downloading/decrypting/processing) into the "in_progress" bucket and
 // (queued/skipped) into "waiting" to mirror the dashboard mental model.
+//
+// Drives off a single GROUP BY query — previously did 7 LIMIT-1 counts
+// which was 7x what was actually needed.
 func (s *Server) libraryStatusCounts(ctx context.Context) map[string]int {
 	out := map[string]int{
 		"all":         0,
@@ -931,38 +934,27 @@ func (s *Server) libraryStatusCounts(ctx context.Context) map[string]int {
 		"failed":      0,
 	}
 
-	_, total, err := s.db.ListBooks(ctx, database.BookFilter{Limit: 1})
+	byStatus, err := s.db.CountBooksByStatus(ctx)
 	if err != nil {
 		return out
 	}
-	out["all"] = total
-
-	for _, st := range []database.BookStatus{
-		database.BookStatusNew,
-		database.BookStatusComplete,
-		database.BookStatusFailed,
-		database.BookStatusQueued,
-		database.BookStatusDownloading,
-		database.BookStatusDecrypting,
-		database.BookStatusProcessing,
-	} {
-		s2 := st
-		_, n, err := s.db.ListBooks(ctx, database.BookFilter{Status: &s2, Limit: 1})
-		if err != nil {
-			continue
-		}
+	for st, n := range byStatus {
+		out["all"] += n
 		switch st {
 		case database.BookStatusNew:
-			out["new"] = n
+			out["new"] += n
 		case database.BookStatusComplete:
-			out["complete"] = n
+			out["complete"] += n
 		case database.BookStatusFailed:
-			out["failed"] = n
+			out["failed"] += n
 		case database.BookStatusQueued:
 			out["waiting"] += n
 		case database.BookStatusDownloading, database.BookStatusDecrypting, database.BookStatusProcessing:
 			out["in_progress"] += n
 		}
+		// Other statuses (skipped) contribute to "all" but not to any
+		// filter tab; that matches the legacy behaviour where skipped
+		// was implicitly counted via the unfiltered total only.
 	}
 	return out
 }

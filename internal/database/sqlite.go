@@ -142,6 +142,27 @@ func (s *SQLiteDB) ListBooks(ctx context.Context, filter BookFilter) ([]Book, in
 	return books, total, rows.Err()
 }
 
+// CountBooksByStatus runs a single GROUP BY to return every status
+// bucket's row count. The library page's filter tabs used to make 7
+// independent LIMIT-1 counts which was 7x what we actually needed.
+func (s *SQLiteDB) CountBooksByStatus(ctx context.Context) (map[BookStatus]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM books GROUP BY status`)
+	if err != nil {
+		return nil, fmt.Errorf("count books by status: %w", err)
+	}
+	defer rows.Close()
+	out := map[BookStatus]int{}
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, fmt.Errorf("scan status count: %w", err)
+		}
+		out[BookStatus(status)] = n
+	}
+	return out, rows.Err()
+}
+
 func (s *SQLiteDB) UpsertBook(ctx context.Context, book *Book) error {
 	now := time.Now()
 	book.UpdatedAt = now
