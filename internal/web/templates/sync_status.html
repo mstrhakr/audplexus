@@ -1,24 +1,25 @@
 {{define "sync_status.html"}}
-<div class="sync-status-container">
-	{{if .Running}}
-	<div class="sync-header">
-		<span class="status-msg sync-running">{{if eq .Mode "quick"}}Quick{{else}}Full{{end}} sync in progress</span>
+<div class="sync-status-container sync-status-v2">
+	<div class="sync-head">
+		{{if .Running}}
+			<span class="pulse-dot"></span>
+			<strong>{{if eq .Mode "quick"}}Quick{{else}}Full{{end}} sync in progress</strong>
+		{{else if eq .Status "failed"}}
+			<span class="ok-dot" style="background:var(--error);box-shadow:0 0 0 3px rgba(244,67,54,.18)"></span>
+			<strong>Sync failed{{if .Error}}: {{.Error}}{{end}}</strong>
+		{{else if eq .Status "partial"}}
+			<span class="ok-dot" style="background:var(--warning);box-shadow:0 0 0 3px rgba(255,152,0,.18)"></span>
+			<strong>Sync finished with errors</strong>
+		{{else if eq .Status "complete"}}
+			<span class="ok-dot"></span>
+			<strong>{{if .Message}}{{.Message}}{{else}}Last sync complete{{end}}</strong>
+		{{else}}
+			<span class="ok-dot" style="background:var(--text-muted);box-shadow:none"></span>
+			<strong>No sync running</strong>
+		{{end}}
 	</div>
-	{{else if eq .Status "failed"}}
-	<div class="sync-header">
-		<span class="status-msg error">Sync failed{{if .Error}}: {{.Error}}{{end}}</span>
-	</div>
-	{{else if eq .Status "partial"}}
-	<div class="sync-header">
-		<span class="status-msg warning">Sync finished with errors</span>
-	</div>
-	{{else if eq .Status "complete"}}
-	<div class="sync-header">
-		<span class="status-msg success">{{if .Message}}{{.Message}}{{else}}Sync complete{{end}}</span>
-	</div>
-	{{end}}
 	{{if .Phases}}
-	<div class="sync-phases">
+	<div class="sync-phases v2">
 		{{range .Phases}}
 		<div id="phase-{{.Name}}" class="sync-phase {{.Status}}">
 			<div class="phase-main">
