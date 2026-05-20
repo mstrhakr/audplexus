@@ -1226,7 +1226,13 @@ func humanFileSize(sizeBytes int64) string {
 	return fmt.Sprintf("%.1f %s", size, units[unitIdx])
 }
 
-// handleDownloads renders the download queue page.
+// handleDownloads renders the pipeline page (Active / Waiting / Failed
+// / Completed tabs over the worker-pool view).
+//
+// The Completed tab is windowed because completed history grows
+// unbounded on a busy install — the UI is much more useful when scoped
+// to "what just finished". Default window is 24h; supported values are
+// 24h, 7d, 30d, all. Selected via ?completed_window=…
 func (s *Server) handleDownloads(c *gin.Context) {
 	ctx := c.Request.Context()
 	_, _ = s.clearStaleFailedDownloads(ctx)
@@ -1236,29 +1242,109 @@ func (s *Server) handleDownloads(c *gin.Context) {
 	pendingStatus := database.DownloadStatusPending
 	pending, _ := s.db.ListDownloads(ctx, &pendingStatus)
 	completeStatus := database.DownloadStatusComplete
-	complete, _ := s.db.ListDownloads(ctx, &completeStatus)
+	completeAll, _ := s.db.ListDownloads(ctx, &completeStatus)
 	failedStatus := database.DownloadStatusFailed
 	allFailed, _ := s.db.ListDownloads(ctx, &failedStatus)
 	recentErrors := deduplicateFailedByASIN(allFailed)
 	queueState := s.downloads.QueueState()
 
-	rowsForTitles := make([]database.DownloadQueue, 0, len(active)+len(pending)+len(complete)+len(allFailed))
+	window := parseCompletedWindow(c.Query("completed_window"))
+	complete := filterCompletedByWindow(completeAll, window)
+
+	rowsForTitles := make([]database.DownloadQueue, 0, len(active)+len(pending)+len(completeAll)+len(allFailed))
 	rowsForTitles = append(rowsForTitles, active...)
 	rowsForTitles = append(rowsForTitles, pending...)
-	rowsForTitles = append(rowsForTitles, complete...)
+	rowsForTitles = append(rowsForTitles, completeAll...)
 	rowsForTitles = append(rowsForTitles, allFailed...)
 
+	// Tab default is "active" — most common landing intent. Tab=completed
+	// shows the windowed slice; the other tabs ignore the window param.
+	tab := strings.ToLower(strings.TrimSpace(c.Query("tab")))
+	switch tab {
+	case "active", "waiting", "failed", "completed":
+	default:
+		tab = "active"
+	}
+
 	c.HTML(http.StatusOK, "downloads.html", gin.H{
-		"Active":           active,
-		"Pending":          pending,
-		"Complete":         complete,
-		"RecentErrors":     recentErrors,
-		"DownloadTitles":   s.getDownloadTitles(ctx, rowsForTitles),
-		"QueuePaused":      queueState.Paused,
-		"QueuePauseReason": queueState.Reason,
-		"QueuePausedAt":    queueState.PausedAt,
-		"Page":             "pipeline",
+		"Active":              active,
+		"Pending":             pending,
+		"Complete":            complete,
+		"CompleteTotal":       len(completeAll),
+		"RecentErrors":        recentErrors,
+		"DownloadTitles":      s.getDownloadTitles(ctx, rowsForTitles),
+		"QueuePaused":         queueState.Paused,
+		"QueuePauseReason":    queueState.Reason,
+		"QueuePausedAt":       queueState.PausedAt,
+		"Page":                "pipeline",
+		"ActiveTab":           tab,
+		"CompletedWindow":     window,
+		"CompletedWindowOpts": completedWindowOptions(),
 	})
+}
+
+// completedWindowOption is a single option in the Completed tab's
+// time-window selector.
+type completedWindowOption struct {
+	Value string
+	Label string
+}
+
+func completedWindowOptions() []completedWindowOption {
+	return []completedWindowOption{
+		{Value: "24h", Label: "Last 24 hours"},
+		{Value: "7d", Label: "Last 7 days"},
+		{Value: "30d", Label: "Last 30 days"},
+		{Value: "all", Label: "All time"},
+	}
+}
+
+// parseCompletedWindow normalizes the ?completed_window= value. Anything
+// unrecognized falls back to "24h" so the Completed tab never shows the
+// firehose of all-time history on a casual click-through.
+func parseCompletedWindow(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "7d":
+		return "7d"
+	case "30d":
+		return "30d"
+	case "all":
+		return "all"
+	default:
+		return "24h"
+	}
+}
+
+// filterCompletedByWindow returns the subset of completed download rows
+// whose CompletedAt timestamp falls within the chosen window. "all"
+// returns the input as-is. Rows with a nil CompletedAt fall back to
+// UpdatedAt so legacy rows that never recorded a completion stamp still
+// show up under wider windows.
+func filterCompletedByWindow(rows []database.DownloadQueue, window string) []database.DownloadQueue {
+	if window == "all" {
+		return rows
+	}
+	var cutoff time.Duration
+	switch window {
+	case "7d":
+		cutoff = 7 * 24 * time.Hour
+	case "30d":
+		cutoff = 30 * 24 * time.Hour
+	default:
+		cutoff = 24 * time.Hour
+	}
+	threshold := time.Now().Add(-cutoff)
+	out := make([]database.DownloadQueue, 0, len(rows))
+	for _, r := range rows {
+		ts := r.UpdatedAt
+		if r.CompletedAt != nil {
+			ts = *r.CompletedAt
+		}
+		if ts.After(threshold) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // deduplicateFailedByASIN returns at most one entry per ASIN from a slice of
