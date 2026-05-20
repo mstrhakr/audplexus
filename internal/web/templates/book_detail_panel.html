@@ -15,16 +15,44 @@
         {{end}}
         <div class="cover-actions">
             {{if eq (printf "%s" .Book.Status) "new"}}
-            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" class="btn btn-primary">Queue Download</button>
+            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" class="btn btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Queue Download
+            </button>
             {{else if eq (printf "%s" .Book.Status) "failed"}}
-            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" class="btn btn-primary">Retry Download</button>
+            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" class="btn btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/></svg>
+                Retry Download
+            </button>
+            {{else if eq (printf "%s" .Book.Status) "complete"}}
+            <button hx-post="/api/downloads/redownload/{{.Book.ASIN}}"
+                    hx-confirm="Re-download '{{.Book.Title}}'? This removes the existing file first."
+                    hx-swap="none"
+                    class="btn btn-secondary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
+                Re-download
+            </button>
+            {{end}}
+
+            {{if .Book.ID}}
+            <button hx-post="/api/books/{{.Book.ID}}/resync-metadata"
+                    hx-swap="none"
+                    hx-on::before-request="this.disabled=true"
+                    hx-on::after-request="setTimeout(function(){location.reload()},600)"
+                    class="btn btn-secondary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v6h6"/><path d="M20 20v-6h-6"/><path d="M4 10a8 8 0 0 1 14.93-2"/><path d="M20 14a8 8 0 0 1-14.93 2"/></svg>
+                Re-sync metadata
+            </button>
             {{end}}
 
             {{if .BookAction.ShowConvert}}
             <button hx-post="/api/books/{{.Book.ID}}/convert?format={{.BookAction.ConvertFormat}}"
                 hx-confirm="{{.BookAction.ConvertConfirm}}"
                 hx-swap="none"
-                class="btn btn-secondary">{{.BookAction.ConvertLabel}}</button>
+                class="btn btn-secondary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                {{.BookAction.ConvertLabel}}
+            </button>
             {{end}}
 
             {{if .BookAction.ShowDelete}}
@@ -32,11 +60,17 @@
                     hx-confirm="{{.BookAction.DeleteConfirm}}"
                     hx-target="#book-detail-modal-content"
                     hx-swap="innerHTML"
-                    class="btn btn-danger">Delete Files</button>
+                    class="btn btn-danger">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                Delete Files
+            </button>
             {{end}}
 
             {{if .Book.ASIN}}
-            <a href="https://www.audible.com/pd/{{.Book.ASIN}}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost">Open on Audible</a>
+            <a href="https://www.audible.com/pd/{{.Book.ASIN}}" target="_blank" rel="noopener noreferrer" class="btn btn-outline-ds">
+                Open on Audible
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </a>
             {{end}}
         </div>
     </div>

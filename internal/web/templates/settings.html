@@ -10,9 +10,11 @@
     <div class="settings-layout">
         <nav class="settings-nav" aria-label="Settings sections">
             <div class="settings-nav-label">On this page</div>
-            <a href="#section-auth" data-section="section-auth" class="settings-nav-link active"><span class="settings-nav-dot"></span>Authentication</a>
+            <a href="#section-audible" data-section="section-audible" class="settings-nav-link active"><span class="settings-nav-dot"></span>Audible Account</a>
+            <a href="#section-library" data-section="section-library" class="settings-nav-link"><span class="settings-nav-dot"></span>Library</a>
+            <a href="#section-sync" data-section="section-sync" class="settings-nav-link"><span class="settings-nav-dot"></span>Sync</a>
+            <a href="#section-performance" data-section="section-performance" class="settings-nav-link"><span class="settings-nav-dot"></span>Performance</a>
             <a href="#section-system" data-section="section-system" class="settings-nav-link"><span class="settings-nav-dot"></span>System Information</a>
-            <a href="#section-config" data-section="section-config" class="settings-nav-link"><span class="settings-nav-dot"></span>Configuration</a>
             {{if .Devices}}<a href="#section-devices" data-section="section-devices" class="settings-nav-link"><span class="settings-nav-dot"></span>Registered Devices</a>{{end}}
             <a href="#section-danger" data-section="section-danger" class="settings-nav-link"><span class="settings-nav-dot"></span>Danger Zone</a>
         </nav>
@@ -25,15 +27,13 @@
     <div class="alert ok" role="status" style="margin-bottom:1rem"><span class="ico">✓</span><div>{{.Success}}</div></div>
     {{end}}
 
-    {{/* ── Authentication & Integrations ────────────────────────────
-         Two cards side-by-side: Amazon/Audible (region + sign-in flow)
-         and Tag Profile (metadata atom selector). The legacy "Library
-         Destinations" link-out card was removed — sidebar already has
-         the Destinations link, and dropping the redundancy gets us
-         back the screen real estate. */}}
-    <section class="settings-section auth-section" id="section-auth" data-section="section-auth">
+    {{/* ── Audible Account ──────────────────────────────────────────
+         Amazon/Audible region + sign-in flow. Tag Profile moved into
+         the Library card since it controls metadata atoms written into
+         downloaded files. */}}
+    <section class="settings-section" id="section-audible" data-section="section-audible">
         <div class="card">
-            <div class="card-head"><h3>Amazon / Audible</h3></div>
+            <div class="card-head"><h3>Audible Account</h3></div>
 
             <form method="POST" action="/auth/marketplace">
                 <div class="form-row">

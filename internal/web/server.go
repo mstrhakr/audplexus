@@ -494,6 +494,7 @@ func (s *Server) setupRoutes() {
 		// Per-book conversion between m4b and chapter-split mp3.
 		api.POST("/books/:id/convert", s.handleConvertBook)
 		api.POST("/books/:id/delete-media", s.handleDeleteBookMedia)
+		api.POST("/books/:id/resync-metadata", s.handleResyncMetadata)
 	}
 }
 
@@ -2869,6 +2870,82 @@ func (s *Server) handleRedownload(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": fmt.Sprintf("Book '%s' has been queued for redownload", book.Title),
+	})
+}
+
+// handleResyncMetadata re-fetches book metadata from audnexus and updates the
+// DB row in place. Cover URL, description, narrator, publisher, series, etc.
+// get refreshed without touching the local file. Status is unchanged.
+func (s *Server) handleResyncMetadata(c *gin.Context) {
+	ctx := c.Request.Context()
+	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid book id"})
+		return
+	}
+
+	book, err := s.db.GetBook(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "book not found: " + err.Error()})
+		return
+	}
+
+	enriched, err := s.audnexus.EnrichMetadata(ctx, book)
+	if err != nil {
+		webLog.Warn().Err(err).Str("asin", book.ASIN).Msg("resync metadata: audnexus enrichment failed")
+		if c.GetHeader("HX-Request") == "true" {
+			c.HTML(http.StatusBadGateway, "settings_saved.html", gin.H{
+				"Message": "Could not refresh metadata: " + err.Error(),
+			})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	if v := enriched.Title(); v != "" {
+		book.Title = v
+	}
+	if v := enriched.Author(); v != "" {
+		book.Author = v
+	}
+	if v := enriched.Narrator(); v != "" {
+		book.Narrator = v
+	}
+	if v := enriched.Publisher(); v != "" {
+		book.Publisher = v
+	}
+	if v := enriched.Description(); v != "" {
+		book.Description = v
+	}
+	if v := enriched.CoverURL(); v != "" {
+		book.CoverURL = v
+	}
+	if v := enriched.Series(); v != "" {
+		book.Series = v
+	}
+	if v := enriched.SeriesPosition(); v != "" {
+		book.SeriesPosition = v
+	}
+	if v := enriched.Language(); v != "" {
+		book.Language = v
+	}
+
+	if err := s.db.UpsertBook(ctx, book); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save book: " + err.Error()})
+		return
+	}
+	webLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Msg("book metadata resynced")
+
+	if c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{
+			"Message": fmt.Sprintf("Metadata refreshed for '%s'", book.Title),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("Metadata refreshed for '%s'", book.Title),
 	})
 }
 

@@ -1542,11 +1542,14 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     display: grid;
     grid-template-columns: 220px 1fr;
     gap: 1.75rem;
+    align-items: center;
     background: transparent;
     border: 0;
     border-radius: 0;
     padding: 0;
 }
+.book-detail > .cover-wrap { align-self: center; }
+.book-detail > div:not(.cover-wrap) { align-self: center; }
 .book-detail .cover-wrap { display: flex; flex-direction: column; gap: 0.75rem; }
 .book-detail .cover-wrap img {
     width: 100%;
