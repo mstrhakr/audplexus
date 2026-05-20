@@ -73,21 +73,24 @@
                         {{if and (eq .Health "failed") .LastError}}aria-describedby="dest-{{.ID}}-err"{{end}}>
                         Test
                     </button>
-                    <a href="/destinations/{{.ID}}/edit" class="btn btn-outline-ds btn-small"
+                    <button type="button" class="btn btn-outline-ds btn-small"
+                        hx-get="/destinations/{{.ID}}/edit"
+                        hx-target="#dest-modal-content"
+                        hx-swap="innerHTML"
                         {{if and (eq .Health "failed") .LastError}}aria-describedby="dest-{{.ID}}-err"{{end}}>
                         Edit<span class="visually-hidden"> {{.DisplayName}}</span>
-                    </a>
+                    </button>
                     <form method="POST" action="/destinations/{{.ID}}/toggle" style="margin:0;display:inline">
                         <button type="submit" class="btn btn-outline-ds btn-small">
                             {{if .Enabled}}Disable{{else}}Enable{{end}}<span class="visually-hidden"> {{.DisplayName}}</span>
                         </button>
                     </form>
-                    <form method="POST" action="/destinations/{{.ID}}/delete" style="margin:0;display:inline">
-                        <button type="submit" class="btn btn-danger btn-small"
-                            onclick="return confirm('Delete destination {{.DisplayName}}? This cannot be undone.')">
-                            Delete<span class="visually-hidden"> {{.DisplayName}}</span>
-                        </button>
-                    </form>
+                    <button type="button" class="btn btn-danger btn-small"
+                        hx-get="/destinations/{{.ID}}/delete"
+                        hx-target="#dest-modal-content"
+                        hx-swap="innerHTML">
+                        Delete<span class="visually-hidden"> {{.DisplayName}}</span>
+                    </button>
                 </span>
             </div>
         </div>

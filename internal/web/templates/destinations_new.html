@@ -1,12 +1,15 @@
 {{define "destination_picker_body"}}
 {{/*
-  Type picker — shown both on the standalone /destinations/new page AND
-  inside the modal opened from the wizard, Destinations page, etc.
-  Forms post to /destinations/new (legacy full-page) or
-  /destinations/modal/form (modal mode); the chrome decides which.
+  Type picker — shown inside the modal opened from the wizard, the
+  Destinations page, etc. There's no full-page entry point any more;
+  picker submits to /destinations/modal/form which returns the type-
+  specific form body that swaps into the same modal slot.
 */}}
-<form method="POST" action="{{.PickerAction}}" class="settings-form"
-      {{if .ModalMode}}hx-post="{{.PickerAction}}" hx-target="#dest-modal-content" hx-swap="innerHTML"{{end}}>
+<header style="margin-bottom:1rem">
+    <h2 style="margin:0">Add destination</h2>
+    <p class="muted" style="margin:.35rem 0 0 0">Pick the kind of server Audplexus should push to. The next step asks for the type-specific configuration.</p>
+</header>
+<form hx-post="/destinations/modal/form" hx-target="#dest-modal-content" hx-swap="innerHTML" class="settings-form">
     <fieldset class="form-group destination-type-group" style="border:0;padding:0;margin:0">
         <legend class="visually-hidden">Choose a destination type</legend>
         <p class="destination-type-help muted" id="destination-type-help">One click to continue to that destination's setup form.</p>
@@ -17,25 +20,5 @@
             <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="abs">Audiobookshelf</button>
         </div>
     </fieldset>
-    {{if not .ModalMode}}
-    <div style="display:flex;gap:.75rem;margin-top:1rem;align-items:center">
-        <a href="/destinations" class="btn btn-outline-ds">Cancel</a>
-        <span class="muted" style="font-size:.9rem">Pick a destination type above.</span>
-    </div>
-    {{end}}
 </form>
-{{end}}
-
-{{define "content"}}
-<div class="page">
-    <div class="page-header">
-        <div>
-            <h1>Add Library Destination</h1>
-            <div class="sub">Pick the kind of server Audplexus should push to. The next step asks for the type-specific configuration.</div>
-        </div>
-    </div>
-    <div class="card" style="max-width:720px">
-        {{template "destination_picker_body" .}}
-    </div>
-</div>
 {{end}}

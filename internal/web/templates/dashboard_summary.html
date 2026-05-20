@@ -32,7 +32,9 @@
     <div class="section-h" id="dest-summary-heading">
         Library destinations
         {{if .DestinationSummaries}}<span class="count">{{len .DestinationSummaries}}</span>{{end}}
-        <span class="right"><a href="/destinations/new">Add destination</a></span>
+        <span class="right">
+            <button type="button" class="link-btn" hx-get="/destinations/modal" hx-target="#dest-modal-content" hx-swap="innerHTML">Add destination</button>
+        </span>
     </div>
     {{if .DestinationSummaries}}
     <ul role="list" aria-live="polite" aria-atomic="false" class="dest-grid destination-summary-list" style="list-style:none;padding:0;margin:0">
@@ -77,7 +79,9 @@
     </ul>
     {{else}}
     <div class="empty-card">
-        No destinations configured. <a href="/destinations/new">Add a library destination</a> to fan out scans after each download.
+        No destinations configured.
+        <button type="button" class="link-btn" hx-get="/destinations/modal" hx-target="#dest-modal-content" hx-swap="innerHTML">Add a library destination</button>
+        to fan out scans after each download.
     </div>
     {{end}}
 </section>

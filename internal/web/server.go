@@ -293,7 +293,7 @@ func (s *Server) setupTemplates() {
 	base := template.Must(template.New("base").Funcs(funcMap).ParseFS(templateFS, "templates/base.html"))
 
 	// Parse all partial/fragment templates that may be referenced by page templates
-	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html"}
+	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html", "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html"}
 	baseWithPartials := template.Must(template.Must(base.Clone()).ParseFS(templateFS, partials...))
 
 	r := &multiRender{templates: make(map[string]*template.Template)}
@@ -331,17 +331,17 @@ func (s *Server) setupTemplates() {
 		r.templates[name] = partialSet
 	}
 
-	// Bare body fragments for the destination modal. Both files are
-	// full pages too (their `content` blocks render directly at
-	// /destinations/new and /destinations/:id/edit), but we also want to
-	// render JUST the inner form for modal swaps — so we expose the
-	// inner define blocks under their own keys. The multiRender's
-	// Instance() path takes the template name as the entry point, so
-	// "destination_picker_body" / "destination_form_body" execute the
-	// matching {{define …}} block directly without going through base.
-	destModalSet := template.Must(template.Must(template.New("dest_modal").Funcs(funcMap).ParseFS(templateFS, "templates/destinations_new.html", "templates/destinations_form.html")).Clone())
+	// Bare body fragments for the destination modal. New / Edit / Delete
+	// all swap into #dest-modal-content via HTMX — the three files
+	// each define just an inner *_body block, no page chrome. The
+	// multiRender's Instance() path uses the template name as the entry
+	// point, so "destination_picker_body" / "destination_form_body" /
+	// "destination_delete_body" execute the matching {{define …}} block
+	// directly without going through base.
+	destModalSet := template.Must(template.Must(template.New("dest_modal").Funcs(funcMap).ParseFS(templateFS, "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html")).Clone())
 	r.templates["destination_picker_body"] = destModalSet
 	r.templates["destination_form_body"] = destModalSet
+	r.templates["destination_delete_body"] = destModalSet
 
 	s.router.HTMLRender = r
 }
@@ -389,30 +389,34 @@ func (s *Server) setupRoutes() {
 	// destination affordance — see /destinations/plex/* below.
 	s.router.POST("/settings/tag-profile", s.handleTagProfileSelect)
 
-	// Library destinations CRUD (multi-destination model). Two-page flow
-	// for add (type picker → type-specific form) and delete (GET confirm
-	// → POST with confirm=1) keeps the UI JS-free + back-button-safe.
+	// Library destinations CRUD (multi-destination model). Modal-only —
+	// New / Edit / Delete all open inside the global #dest-modal-content
+	// overlay defined in base.html. Every handler returns a bare body
+	// partial (no page chrome) that HTMX swaps in, and mutating success
+	// fires an HX-Trigger event so the page auto-closes + reloads.
 	s.router.GET("/destinations", s.handleDestinations)
-	s.router.GET("/destinations/new", s.handleDestinationsNewPicker)
-	s.router.POST("/destinations/new", s.handleDestinationsNewForm)
-	s.router.POST("/destinations/create", s.handleDestinationsCreate)
-	// Modal counterparts — return bare body partials so any page can open
-	// the add-destination flow in an overlay (wizard step 3, Destinations
-	// page, settings shortcut). Same backend, same validation.
+	// Add: picker → type-specific form → POST /destinations/create.
 	s.router.GET("/destinations/modal", s.handleDestinationsModalPicker)
 	s.router.POST("/destinations/modal/form", s.handleDestinationsModalForm)
-	// Test connection — runs a live LibraryItemCount probe with current
-	// form values. HTMX-targeted; renders a small HTML fragment.
-	s.router.POST("/destinations/test", s.handleDestinationTest)
-	s.router.POST("/destinations/:id/test", s.handleDestinationTest)
+	s.router.POST("/destinations/create", s.handleDestinationsCreate)
+	// Edit: hx-get the form body, POST update.
 	s.router.GET("/destinations/:id/edit", s.handleDestinationEditForm)
 	s.router.POST("/destinations/:id", s.handleDestinationUpdate)
-	s.router.POST("/destinations/:id/toggle", s.handleDestinationToggle)
-	// Delete is POST-only — destructive actions must not be safe GETs (per
-	// RFC 9110 + WCAG link-purpose semantics for destructive controls).
-	// The same endpoint serves both: confirm=1 actually deletes;
-	// otherwise the confirmation page is rendered.
+	// Delete: hx-get the confirm body, POST with confirm=1 to delete.
+	// Destructive mutation stays POST-only (RFC 9110 + WCAG); the GET
+	// counterpart only renders the confirmation, no state changes.
+	s.router.GET("/destinations/:id/delete", s.handleDestinationDeleteModal)
 	s.router.POST("/destinations/:id/delete", s.handleDestinationDelete)
+	// Test connection + toggle enabled. Both still HTMX-fragment paths.
+	s.router.POST("/destinations/test", s.handleDestinationTest)
+	s.router.POST("/destinations/:id/test", s.handleDestinationTest)
+	s.router.POST("/destinations/:id/toggle", s.handleDestinationToggle)
+	// Legacy full-page entry points — old bookmarks and the wizard's
+	// "Add destination" link previously navigated here. Redirect to the
+	// Destinations page so users land somewhere useful instead of 404.
+	s.router.GET("/destinations/new", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/destinations")
+	})
 
 	// Discovery / sign-in endpoints — per-destination affordances that
 	// auto-populate the form. All HTMX-targeted, all render HTML fragments

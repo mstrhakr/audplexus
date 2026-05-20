@@ -1027,16 +1027,21 @@
             }
         });
 
-        // Server signals a successful create via HX-Trigger. Auto-close
+        // Server signals a successful CRUD via HX-Trigger. Auto-close
         // after a beat so the user sees the success state, then reload
-        // so the parent page (Destinations list, wizard step 3) picks up
-        // the new row.
-        document.body.addEventListener('dest-created', function() {
+        // so the parent page (Destinations list, wizard step 3) picks
+        // up the change. Same handler for create / update / delete —
+        // the events fire from different handlers but the modal flow
+        // is identical.
+        function destChanged() {
             setTimeout(function() {
                 close();
                 window.location.reload();
             }, 700);
-        });
+        }
+        document.body.addEventListener('dest-created', destChanged);
+        document.body.addEventListener('dest-updated', destChanged);
+        document.body.addEventListener('dest-deleted', destChanged);
 
         window.AudplexusDestModal = { open: open, close: close };
     })();

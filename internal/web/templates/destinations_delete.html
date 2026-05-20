@@ -1,34 +1,42 @@
-{{define "content"}}
-<div class="page">
-    <div class="page-header">
-        <div>
-            <h1>Delete destination</h1>
-            <div class="sub">{{.Dest.TypeLabel}} · {{.Dest.DisplayName}}</div>
-        </div>
-    </div>
-
-    <div class="card" style="max-width:640px">
-        <div class="alert err" style="margin-bottom:1rem">
-            <span class="ico">!</span>
-            <div>
-                <strong>Delete "{{.Dest.DisplayName}}"?</strong>
-                <div style="font-size:.85rem;margin-top:.35rem;line-height:1.5">
-                    This removes the {{.Dest.TypeLabel}} destination from Audplexus.
-                    Your media files and the {{.Dest.TypeLabel}} server itself are not touched —
-                    Audplexus will simply stop fanning out post-download work here.
-                </div>
-                <div style="font-size:.85rem;margin-top:.5rem">
-                    <strong>This cannot be undone.</strong> The per-(book, destination) sync
-                    history for this destination is also deleted.
-                </div>
-            </div>
-        </div>
-
-        <form method="POST" action="/destinations/{{.Dest.ID}}/delete" style="display:flex;gap:.6rem;margin:0">
-            <input type="hidden" name="confirm" value="1">
-            <a href="/destinations" class="btn btn-outline-ds">Cancel</a>
-            <button type="submit" class="btn btn-danger">Permanently delete</button>
-        </form>
+{{define "destination_delete_body"}}
+{{if .ModalSuccess}}
+<div class="alert ok" style="margin:0">
+    <span class="ico">✓</span>
+    <div>
+        <strong>Destination deleted.</strong>
+        <div class="muted" style="font-size:.85rem;margin-top:.25rem">Refreshing…</div>
     </div>
 </div>
+{{else}}
+<header style="margin-bottom:1rem">
+    <h2 style="margin:0">Delete destination</h2>
+    <p class="muted" style="margin:.35rem 0 0 0">{{.Dest.TypeLabel}} · {{.Dest.DisplayName}}</p>
+</header>
+
+<div class="alert err" style="margin-bottom:1rem">
+    <span class="ico">!</span>
+    <div>
+        <strong>Delete "{{.Dest.DisplayName}}"?</strong>
+        <div style="font-size:.85rem;margin-top:.35rem;line-height:1.5">
+            This removes the {{.Dest.TypeLabel}} destination from Audplexus.
+            Your media files and the {{.Dest.TypeLabel}} server itself are not touched —
+            Audplexus will simply stop fanning out post-download work here.
+        </div>
+        <div style="font-size:.85rem;margin-top:.5rem">
+            <strong>This cannot be undone.</strong> The per-(book, destination) sync
+            history for this destination is also deleted.
+        </div>
+    </div>
+</div>
+
+<form hx-post="/destinations/{{.Dest.ID}}/delete"
+      hx-target="#dest-modal-content"
+      hx-swap="innerHTML"
+      hx-headers='{"X-Dest-Modal":"1"}'
+      style="display:flex;gap:.6rem;margin:0">
+    <input type="hidden" name="confirm" value="1">
+    <button type="button" class="btn btn-outline-ds" onclick="window.AudplexusDestModal && window.AudplexusDestModal.close()">Cancel</button>
+    <button type="submit" class="btn btn-danger">Permanently delete</button>
+</form>
+{{end}}
 {{end}}

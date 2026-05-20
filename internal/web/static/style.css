@@ -1039,6 +1039,20 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     .settings-nav-link.active { border-left: 0; border-bottom-color: var(--accent); }
 }
 
+/* Link button — semantic <button> styled to look like an inline link.
+   Used where the action is a real button (opens a modal, submits a
+   request) but the visual treatment is the unobtrusive link form. */
+.link-btn {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    color: #78b7ff;
+    cursor: pointer;
+    text-decoration: none;
+}
+.link-btn:hover { color: #9cc9ff; text-decoration: underline; }
+
 /* Modal overlay (add-destination, etc.) */
 .modal-overlay {
     position: fixed;

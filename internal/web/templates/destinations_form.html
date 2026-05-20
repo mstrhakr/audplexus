@@ -3,14 +3,19 @@
 <div class="alert ok" style="margin:0">
     <span class="ico">✓</span>
     <div>
-        <strong>{{.DestTypeLabel}} destination added.</strong>
+        <strong>{{.DestTypeLabel}} destination {{if .ModalSuccessVerb}}{{.ModalSuccessVerb}}{{else}}saved{{end}}.</strong>
         <div class="muted" style="font-size:.85rem;margin-top:.25rem">Refreshing…</div>
     </div>
 </div>
 {{else}}
+{{/*
+  Destination create/edit form — rendered inside the global modal in
+  base.html. The same partial drives both flows; $isEdit (.Dest set)
+  flips the form action between create and update. There's no full-page
+  fallback any more — every entry point opens the modal.
+*/}}
 {{$isEdit := .Dest}}
 {{$dt := .DestType}}
-{{$modal := .ModalMode}}
 <header style="margin-bottom:1rem">
     <h2 id="form-heading" style="margin:0">{{if $isEdit}}Edit {{.DestTypeLabel}} Destination{{else}}Add {{.DestTypeLabel}} Destination{{end}}</h2>
     <p class="muted" style="margin:.35rem 0 0 0">
@@ -25,12 +30,10 @@
 </div>
 {{end}}
 
-<form method="POST"
-      action="{{if $isEdit}}/destinations/{{.Dest.ID}}{{else}}/destinations/create{{end}}"
-      {{if $modal}}hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}{{else}}/destinations/create{{end}}"
+<form hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}{{else}}/destinations/create{{end}}"
       hx-target="#dest-modal-content"
       hx-swap="innerHTML"
-      hx-headers='{"X-Dest-Modal":"1"}'{{end}}
+      hx-headers='{"X-Dest-Modal":"1"}'
       class="settings-form">
                 {{if not $isEdit}}<input type="hidden" name="type" value="{{$dt}}">{{end}}
 
@@ -419,11 +422,7 @@
                 <div id="test-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.75rem"></div>
 
                 <div style="display:flex;gap:.75rem;margin-top:1rem;flex-wrap:wrap">
-                    {{if $modal}}
                     <button type="button" class="btn btn-outline-ds" onclick="window.AudplexusDestModal && window.AudplexusDestModal.close()">Cancel</button>
-                    {{else}}
-                    <a href="/destinations" class="btn btn-outline-ds">Cancel</a>
-                    {{end}}
                     <button type="button" class="btn btn-secondary"
                             hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/test{{else}}/destinations/test{{end}}"
                             hx-include="closest form"
@@ -438,18 +437,4 @@
                 </div>
             </form>
 {{end}}
-{{end}}
-
-{{define "content"}}
-<div class="page">
-    <div class="page-header">
-        <div>
-            <h1>{{if .Dest}}Edit Destination{{else}}Add Destination{{end}}</h1>
-            <div class="sub">{{.DestTypeLabel}} — connection details</div>
-        </div>
-    </div>
-    <div class="card" style="max-width:760px">
-        {{template "destination_form_body" .}}
-    </div>
-</div>
 {{end}}
