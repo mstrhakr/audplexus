@@ -1,27 +1,34 @@
 {{define "content"}}
-<div class="settings-page">
-    <header class="settings-header">
-        <h1>Delete Library Destination</h1>
-    </header>
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1>Delete destination</h1>
+            <div class="sub">{{.Dest.TypeLabel}} · {{.Dest.DisplayName}}</div>
+        </div>
+    </div>
 
-    <section class="auth-grid">
-        <section class="auth-panel" aria-labelledby="del-heading">
-            <h3 id="del-heading">Delete &quot;{{.Dest.DisplayName}}&quot;?</h3>
-            <p>
-                This removes the {{.Dest.TypeLabel}} destination from Audplexus.
-                Your media files and the {{.Dest.TypeLabel}} server itself are not touched.
-                Audplexus will stop fanning out post-download work to this destination.
-            </p>
-            <p><strong>This cannot be undone.</strong> The per-(book, destination) sync history for this destination is also deleted.</p>
-
-            <form method="POST" action="/destinations/{{.Dest.ID}}/delete">
-                <input type="hidden" name="confirm" value="1">
-                <div style="display:flex;gap:.75rem">
-                    <a href="/settings#library-destinations" class="btn btn-outline">Cancel</a>
-                    <button type="submit" class="btn btn-danger">Permanently delete</button>
+    <div class="card" style="max-width:640px">
+        <div class="alert err" style="margin-bottom:1rem">
+            <span class="ico">!</span>
+            <div>
+                <strong>Delete "{{.Dest.DisplayName}}"?</strong>
+                <div style="font-size:.85rem;margin-top:.35rem;line-height:1.5">
+                    This removes the {{.Dest.TypeLabel}} destination from Audplexus.
+                    Your media files and the {{.Dest.TypeLabel}} server itself are not touched —
+                    Audplexus will simply stop fanning out post-download work here.
                 </div>
-            </form>
-        </section>
-    </section>
+                <div style="font-size:.85rem;margin-top:.5rem">
+                    <strong>This cannot be undone.</strong> The per-(book, destination) sync
+                    history for this destination is also deleted.
+                </div>
+            </div>
+        </div>
+
+        <form method="POST" action="/destinations/{{.Dest.ID}}/delete" style="display:flex;gap:.6rem;margin:0">
+            <input type="hidden" name="confirm" value="1">
+            <a href="/destinations" class="btn btn-outline-ds">Cancel</a>
+            <button type="submit" class="btn btn-danger">Permanently delete</button>
+        </form>
+    </div>
 </div>
 {{end}}
