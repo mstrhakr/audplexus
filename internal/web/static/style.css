@@ -703,7 +703,14 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 .dl-card.failed { border-color: rgba(244,67,54,0.35); }
 
 /* Destination grid v2 */
+/* Destinations page — single column, full-width cards.
+   Dashboard summary keeps the compact grid via .destination-summary-list. */
 .dest-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+.dest-grid.destination-summary-list {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 0.75rem;
@@ -712,10 +719,10 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 0.9rem 1rem;
+    padding: 1rem 1.15rem;
     display: flex;
     flex-direction: column;
-    gap: 0.55rem;
+    gap: 0.65rem;
     position: relative;
     overflow: hidden;
 }
@@ -783,6 +790,71 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 .dest-card .dest-checked {
     font-size: 0.72rem;
     color: var(--text-muted);
+}
+.dest-card .dest-head-text { min-width: 0; flex: 1; }
+.dest-card .dest-head-status { flex-shrink: 0; }
+.dest-card .dest-row-help {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+}
+
+/* Extended details block — visible on the Destinations page only.
+   Dashboard's .destination-summary-list hides it for the compact view. */
+.dest-card .dest-details {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.4rem 1.25rem;
+    margin: 0.25rem 0 0.15rem;
+    padding: 0.75rem 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.8rem;
+}
+.dest-card .dest-details dt {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+.dest-card .dest-details dd {
+    color: var(--text);
+    margin: 0;
+    min-width: 0;
+    word-break: break-word;
+}
+.dest-card .dest-details .cell-mono {
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+}
+.dest-card .dest-path-translation {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+.dest-card .dest-path-arrow {
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+}
+.destination-summary-list .dest-card .dest-details { display: none; }
+
+/* Action bar — keep buttons on one row at desktop width; wrap gracefully. */
+.dest-card .dest-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 0.15rem;
+}
+.dest-card .dest-actions-buttons {
+    margin-left: auto;
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+.destination-summary-list .dest-card .dest-actions {
+    flex-wrap: wrap;
+}
+.destination-summary-list .dest-card .dest-actions-buttons {
+    gap: 0.3rem;
 }
 
 /* Table v2 (Library) */
@@ -1386,11 +1458,11 @@ label.form-row.inline:hover .toggle-slider { border-color: var(--accent); }
 }
 .btn:hover { background: var(--border); text-decoration: none; }
 
-/* WCAG AA: white on --accent (#e94560) is ~3.21:1 — fails normal-text 4.5:1.
-   Switch foreground to the deepest page bg (--bg #1a1a2e) which gives ~6.8:1
-   against the brand red without changing the brand color itself. */
-.btn-primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
-.btn-primary:hover { background: var(--accent-hover); color: var(--bg); border-color: var(--accent-hover); }
+/* White (#fff) on --accent (#e94560) is ~3.34:1 — passes WCAG AA Large
+   (18pt/14pt-bold). We bump to weight 700 here to keep the button text
+   inside the Large-text rule. */
+.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700; }
+.btn-primary:hover { background: var(--accent-hover); color: #fff; border-color: var(--accent-hover); }
 .btn-secondary { background: var(--surface-2); color: var(--text); border-color: var(--border); }
 .btn-secondary:hover { background: var(--border); color: var(--text); }
 .btn-danger { background: var(--error); color: #fff; border-color: var(--error); }
@@ -1445,7 +1517,81 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
 .data-table tr:hover { background: rgba(255,255,255,0.03); }
 
 .cover-cell { width: 50px; }
-.cover-thumb { width: 40px; height: 60px; object-fit: cover; border-radius: 4px; }
+.cover-thumb { width: 40px; height: 60px; object-fit: cover; border-radius: 4px; display: block; }
+.col-cover a.book-detail-link {
+    display: inline-block;
+    line-height: 0;
+    border-radius: 4px;
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+.col-cover a.book-detail-link:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    cursor: zoom-in;
+}
+.col-cover a.book-detail-link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.cover-thumb-placeholder {
+    background: linear-gradient(135deg, var(--surface-2), var(--surface));
+    border: 1px solid var(--border);
+}
+
+/* ── Library row "more" dropdown ─────────────────────────────────── */
+.row-more-menu { position: relative; display: inline-block; }
+.row-more-menu > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 0.3rem 0.5rem;
+}
+.row-more-menu > summary::-webkit-details-marker { display: none; }
+.row-more-menu > summary::marker { content: ""; }
+.row-more-menu > summary svg { display: block; }
+
+.row-more-panel {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 50;
+    min-width: 200px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45);
+    padding: 0.3rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.row-more-item {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.5rem 0.7rem;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.82rem;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+    white-space: nowrap;
+}
+.row-more-item:hover,
+.row-more-item:focus-visible {
+    background: var(--surface-2);
+    color: var(--text);
+    outline: none;
+}
+.row-more-item svg {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
 
 .empty { text-align: center; color: var(--text-muted); padding: 2rem; }
 .result-count { color: var(--text-muted); margin-bottom: 0.75rem; font-size: 0.9rem; }

@@ -108,6 +108,193 @@
             </div>
         </div>
 
+    </section>
+
+    {{/* The Library / Sync / Performance cards share a single form so a
+         single Save click persists everything. The handler uses _sent
+         sentinels to decide which fields to update — fields without _sent
+         are left untouched. */}}
+    <form hx-post="/api/settings" hx-target="#save-status" hx-swap="innerHTML" id="settings-main-form">
+
+    {{/* ── Library ──────────────────────────────────────────────────
+         File output: format, naming templates, embed/chapter/plexmatch
+         toggles, tag profile (metadata atoms). */}}
+    <section class="settings-section" id="section-library" data-section="section-library">
+        <div class="card">
+            <div class="card-head"><h3>Library</h3></div>
+            <div class="settings-form-grid">
+                <div class="form-row">
+                    <label for="output_format">Output format</label>
+                    <select class="select" id="output_format" name="output_format">
+                        <option value="m4b" {{if eq .OutputFormat "m4b"}}selected{{end}}>M4B (single file)</option>
+                        <option value="mp3" {{if eq .OutputFormat "mp3"}}selected{{end}}>MP3 (chapter split)</option>
+                    </select>
+                    <div class="hint">Choose how to organize your audiobook files.</div>
+                </div>
+
+
+                <div class="form-row" style="grid-column:1 / -1">
+                    <label for="author_dir_template">Author directory template</label>
+                    <input class="input" type="text" id="author_dir_template" name="author_dir_template" value="{{.AuthorDirTemplate}}" placeholder="{author}">
+                    <div class="hint">Tokens: <code>{author}</code>, <code>{author_asin}</code>, <code>{title}</code>, <code>{subtitle}</code>, <code>{series}</code>, <code>{series_position}</code>, <code>{asin}</code>, <code>{region}</code>, <code>{narrator}</code>, <code>{publisher}</code>, <code>{language}</code>, <code>{duration}</code>, <code>{release_date}</code>, <code>{purchase_date}</code>, <code>{drm_type}</code>.</div>
+                </div>
+
+                <div class="form-row" style="grid-column:1 / -1">
+                    <label for="book_dir_template">Book directory template</label>
+                    <input class="input" type="text" id="book_dir_template" name="book_dir_template" value="{{.BookDirTemplate}}" placeholder="{title}{ - series}{ [region]}">
+                    <div class="hint">Use <code>/</code> for nested folders. Conditional segments work Sonarr-style: <code>{ - subtitle}</code>, <code>{ [region]}</code>, <code>{ (narrator)}</code>.</div>
+                </div>
+
+                <div class="form-row" style="grid-column:1 / -1">
+                    <label for="file_name_template">File name template</label>
+                    <input class="input" type="text" id="file_name_template" name="file_name_template" value="{{.FileNameTemplate}}" placeholder="{title}{ - subtitle}{ - series} {series_position} {asin}{ [region]}">
+                    <div class="hint">Extension is added automatically. Keep tokens data-only and place punctuation/spaces inside conditional blocks.</div>
+                </div>
+
+                <label class="form-row inline">
+                    <span class="row-label">
+                        Embed cover art
+                        <div class="hint">Download and embed cover art into audiobook files.</div>
+                    </span>
+                    <span class="toggle">
+                        <input type="checkbox" id="embed_cover" name="embed_cover" value="true" {{if .EmbedCover}}checked{{end}}>
+                        <span class="toggle-slider"></span>
+                    </span>
+                    <input type="hidden" name="embed_cover_sent" value="1">
+                </label>
+
+                <label class="form-row inline">
+                    <span class="row-label">
+                        Generate chapter files
+                        <div class="hint">Create <code>.chapters.txt</code> files alongside audiobooks (read by Plex, Emby, and most audiobook players).</div>
+                    </span>
+                    <span class="toggle">
+                        <input type="checkbox" id="chapter_file" name="chapter_file" value="true" {{if .ChapterFile}}checked{{end}}>
+                        <span class="toggle-slider"></span>
+                    </span>
+                    <input type="hidden" name="chapter_file_sent" value="1">
+                </label>
+
+                <label class="form-row inline" style="grid-column:1 / -1">
+                    <span class="row-label">
+                        Generate PlexMatch files
+                        <div class="hint">Write <code>.plexmatch</code> hint files in each book folder so Plex matches metadata by ASIN. Plex-specific; safe to leave on for Emby (file is ignored).</div>
+                    </span>
+                    <span class="toggle">
+                        <input type="checkbox" id="plexmatch_file" name="plexmatch_file" value="true" {{if .PlexMatchFile}}checked{{end}}>
+                        <span class="toggle-slider"></span>
+                    </span>
+                    <input type="hidden" name="plexmatch_file_sent" value="1">
+                </label>
+            </div>
+        </div>
+    </section>
+
+    {{/* ── Sync ─────────────────────────────────────────────────────
+         Schedule + run-mode. Auto-queue-new sits here since it's a
+         sync-side decision (what to do after a discovery). */}}
+    <section class="settings-section" id="section-sync" data-section="section-sync">
+        <div class="card">
+            <div class="card-head"><h3>Sync</h3></div>
+            <div class="settings-form-grid">
+                <div class="form-row">
+                    <label for="sync_schedule">Sync schedule (cron)</label>
+                    <input class="input" type="text" id="sync_schedule" name="sync_schedule" value="{{.SyncSchedule}}" placeholder="0 */6 * * *">
+                    <input type="hidden" name="sync_schedule_sent" value="1">
+                    <div class="hint">Standard cron expression. Leave empty to disable. Example: <code>0 */6 * * *</code> = every 6 hours.</div>
+                </div>
+
+                <div class="form-row">
+                    <label for="sync_mode">Scheduled sync mode</label>
+                    <select class="select" id="sync_mode" name="sync_mode">
+                        <option value="full" {{if eq .SyncMode "full"}}selected{{end}}>Full (Audible + filesystem + media server)</option>
+                        <option value="quick" {{if eq .SyncMode "quick"}}selected{{end}}>Quick (Audible-focused)</option>
+                    </select>
+                    <div class="hint">Mode used by scheduled sync runs.</div>
+                </div>
+
+                <label class="form-row inline">
+                    <span class="row-label">
+                        Enable scheduled sync
+                        <div class="hint">Controls whether cron-based sync runs automatically.</div>
+                    </span>
+                    <span class="toggle">
+                        <input type="checkbox" id="sync_enabled" name="sync_enabled" value="true" {{if .SyncEnabled}}checked{{end}}>
+                        <span class="toggle-slider"></span>
+                    </span>
+                    <input type="hidden" name="sync_enabled_sent" value="1">
+                </label>
+
+                <label class="form-row inline">
+                    <span class="row-label">
+                        Auto-add new books to queue
+                        <div class="hint">Any book discovered with <code>new</code> status is automatically appended to the download queue after sync.</div>
+                    </span>
+                    <span class="toggle">
+                        <input type="checkbox" id="sync_auto_queue_new" name="sync_auto_queue_new" value="true" {{if .SyncAutoQueueNew}}checked{{end}}>
+                        <span class="toggle-slider"></span>
+                    </span>
+                    <input type="hidden" name="sync_auto_queue_new_sent" value="1">
+                </label>
+            </div>
+            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">Sync schedule and auto-queue-new changes apply on next restart.</p>
+        </div>
+    </section>
+
+    {{/* ── Performance ──────────────────────────────────────────────
+         Worker concurrency for the three pipeline stages, plus log
+         level (verbosity affects perf at trace/debug). */}}
+    <section class="settings-section" id="section-performance" data-section="section-performance">
+        <div class="card">
+            <div class="card-head"><h3>Performance</h3></div>
+            <div class="settings-form-grid">
+                <div class="form-row">
+                    <label for="download_concurrency">Download workers</label>
+                    <input class="input" type="number" id="download_concurrency" name="download_concurrency" value="{{.DownloadConcurrency}}" min="0" max="16">
+                    <div class="hint">0 = auto. Higher values can improve throughput on fast networks.</div>
+                </div>
+
+                <div class="form-row">
+                    <label for="decrypt_concurrency">Decrypt workers</label>
+                    <input class="input" type="number" id="decrypt_concurrency" name="decrypt_concurrency" value="{{.DecryptConcurrency}}" min="0" max="16">
+                    <div class="hint">0 = auto. This stage is CPU-heavy.</div>
+                </div>
+
+                <div class="form-row">
+                    <label for="process_concurrency">Process workers</label>
+                    <input class="input" type="number" id="process_concurrency" name="process_concurrency" value="{{.ProcessConcurrency}}" min="0" max="16">
+                    <div class="hint">0 = auto. Controls metadata/organize stage parallelism.</div>
+                </div>
+
+                <div class="form-row">
+                    <label for="log_level">Log level</label>
+                    <select class="select" id="log_level" name="log_level">
+                        <option value="trace" {{if eq .LogLevel "trace"}}selected{{end}}>Trace</option>
+                        <option value="debug" {{if eq .LogLevel "debug"}}selected{{end}}>Debug</option>
+                        <option value="info" {{if eq .LogLevel "info"}}selected{{end}}>Info</option>
+                        <option value="warn" {{if eq .LogLevel "warn"}}selected{{end}}>Warn</option>
+                        <option value="error" {{if eq .LogLevel "error"}}selected{{end}}>Error</option>
+                    </select>
+                    <div class="hint">Minimum severity for log output. Changes take effect immediately.</div>
+                </div>
+            </div>
+            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">Worker concurrency changes apply on next restart.</p>
+        </div>
+    </section>
+
+    {{/* Single save row for the Library + Sync + Performance form. */}}
+    <div class="settings-save-bar">
+        <button type="submit" class="btn btn-primary">Save settings</button>
+        <button type="button" class="btn btn-secondary" hx-post="/api/library/reorganize" hx-target="#save-status" hx-swap="innerHTML">Reorganize library to current scheme</button>
+        <span id="save-status" class="status-msg"></span>
+    </div>
+    </form>
+
+    {{/* ── Tag Profile ──────────────────────────────────────────────
+         Its own form because it persists via /settings/tag-profile,
+         not /api/settings. Sits next to Library since it controls the
+         atoms embedded into downloaded files. */}}
+    <section class="settings-section" id="section-tag-profile" data-section="section-library">
         <div class="card">
             <div class="card-head"><h3>Tag Profile</h3></div>
             <form method="POST" action="/settings/tag-profile">
@@ -119,13 +306,13 @@
                         {{end}}
                     </select>
                     <div class="hint" id="tag_profile_help">
-                        Controls which metadata atoms get written into each m4b on download.
+                        Atoms written into each m4b on download.
                         <strong>Basic</strong> matches Audplexus's historical behavior.
-                        <strong>Audiobook-rich</strong> adds <code>series</code>, <code>series-part</code>, and <code>asin</code> freeform atoms — read by Audiobookshelf for series auto-grouping.
-                        Applies to subsequent downloads only; already-organized books are unchanged.
+                        <strong>Audiobook-rich</strong> adds <code>series</code>, <code>series-part</code>, and <code>asin</code> — read by Audiobookshelf for series auto-grouping.
+                        Applies to subsequent downloads only.
                     </div>
                 </div>
-                <button type="submit" class="btn btn-primary">Save Tag Profile</button>
+                <button type="submit" class="btn btn-secondary">Save Tag Profile</button>
             </form>
         </div>
     </section>
@@ -150,162 +337,6 @@
                 <dt class="muted">Config</dt>
                 <dd class="cell-mono">{{.ConfigPath}}</dd>
             </dl>
-        </div>
-    </section>
-
-    {{/* ── Configuration ────────────────────────────────────────────
-         Big shared form for sync scheduling, output format, naming
-         templates, file-side options, log level, and worker pool
-         concurrency. Every field below maps 1:1 to the legacy form;
-         only the chrome changed. Five toggles use .form-row.inline
-         with the DS .toggle component. */}}
-    <section class="settings-section" id="section-config" data-section="section-config">
-        <div class="card">
-            <div class="card-head"><h3>Configuration</h3></div>
-            <form hx-post="/api/settings" hx-target="#save-status" hx-swap="innerHTML">
-                <div class="settings-form-grid">
-                    <div class="form-row">
-                        <label for="sync_schedule">Sync schedule (cron)</label>
-                        <input class="input" type="text" id="sync_schedule" name="sync_schedule" value="{{.SyncSchedule}}" placeholder="0 */6 * * *">
-                        <input type="hidden" name="sync_schedule_sent" value="1">
-                        <div class="hint">Standard cron expression. Leave empty to disable. Example: <code>0 */6 * * *</code> = every 6 hours.</div>
-                    </div>
-
-                    <label class="form-row inline">
-                        <span class="row-label">
-                            Enable scheduled sync
-                            <div class="hint">Controls whether cron-based sync runs automatically.</div>
-                        </span>
-                        <span class="toggle">
-                            <input type="checkbox" id="sync_enabled" name="sync_enabled" value="true" {{if .SyncEnabled}}checked{{end}}>
-                            <span class="toggle-slider"></span>
-                        </span>
-                        <input type="hidden" name="sync_enabled_sent" value="1">
-                    </label>
-
-                    <div class="form-row">
-                        <label for="sync_mode">Scheduled sync mode</label>
-                        <select class="select" id="sync_mode" name="sync_mode">
-                            <option value="full" {{if eq .SyncMode "full"}}selected{{end}}>Full (Audible + filesystem + media server)</option>
-                            <option value="quick" {{if eq .SyncMode "quick"}}selected{{end}}>Quick (Audible-focused)</option>
-                        </select>
-                        <div class="hint">Mode used by scheduled sync runs.</div>
-                    </div>
-
-                    <label class="form-row inline">
-                        <span class="row-label">
-                            Auto-add new books to queue
-                            <div class="hint">Any book discovered with <code>new</code> status is automatically appended to the download queue after sync.</div>
-                        </span>
-                        <span class="toggle">
-                            <input type="checkbox" id="sync_auto_queue_new" name="sync_auto_queue_new" value="true" {{if .SyncAutoQueueNew}}checked{{end}}>
-                            <span class="toggle-slider"></span>
-                        </span>
-                        <input type="hidden" name="sync_auto_queue_new_sent" value="1">
-                    </label>
-
-                    <div class="form-row">
-                        <label for="output_format">Output format</label>
-                        <select class="select" id="output_format" name="output_format">
-                            <option value="m4b" {{if eq .OutputFormat "m4b"}}selected{{end}}>M4B (single file)</option>
-                            <option value="mp3" {{if eq .OutputFormat "mp3"}}selected{{end}}>MP3 (chapter split)</option>
-                        </select>
-                        <div class="hint">Choose how to organize your audiobook files.</div>
-                    </div>
-
-                    <div class="form-row" style="grid-column:1 / -1">
-                        <label for="author_dir_template">Author directory template</label>
-                        <input class="input" type="text" id="author_dir_template" name="author_dir_template" value="{{.AuthorDirTemplate}}" placeholder="{author}">
-                        <div class="hint">Tokens: <code>{author}</code>, <code>{author_asin}</code>, <code>{title}</code>, <code>{subtitle}</code>, <code>{series}</code>, <code>{series_position}</code>, <code>{asin}</code>, <code>{region}</code>, <code>{narrator}</code>, <code>{publisher}</code>, <code>{language}</code>, <code>{duration}</code>, <code>{release_date}</code>, <code>{purchase_date}</code>, <code>{drm_type}</code>.</div>
-                    </div>
-
-                    <div class="form-row" style="grid-column:1 / -1">
-                        <label for="book_dir_template">Book directory template</label>
-                        <input class="input" type="text" id="book_dir_template" name="book_dir_template" value="{{.BookDirTemplate}}" placeholder="{title}{ - series}{ [region]}">
-                        <div class="hint">Use <code>/</code> for nested folders. Conditional segments work Sonarr-style: <code>{ - subtitle}</code>, <code>{ [region]}</code>, <code>{ (narrator)}</code>.</div>
-                    </div>
-
-                    <div class="form-row" style="grid-column:1 / -1">
-                        <label for="file_name_template">File name template</label>
-                        <input class="input" type="text" id="file_name_template" name="file_name_template" value="{{.FileNameTemplate}}" placeholder="{title}{ - subtitle}{ - series} {series_position} {asin}{ [region]}">
-                        <div class="hint">Extension is added automatically. Keep tokens data-only and place punctuation/spaces inside conditional blocks.</div>
-                    </div>
-
-                    <label class="form-row inline">
-                        <span class="row-label">
-                            Embed cover art
-                            <div class="hint">Download and embed cover art into audiobook files.</div>
-                        </span>
-                        <span class="toggle">
-                            <input type="checkbox" id="embed_cover" name="embed_cover" value="true" {{if .EmbedCover}}checked{{end}}>
-                            <span class="toggle-slider"></span>
-                        </span>
-                        <input type="hidden" name="embed_cover_sent" value="1">
-                    </label>
-
-                    <label class="form-row inline">
-                        <span class="row-label">
-                            Generate chapter files
-                            <div class="hint">Create <code>.chapters.txt</code> files alongside audiobooks (read by Plex, Emby, and most audiobook players).</div>
-                        </span>
-                        <span class="toggle">
-                            <input type="checkbox" id="chapter_file" name="chapter_file" value="true" {{if .ChapterFile}}checked{{end}}>
-                            <span class="toggle-slider"></span>
-                        </span>
-                        <input type="hidden" name="chapter_file_sent" value="1">
-                    </label>
-
-                    <label class="form-row inline" style="grid-column:1 / -1">
-                        <span class="row-label">
-                            Generate PlexMatch files
-                            <div class="hint">Write <code>.plexmatch</code> hint files in each book folder so Plex matches metadata by ASIN. Plex-specific; safe to leave on for Emby (file is ignored).</div>
-                        </span>
-                        <span class="toggle">
-                            <input type="checkbox" id="plexmatch_file" name="plexmatch_file" value="true" {{if .PlexMatchFile}}checked{{end}}>
-                            <span class="toggle-slider"></span>
-                        </span>
-                        <input type="hidden" name="plexmatch_file_sent" value="1">
-                    </label>
-
-                    <div class="form-row">
-                        <label for="log_level">Log level</label>
-                        <select class="select" id="log_level" name="log_level">
-                            <option value="trace" {{if eq .LogLevel "trace"}}selected{{end}}>Trace</option>
-                            <option value="debug" {{if eq .LogLevel "debug"}}selected{{end}}>Debug</option>
-                            <option value="info" {{if eq .LogLevel "info"}}selected{{end}}>Info</option>
-                            <option value="warn" {{if eq .LogLevel "warn"}}selected{{end}}>Warn</option>
-                            <option value="error" {{if eq .LogLevel "error"}}selected{{end}}>Error</option>
-                        </select>
-                        <div class="hint">Minimum severity for log output. Changes take effect immediately.</div>
-                    </div>
-
-                    <div class="form-row">
-                        <label for="download_concurrency">Download workers</label>
-                        <input class="input" type="number" id="download_concurrency" name="download_concurrency" value="{{.DownloadConcurrency}}" min="0" max="16">
-                        <div class="hint">0 = auto. Higher values can improve throughput on fast networks.</div>
-                    </div>
-
-                    <div class="form-row">
-                        <label for="decrypt_concurrency">Decrypt workers</label>
-                        <input class="input" type="number" id="decrypt_concurrency" name="decrypt_concurrency" value="{{.DecryptConcurrency}}" min="0" max="16">
-                        <div class="hint">0 = auto. This stage is CPU-heavy.</div>
-                    </div>
-
-                    <div class="form-row">
-                        <label for="process_concurrency">Process workers</label>
-                        <input class="input" type="number" id="process_concurrency" name="process_concurrency" value="{{.ProcessConcurrency}}" min="0" max="16">
-                        <div class="hint">0 = auto. Controls metadata/organize stage parallelism.</div>
-                    </div>
-                </div>
-
-                <p class="muted" style="font-size:.78rem;margin:1rem 0 .85rem">Note: sync schedule/mode, auto-queue-new, and worker concurrency changes are applied on next restart.</p>
-
-                <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
-                    <button type="submit" class="btn btn-primary">Save settings</button>
-                    <button type="button" class="btn btn-secondary" hx-post="/api/library/reorganize" hx-target="#save-status" hx-swap="innerHTML">Reorganize library to current scheme</button>
-                    <span id="save-status" class="status-msg"></span>
-                </div>
-            </form>
         </div>
     </section>
 
@@ -602,10 +633,14 @@ function confirmRestart() {
     .settings-container { display: flex; flex-direction: column; gap: 1.25rem; }
     .settings-section { background: transparent; padding: 0; border: 0; }
 
-    /* Auth section — Amazon/Audible and Tag Profile sit side-by-side
-       on wide screens. */
-    .auth-section { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-    @media (max-width: 960px) { .auth-section { grid-template-columns: minmax(0, 1fr); } }
+    /* Bottom save bar shared by the Library + Sync + Performance form. */
+    .settings-save-bar {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-top: 0.25rem;
+    }
 
     /* Configuration form — two-column grid of .form-rows so we fit a
        lot of compact toggles + selects without scrolling forever. */

@@ -173,6 +173,17 @@
             return;
         }
 
+        // Close any open row-more dropdowns when the click lands outside
+        // them, or inside a menu item (so the action fires + menu closes).
+        var openMenus = document.querySelectorAll('details.row-more-menu[open]');
+        if (openMenus.length) {
+            var insideMenu = e.target.closest('details.row-more-menu');
+            var clickedItem = e.target.closest('.row-more-item');
+            openMenus.forEach(function(m) {
+                if (m !== insideMenu || clickedItem) m.removeAttribute('open');
+            });
+        }
+
         var link = e.target.closest('.book-detail-link');
         if (!link) {
             return;

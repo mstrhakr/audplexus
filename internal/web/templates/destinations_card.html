@@ -1,24 +1,26 @@
 {{define "destination_card_body"}}
 {{/*
   One destination card. Rendered by:
-    - destinations.html (full page; iterates .Destinations and emits one card each)
-    - handleDestinationToggle (HTMX swap; returns just this card after flipping
-      Enabled so the page doesn't have to reload)
+    - destinations.html (full-width stacked list; rich details visible)
+    - dashboard_summary.html (compact grid; .dest-details hidden via CSS)
+    - handleDestinationToggle (HTMX swap; returns just this card after
+      flipping Enabled so the page doesn't have to reload)
 
   The data shape matches destinationSummaryView so the same partial
-  handles both callers. .Dest is the single row; on the destinations
+  handles every caller. .Dest is the single row; on the destinations
   page that's $dest inside a range.
 */}}
 {{with .Dest}}
 <div class="dest-card {{.Type}}" id="dest-card-{{.ID}}" aria-labelledby="dest-{{.ID}}-name">
     <span class="dest-ribbon"></span>
+
     <div class="dest-head">
         <span class="type-icon">{{firstTwo .TypeLabel}}</span>
-        <div style="min-width:0;flex:1">
+        <div class="dest-head-text">
             <div class="dest-name" id="dest-{{.ID}}-name">{{.DisplayName}}</div>
             <div class="dest-url">{{if .URL}}{{.URL}}{{else}}{{.TypeLabel}}{{end}}</div>
         </div>
-        <div>
+        <div class="dest-head-status">
             {{if not .Enabled}}<span class="badge badge-inactive" role="status">Disabled</span>
             {{else if eq .Health "healthy"}}<span class="badge badge-success" role="status">Healthy</span>
             {{else if eq .Health "failed"}}<span class="badge badge-error" role="status">Failed</span>
@@ -29,12 +31,13 @@
 
     {{if .ItemCountSet}}
     <div class="dest-row">
-        <span><b>{{.ItemCount}}</b> items</span>
+        <span><b>{{.ItemCount}}</b> items on server</span>
         {{if .CoverageSet}}
         <span class="coverage-meter" aria-label="Coverage {{.Coverage}}%">
             <span class="fill{{if lt .Coverage 50}} bad{{else if lt .Coverage 90}} warn{{end}}" style="display:block;width:{{.Coverage}}%;height:100%"></span>
         </span>
         <b style="font-size:.76rem">{{.Coverage}}%</b>
+        <span class="dest-row-help">of your library is present on this server</span>
         {{end}}
     </div>
     {{end}}
@@ -47,15 +50,45 @@
     <div class="dest-row" style="color:#ff9b9b;font-size:.72rem">{{.HealthDetail}}</div>
     {{end}}
 
-    <div class="dest-row" style="align-items:center">
-        {{if .LastCheckedAt}}
-        <span class="dest-checked">
-            Last checked <time datetime="{{(.LastCheckedAt).Format "2006-01-02T15:04:05Z07:00"}}">{{formatDate (.LastCheckedAt | deref)}}</time>
-        </span>
+    {{/* Extended details — full-width destinations page only. The
+         dashboard's .destination-summary-list ancestor hides this via
+         CSS so its compact card stays compact. */}}
+    <dl class="dest-details">
+        <dt>Type</dt><dd>{{.TypeLabel}}</dd>
+        <dt>Server URL</dt><dd class="cell-mono">{{if .URL}}{{.URL}}{{else}}<span class="muted">—</span>{{end}}</dd>
+        {{if eq .Type "plex"}}
+        <dt>Plex token</dt><dd>{{if .HasCredential}}<span class="badge badge-success">Set</span>{{else}}<span class="badge badge-warning">Missing</span>{{end}}</dd>
+        <dt>Section ID</dt><dd class="cell-mono">{{if .PlexSectionID}}{{.PlexSectionID}}{{else}}<span class="muted">—</span>{{end}}</dd>
         {{else}}
-        <span class="dest-checked">Never checked</span>
+        <dt>API key</dt><dd>{{if .HasCredential}}<span class="badge badge-success">Set</span>{{else}}<span class="badge badge-warning">Missing</span>{{end}}</dd>
+        <dt>Library ID</dt><dd class="cell-mono">{{if .LibraryID}}{{.LibraryID}}{{else}}<span class="muted">—</span>{{end}}</dd>
         {{end}}
-        <span style="margin-left:auto;display:flex;gap:.35rem;flex-wrap:wrap">
+        {{if or .AudiobookPath .DestinationPath}}
+        <dt>Path translation</dt>
+        <dd class="cell-mono dest-path-translation">
+            {{if .AudiobookPath}}{{.AudiobookPath}}{{else}}<span class="muted">(audiobooks)</span>{{end}}
+            <span class="dest-path-arrow">→</span>
+            {{if .DestinationPath}}{{.DestinationPath}}{{else}}<span class="muted">(same)</span>{{end}}
+        </dd>
+        {{end}}
+        <dt>Last checked</dt>
+        <dd>
+            {{if .LastCheckedAt}}
+            <time datetime="{{(.LastCheckedAt).Format "2006-01-02T15:04:05Z07:00"}}">{{formatDate (.LastCheckedAt | deref)}}</time>
+            {{else}}<span class="muted">Never</span>{{end}}
+        </dd>
+        <dt>Added</dt><dd><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{formatDate .CreatedAt}}</time></dd>
+    </dl>
+
+    <div class="dest-actions">
+        <span class="dest-checked">
+            {{if .LastCheckedAt}}
+            Last checked <time datetime="{{(.LastCheckedAt).Format "2006-01-02T15:04:05Z07:00"}}">{{formatDate (.LastCheckedAt | deref)}}</time>
+            {{else}}
+            Never checked
+            {{end}}
+        </span>
+        <span class="dest-actions-buttons">
             <button type="button" class="btn btn-ghost btn-small"
                 hx-post="/destinations/{{.ID}}/test"
                 hx-swap="none"

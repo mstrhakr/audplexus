@@ -8,9 +8,10 @@
         <thead><tr><th>Title</th><th>ASIN</th><th>Completed</th></tr></thead>
         <tbody id="complete-body">
         {{range .DoneDownloads}}
+        {{$title := index $.DownloadTitles .ASIN}}{{$bookID := index $.DownloadBookIDs .ASIN}}
         <tr>
-            <td>{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</td>
-            <td class="cell-mono">{{.ASIN}}</td>
+            <td>{{if $bookID}}<a href="/library/{{$bookID}}" class="book-detail-link" data-book-id="{{$bookID}}">{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</a>{{else}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}{{end}}</td>
+            <td class="cell-mono">{{if $bookID}}<a href="/library/{{$bookID}}" class="book-detail-link" data-book-id="{{$bookID}}">{{.ASIN}}</a>{{else}}{{.ASIN}}{{end}}</td>
             <td class="cell-mono">{{if .CompletedAt}}{{formatDate (deref .CompletedAt)}}{{end}}</td>
         </tr>
         {{end}}
@@ -32,9 +33,10 @@
         <thead><tr><th>Title</th><th>ASIN</th><th>Error</th></tr></thead>
         <tbody id="failed-body">
         {{range .FailedDownloads}}
+        {{$title := index $.DownloadTitles .ASIN}}{{$bookID := index $.DownloadBookIDs .ASIN}}
         <tr id="failed-{{.ID}}">
-            <td>{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</td>
-            <td class="cell-mono">{{.ASIN}}</td>
+            <td>{{if $bookID}}<a href="/library/{{$bookID}}" class="book-detail-link" data-book-id="{{$bookID}}">{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</a>{{else}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}{{end}}</td>
+            <td class="cell-mono">{{if $bookID}}<a href="/library/{{$bookID}}" class="book-detail-link" data-book-id="{{$bookID}}">{{.ASIN}}</a>{{else}}{{.ASIN}}{{end}}</td>
             <td class="error-text">{{.Error}}</td>
         </tr>
         {{end}}

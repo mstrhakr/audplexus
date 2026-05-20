@@ -643,21 +643,28 @@ func mediaServerLabel(t mediaserver.Type) (string, string) {
 // destinationSummaryView is the per-destination card rendered on the
 // dashboard. Sensitive fields are intentionally absent; only display info.
 type destinationSummaryView struct {
-	ID            string
-	DisplayName   string
-	Type          string
-	TypeLabel     string
-	Enabled       bool
-	Configured    bool
-	URL           string
-	ItemCount     int
-	ItemCountSet  bool
-	Coverage      int
-	CoverageSet   bool
-	Health        string // "healthy" | "failed" | "never" | "not_configured"
-	HealthDetail  string // for failed: shorter human message
-	LastError     string
-	LastCheckedAt *time.Time
+	ID              string
+	DisplayName     string
+	Type            string
+	TypeLabel       string
+	Enabled         bool
+	Configured      bool
+	HasCredential   bool   // API key for Emby/Jellyfin/ABS, token for Plex
+	URL             string
+	PlexSectionID   string // plex-only
+	LibraryID       string // emby/jellyfin/abs
+	AudiobookPath   string
+	DestinationPath string
+	ItemCount       int
+	ItemCountSet    bool
+	Coverage        int
+	CoverageSet     bool
+	Health          string // "healthy" | "failed" | "never" | "not_configured"
+	HealthDetail    string // for failed: shorter human message
+	LastError       string
+	LastCheckedAt   *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // destinationSummaries computes per-destination summary cards for the
@@ -708,17 +715,25 @@ func (s *Server) singleDestinationSummary(ctx context.Context, id string) *desti
 // the 30s cache) only for enabled+configured destinations so toggling
 // a disabled row stays cheap.
 func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, completeBooks int) destinationSummaryView {
+	hasCred := row.APIKey != "" || row.PlexToken != ""
 	v := destinationSummaryView{
-		ID:            row.ID,
-		DisplayName:   row.DisplayName,
-		Type:          string(row.Type),
-		TypeLabel:     destinationTypeLabel(row.Type),
-		Enabled:       row.Enabled,
-		Configured:    destinationConfigured(row),
-		URL:           row.URL,
-		Health:        summarizeHealth(row),
-		LastError:     row.LastHealthCheckErr,
-		LastCheckedAt: row.LastHealthCheckAt,
+		ID:              row.ID,
+		DisplayName:     row.DisplayName,
+		Type:            string(row.Type),
+		TypeLabel:       destinationTypeLabel(row.Type),
+		Enabled:         row.Enabled,
+		Configured:      destinationConfigured(row),
+		HasCredential:   hasCred,
+		URL:             row.URL,
+		PlexSectionID:   row.PlexSectionID,
+		LibraryID:       row.LibraryID,
+		AudiobookPath:   row.AudiobookPath,
+		DestinationPath: row.DestinationPath,
+		Health:          summarizeHealth(row),
+		LastError:       row.LastHealthCheckErr,
+		LastCheckedAt:   row.LastHealthCheckAt,
+		CreatedAt:       row.CreatedAt,
+		UpdatedAt:       row.UpdatedAt,
 	}
 
 	if !v.Enabled || !v.Configured {
@@ -826,6 +841,7 @@ func (s *Server) getDashboardDownloadsData(ctx context.Context) gin.H {
 		"FailedDownloads": failedRecent,
 		"DoneDownloads":   completeDownloads,
 		"DownloadTitles":  s.getDownloadTitles(ctx, rowsForTitles),
+		"DownloadBookIDs": s.getDownloadBookIDs(ctx, rowsForTitles),
 	}
 }
 
@@ -846,6 +862,25 @@ func (s *Server) getDownloadTitles(ctx context.Context, rows []database.Download
 		titles[row.ASIN] = book.Title
 	}
 	return titles
+}
+
+// getDownloadBookIDs returns ASIN→book-ID for download queue rows whose
+// matching book row still exists. Used by the dashboard tables so the
+// title/ASIN cells can deep-link to /library/<id>. Rows whose book has
+// been pruned simply get no entry (the template falls back to plain text).
+func (s *Server) getDownloadBookIDs(ctx context.Context, rows []database.DownloadQueue) map[string]int64 {
+	ids := make(map[string]int64)
+	for _, row := range rows {
+		if _, exists := ids[row.ASIN]; exists {
+			continue
+		}
+		book, err := s.db.GetBookByASIN(ctx, row.ASIN)
+		if err != nil || book == nil || book.ID == 0 {
+			continue
+		}
+		ids[row.ASIN] = book.ID
+	}
+	return ids
 }
 
 // handleDashboardSummary renders only the dashboard summary block for HTMX polling.

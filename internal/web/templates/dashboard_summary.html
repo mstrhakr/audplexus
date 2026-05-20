@@ -33,50 +33,18 @@
         Library destinations
         {{if .DestinationSummaries}}<span class="count">{{len .DestinationSummaries}}</span>{{end}}
         <span class="right">
-            <button type="button" class="link-btn" hx-get="/destinations/modal" hx-target="#dest-modal-content" hx-swap="innerHTML">Add destination</button>
+            <button type="button" class="btn btn-outline-ds btn-small" hx-get="/destinations/modal" hx-target="#dest-modal-content" hx-swap="innerHTML">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Add destination
+            </button>
         </span>
     </div>
     {{if .DestinationSummaries}}
-    <ul role="list" aria-live="polite" aria-atomic="false" class="dest-grid destination-summary-list" style="list-style:none;padding:0;margin:0">
+    <div class="dest-grid destination-summary-list">
         {{range .DestinationSummaries}}
-        <li class="dest-card {{.Type}}" aria-labelledby="dest-sum-{{.ID}}-name">
-            <span class="dest-ribbon"></span>
-            <div class="dest-head">
-                <span class="type-icon">{{firstTwo .TypeLabel}}</span>
-                <div style="min-width:0;flex:1">
-                    <div class="dest-name" id="dest-sum-{{.ID}}-name">{{.DisplayName}}</div>
-                    <div class="dest-url">{{.TypeLabel}}</div>
-                </div>
-                <div>
-                    {{if not .Enabled}}<span class="badge badge-inactive" role="status">Disabled</span>
-                    {{else if eq .Health "healthy"}}<span class="badge badge-success" role="status">Healthy</span>
-                    {{else if eq .Health "failed"}}<span class="badge badge-error" role="status">Failed</span>
-                    {{else if eq .Health "never"}}<span class="badge badge-inactive" role="status">Never checked</span>
-                    {{else}}<span class="badge badge-warning" role="status">Not configured</span>{{end}}
-                </div>
-            </div>
-            {{if .ItemCountSet}}
-            <div class="dest-row">
-                <span><b aria-live="off">{{.ItemCount}}</b> items</span>
-                {{if .CoverageSet}}
-                <span class="coverage-meter" aria-label="Coverage {{.Coverage}}%">
-                    <span class="fill{{if lt .Coverage 50}} bad{{else if lt .Coverage 90}} warn{{end}}" style="display:block;width:{{.Coverage}}%;height:100%"></span>
-                </span>
-                <b aria-live="off" style="font-size:.76rem">{{.Coverage}}%</b>
-                {{end}}
-            </div>
-            {{end}}
-            {{if .HealthDetail}}
-            <div class="dest-row" style="color:#ff9b9b;font-size:.72rem">{{.HealthDetail}}</div>
-            {{end}}
-            {{if .LastCheckedAt}}
-            <div class="dest-checked">
-                Last checked <time datetime="{{(.LastCheckedAt).Format "2006-01-02T15:04:05Z07:00"}}">{{formatDate (.LastCheckedAt | deref)}}</time>
-            </div>
-            {{end}}
-        </li>
+        {{template "destination_card_body" (dict "Dest" .)}}
         {{end}}
-    </ul>
+    </div>
     {{else}}
     <div class="empty-card">
         No destinations configured.
