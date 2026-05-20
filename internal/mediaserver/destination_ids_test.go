@@ -44,6 +44,7 @@ func (d *destinationIDsStubDB) Reset(ctx context.Context) error { return nil }
 func (d *destinationIDsStubDB) GetBook(ctx context.Context, id int64) (*database.Book, error) { return nil, nil }
 func (d *destinationIDsStubDB) GetBookByASIN(ctx context.Context, asin string) (*database.Book, error) { return nil, nil }
 func (d *destinationIDsStubDB) ListBooks(ctx context.Context, filter database.BookFilter) ([]database.Book, int, error) { return nil, 0, nil }
+func (d *destinationIDsStubDB) CountBooksByStatus(ctx context.Context) (map[database.BookStatus]int, error) { return nil, nil }
 func (d *destinationIDsStubDB) UpsertBook(ctx context.Context, book *database.Book) error { return nil }
 func (d *destinationIDsStubDB) UpdateBookStatus(ctx context.Context, id int64, status database.BookStatus) error { return nil }
 func (d *destinationIDsStubDB) DeleteBook(ctx context.Context, id int64) error { return nil }

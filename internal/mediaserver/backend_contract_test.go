@@ -90,6 +90,9 @@ func (s *settingsOnlyStubDB) GetBookByASIN(ctx context.Context, asin string) (*d
 func (s *settingsOnlyStubDB) ListBooks(ctx context.Context, f database.BookFilter) ([]database.Book, int, error) {
 	return nil, 0, nil
 }
+func (s *settingsOnlyStubDB) CountBooksByStatus(ctx context.Context) (map[database.BookStatus]int, error) {
+	return nil, nil
+}
 func (s *settingsOnlyStubDB) UpsertBook(ctx context.Context, b *database.Book) error { return nil }
 func (s *settingsOnlyStubDB) UpdateBookStatus(ctx context.Context, id int64, status database.BookStatus) error {
 	return nil

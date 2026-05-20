@@ -488,6 +488,9 @@ func (m *reconcileMockDB) UpsertBook(ctx context.Context, book *database.Book) e
 	m.upserted = &copyBook
 	return nil
 }
+func (m *reconcileMockDB) CountBooksByStatus(ctx context.Context) (map[database.BookStatus]int, error) {
+	return nil, nil
+}
 func (m *reconcileMockDB) UpdateBookStatus(ctx context.Context, id int64, status database.BookStatus) error {
 	return nil
 }
