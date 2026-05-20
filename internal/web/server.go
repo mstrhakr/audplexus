@@ -1080,6 +1080,7 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 		"BookFiles":     files,
 		"BookFileCount": len(files),
 		"BookAction":    buildLibraryBookActions([]database.Book{*book}, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false))[book.ID],
+		"BookDestinationStatuses": s.bookDestinationStatuses(ctx, book.ID),
 	}
 
 	if c.Query("view") == "modal" || c.GetHeader("HX-Request") == "true" {
@@ -1530,6 +1531,67 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 
 	data["Page"] = "settings"
 	return data
+}
+
+// bookDestinationStatusView is one row in the per-destination sync list
+// rendered on the book detail modal. Sync state is mapped to a small
+// vocabulary the template can render as a badge.
+type bookDestinationStatusView struct {
+	ID          string
+	DisplayName string
+	Type        string
+	TypeLabel   string
+	State       string // "synced" | "syncing" | "pending" | "failed" | "orphaned" | "removed" | "not_configured"
+	Label       string // human label for the state badge
+}
+
+// bookDestinationStatuses joins enabled destinations with the per-book
+// sync table. Destinations that haven't been touched for this book yet
+// surface as "Pending" — gives the user a clear picture of where the
+// book has and hasn't landed.
+func (s *Server) bookDestinationStatuses(ctx context.Context, bookID int64) []bookDestinationStatusView {
+	rows, err := s.db.ListLibraryDestinations(ctx)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	syncs, _ := s.db.GetBookDestinations(ctx, bookID)
+	byDestID := make(map[string]database.BookDestination, len(syncs))
+	for _, s := range syncs {
+		byDestID[s.DestinationID] = s
+	}
+
+	out := make([]bookDestinationStatusView, 0, len(rows))
+	for _, r := range rows {
+		if !r.Enabled {
+			continue
+		}
+		v := bookDestinationStatusView{
+			ID:          r.ID,
+			DisplayName: r.DisplayName,
+			Type:        string(r.Type),
+			TypeLabel:   destinationTypeLabel(r.Type),
+		}
+		if sync, ok := byDestID[r.ID]; ok {
+			switch sync.SyncState {
+			case database.BookDestSyncSynced:
+				v.State, v.Label = "synced", "Synced"
+			case database.BookDestSyncSyncing:
+				v.State, v.Label = "syncing", "Syncing"
+			case database.BookDestSyncFailed:
+				v.State, v.Label = "failed", "Failed"
+			case database.BookDestSyncOrphaned:
+				v.State, v.Label = "orphaned", "Orphaned"
+			case database.BookDestSyncRemovedFromDestination:
+				v.State, v.Label = "removed", "Removed"
+			default:
+				v.State, v.Label = "pending", "Pending"
+			}
+		} else {
+			v.State, v.Label = "pending", "Pending"
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // sidebarData is the per-render snapshot used by the sidebar in base.html:

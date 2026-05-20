@@ -1298,19 +1298,84 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 
 /* Book detail */
 .book-detail {
-    display: flex;
-    gap: 2rem;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1.5rem;
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 1.75rem;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
 }
-
-.book-cover img { max-width: 250px; border-radius: var(--radius); }
-.book-info h2 { margin: 0 0 0.5rem; }
-.book-info p { margin: 0.35rem 0; color: var(--text-muted); }
-.book-info strong { color: var(--text); }
-.book-actions { margin: 1rem 0; }
+.book-detail .cover-wrap { display: flex; flex-direction: column; gap: 0.75rem; }
+.book-detail .cover-wrap img {
+    width: 100%;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    background: linear-gradient(135deg, #0f3460, #16213e);
+}
+.book-detail .cover-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+.book-detail .cover-actions .btn { width: 100%; justify-content: center; }
+.book-detail h2 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    line-height: 1.2;
+    margin: 0 0 0.4rem;
+}
+.book-detail .series {
+    color: var(--accent);
+    font-style: italic;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+}
+.book-detail .badge-row {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+.book-detail .meta-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.3rem 1rem;
+    font-size: 0.85rem;
+    margin: 1rem 0;
+}
+.book-detail .meta-grid dt { color: var(--text-muted); font-weight: 500; }
+.book-detail .meta-grid dd { color: var(--text); margin: 0; }
+.book-detail .section-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin: 1.25rem 0 0.5rem;
+}
+.book-detail .dest-status-list {
+    list-style: none;
+    padding: 0;
+    margin: 0.5rem 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.82rem;
+}
+.book-detail .dest-status-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.4rem 0.6rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+.book-detail .dest-status-list .pull-right { margin-left: auto; }
+.book-detail .desc { color: var(--text); line-height: 1.65; font-size: 0.9rem; margin-top: 1.5rem; }
+.book-detail .desc p { margin: 0.55rem 0; }
+.book-actions { margin: 1rem 0 1.25rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .description { margin-top: 1.5rem; }
 .description p { line-height: 1.6; }
 .series { color: var(--accent); font-style: italic; }

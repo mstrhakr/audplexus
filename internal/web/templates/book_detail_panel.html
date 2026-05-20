@@ -1,26 +1,90 @@
 {{define "book_detail_panel.html"}}
 <div class="book-detail" data-book-detail-root>
     {{if .Message}}
-    <div class="info-box" style="border-color: var(--success); margin-bottom: 1rem;">{{.Message}}</div>
-    {{end}}
-    <div class="book-cover">
-        {{if .Book.CoverURL}}<img src="{{.Book.CoverURL}}" alt="Cover">{{end}}
+    <div class="alert ok" style="grid-column:1 / -1;margin-bottom:1rem">
+        <span class="ico">✓</span>
+        <div>{{.Message}}</div>
     </div>
-    <div class="book-info">
+    {{end}}
+
+    <div class="cover-wrap">
+        {{if .Book.CoverURL}}
+        <img src="{{.Book.CoverURL}}" alt="Cover for {{.Book.Title}}">
+        {{else}}
+        <img src="" alt="" style="aspect-ratio:2/3">
+        {{end}}
+        <div class="cover-actions">
+            {{if eq (printf "%s" .Book.Status) "new"}}
+            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" class="btn btn-primary">Queue Download</button>
+            {{else if eq (printf "%s" .Book.Status) "failed"}}
+            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" class="btn btn-primary">Retry Download</button>
+            {{end}}
+
+            {{if .BookAction.ShowConvert}}
+            <button hx-post="/api/books/{{.Book.ID}}/convert?format={{.BookAction.ConvertFormat}}"
+                hx-confirm="{{.BookAction.ConvertConfirm}}"
+                hx-swap="none"
+                class="btn btn-secondary">{{.BookAction.ConvertLabel}}</button>
+            {{end}}
+
+            {{if .BookAction.ShowDelete}}
+            <button hx-post="/api/books/{{.Book.ID}}/delete-media?view=modal"
+                    hx-confirm="{{.BookAction.DeleteConfirm}}"
+                    hx-target="#book-detail-modal-content"
+                    hx-swap="innerHTML"
+                    class="btn btn-danger">Delete Files</button>
+            {{end}}
+
+            {{if .Book.ASIN}}
+            <a href="https://www.audible.com/pd/{{.Book.ASIN}}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost">Open on Audible</a>
+            {{end}}
+        </div>
+    </div>
+
+    <div>
         <h2>{{.Book.Title}}</h2>
-        {{if .Book.Series}}<p class="series">{{.Book.Series}} #{{.Book.SeriesPosition}}</p>{{end}}
-        <p><strong>Author:</strong> {{.Book.Author}}</p>
-        <p><strong>Narrator:</strong> {{.Book.Narrator}}</p>
-        <p><strong>Publisher:</strong> {{.Book.Publisher}}</p>
-        <p><strong>Duration:</strong> {{formatDuration .Book.Duration}}</p>
-        <p><strong>Purchased:</strong> {{formatDate .Book.PurchaseDate}}</p>
-        <p><strong>Released:</strong> {{formatDate .Book.ReleaseDate}}</p>
-        <p><strong>Status:</strong> <span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span></p>
-        <p><strong>ASIN:</strong> {{.Book.ASIN}}</p>
-        {{if .BookFolderPath}}<p><strong>Folder:</strong> {{.BookFolderPath}}</p>{{end}}
+        {{if .Book.Series}}<div class="series">{{.Book.Series}} · Book {{.Book.SeriesPosition}}</div>{{end}}
+
+        <div class="badge-row">
+            <span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span>
+            {{if .Book.FilePath}}<span class="badge badge-success">On disk</span>{{end}}
+        </div>
+
+        <dl class="meta-grid">
+            <dt>Author</dt><dd>{{.Book.Author}}</dd>
+            <dt>Narrator</dt><dd>{{if .Book.Narrator}}{{.Book.Narrator}}{{else}}—{{end}}</dd>
+            <dt>Duration</dt><dd>{{formatDuration .Book.Duration}}</dd>
+            <dt>Released</dt><dd>{{formatDate .Book.ReleaseDate}}</dd>
+            <dt>Purchased</dt><dd>{{formatDate .Book.PurchaseDate}}</dd>
+            <dt>Publisher</dt><dd>{{if .Book.Publisher}}{{.Book.Publisher}}{{else}}—{{end}}</dd>
+            <dt>ASIN</dt><dd class="cell-mono">{{.Book.ASIN}}</dd>
+            {{if .BookFolderPath}}<dt>Folder</dt><dd class="cell-mono" style="font-size:.75rem;word-break:break-all">{{.BookFolderPath}}</dd>{{end}}
+        </dl>
+
+        {{if .BookDestinationStatuses}}
+        <h3 class="section-label">Destinations</h3>
+        <ul class="dest-status-list">
+            {{range .BookDestinationStatuses}}
+            <li>
+                <span class="dest-chip {{.Type}}">{{firstTwo .TypeLabel}}</span>
+                <span>{{.DisplayName}}</span>
+                <span class="pull-right">
+                    {{if eq .State "synced"}}<span class="badge badge-success">{{.Label}}</span>
+                    {{else if eq .State "syncing"}}<span class="badge badge-warning">{{.Label}}</span>
+                    {{else if eq .State "failed"}}<span class="badge badge-error">{{.Label}}</span>
+                    {{else if eq .State "orphaned"}}<span class="badge badge-warning">{{.Label}}</span>
+                    {{else if eq .State "removed"}}<span class="badge badge-inactive">{{.Label}}</span>
+                    {{else}}<span class="badge badge-neutral">{{.Label}}</span>{{end}}
+                </span>
+            </li>
+            {{end}}
+        </ul>
+        {{end}}
+
         {{if gt .BookFileCount 0}}
+        <h3 class="section-label">Files ({{.BookFileCount}})</h3>
         <details class="book-files-details">
-            <summary>Show files and details ({{.BookFileCount}})</summary>
+            <summary>Show files and details</summary>
             <table class="book-files-table">
                 <thead>
                     <tr>
@@ -44,38 +108,12 @@
             </table>
         </details>
         {{else if .Book.FilePath}}
-        <p><strong>Files:</strong> Unable to list files from disk right now.</p>
+        <p class="muted" style="margin-top:1rem;font-size:.85rem">Unable to list files from disk right now.</p>
         {{end}}
 
-        <div class="book-actions">
-            {{if eq (printf "%s" .Book.Status) "new"}}
-            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" class="btn btn-primary">Queue Download</button>
-            {{end}}
-            {{if and (eq (printf "%s" .Book.Status) "complete") .Book.FilePath}}
-                {{if hasSuffix .Book.FilePath ".m4b"}}
-                <button hx-post="/api/books/{{.Book.ID}}/convert?format=mp3"
-                        hx-confirm="Split this book into per-chapter MP3 files? The original M4B will be removed."
-                        hx-swap="none"
-                        class="btn btn-secondary">Convert to MP3 (chapters)</button>
-                {{else}}
-                <button hx-post="/api/books/{{.Book.ID}}/convert?format=m4b"
-                        hx-confirm="Reassemble chapter MP3s into a single M4B? The chapter files will be removed."
-                        hx-swap="none"
-                        class="btn btn-secondary">Convert to M4B (single file)</button>
-                {{end}}
-            {{end}}
-                {{if .BookAction.ShowDelete}}
-                <button hx-post="/api/books/{{.Book.ID}}/delete-media?view=modal"
-                    hx-confirm="{{.BookAction.DeleteConfirm}}"
-                    hx-target="#book-detail-modal-content"
-                    hx-swap="innerHTML"
-                    class="btn btn-danger">Delete Files</button>
-                {{end}}
-        </div>
-
         {{if .Book.Description}}
-        <div class="description">
-            <h3>Description</h3>
+        <div class="desc">
+            <h3 class="section-label">Description</h3>
             <div class="book-description-html">{{safeHTML .Book.Description}}</div>
         </div>
         {{end}}
