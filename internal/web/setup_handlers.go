@@ -81,7 +81,7 @@ func (s *Server) handleSetupWizard(c *gin.Context) {
 		}
 	}
 
-	c.HTML(http.StatusOK, "setup.html", data)
+	c.HTML(http.StatusOK, "setup.html", s.withSidebar(ctx, data))
 }
 
 // handleSetupMarketplace persists the marketplace selection submitted by

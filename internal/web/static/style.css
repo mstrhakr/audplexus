@@ -117,17 +117,97 @@ body {
 }
 
 .nav-links li a {
-    display: block;
-    padding: 0.75rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.55rem 1rem;
+    margin: 0 0.5rem;
+    border-radius: 7px;
     color: var(--text-muted);
     text-decoration: none;
     transition: background 0.2s, color 0.2s;
+    position: relative;
 }
 
 .nav-links li a:hover,
 .nav-links li a.active {
     background: var(--surface-2);
     color: var(--text);
+}
+
+.nav-links li a.active { font-weight: 600; }
+.nav-links li a.active::before {
+    content: "";
+    position: absolute;
+    left: -0.5rem;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    background: var(--accent);
+    border-radius: 0 3px 3px 0;
+}
+
+.nav-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    opacity: 0.85;
+}
+
+.nav-badge {
+    margin-left: auto;
+    font-size: 0.65rem;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    min-width: 18px;
+    text-align: center;
+    line-height: 1.3;
+}
+.nav-badge.muted {
+    background: var(--surface-2);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+}
+.nav-badge.danger {
+    background: var(--error);
+    color: #fff;
+}
+
+/* Footer (health dot + version + uptime) */
+.sidebar { display: flex; flex-direction: column; }
+.sidebar-footer {
+    margin-top: auto;
+    padding: 0.75rem 1rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+.sidebar-footer .health-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--success);
+    box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.18);
+    flex-shrink: 0;
+}
+.sidebar-footer .health-dot-warn {
+    background: var(--warning);
+    box-shadow: 0 0 0 3px rgba(255, 152, 0, 0.18);
+}
+.sidebar-footer .meta {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    line-height: 1.3;
+    min-width: 0;
+}
+.sidebar-footer .meta strong {
+    color: var(--text);
+    font-size: 0.76rem;
+    display: block;
 }
 
 /* Main column (right of sidebar) */

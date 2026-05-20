@@ -122,18 +122,19 @@ func (s *Server) handleDestinations(c *gin.Context) {
 	data["Destinations"] = dests
 	data["HealthyCount"] = healthy
 	data["TotalCount"] = len(dests)
-	c.HTML(http.StatusOK, "destinations.html", data)
+	c.HTML(http.StatusOK, "destinations.html", s.withSidebar(ctx, data))
 }
 
 // handleDestinationsNewPicker renders the type-picker page (step 1 of 2
 // in the add flow). Two-page server flow rather than a JS-toggled single
 // form — simpler, validation cleaner, no JS dependency.
 func (s *Server) handleDestinationsNewPicker(c *gin.Context) {
-	data := s.authBaseData(c.Request.Context())
+	ctx := c.Request.Context()
+	data := s.authBaseData(ctx)
 	data["Page"] = "destinations_new_picker"
 	data["PickerAction"] = "/destinations/new"
 	data["ModalMode"] = false
-	c.HTML(http.StatusOK, "destinations_new.html", data)
+	c.HTML(http.StatusOK, "destinations_new.html", s.withSidebar(ctx, data))
 }
 
 // handleDestinationsModalPicker returns just the type-picker body (no
@@ -177,11 +178,12 @@ func (s *Server) handleDestinationsNewForm(c *gin.Context) {
 		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": "Pick a destination type."})
 		return
 	}
-	data := s.authBaseData(c.Request.Context())
+	ctx := c.Request.Context()
+	data := s.authBaseData(ctx)
 	data["Page"] = "destinations_new_form"
 	data["DestType"] = t
 	data["DestTypeLabel"] = destinationTypeLabel(database.LibraryDestinationType(t))
-	c.HTML(http.StatusOK, "destinations_form.html", data)
+	c.HTML(http.StatusOK, "destinations_form.html", s.withSidebar(ctx, data))
 }
 
 // handleDestinationTest performs a live health check against the
@@ -1058,18 +1060,19 @@ func (s *Server) uniqueDisplayName(ctx context.Context, candidate, excludeID str
 // values (PlexToken, APIKey) are NOT prefilled into the template — leaving
 // the field blank means "keep existing"; entering a new value rotates.
 func (s *Server) handleDestinationEditForm(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
-	row, err := s.db.GetLibraryDestination(c.Request.Context(), id)
+	row, err := s.db.GetLibraryDestination(ctx, id)
 	if err != nil || row == nil {
 		s.renderAuthPage(c, http.StatusNotFound, gin.H{"Error": "Destination not found."})
 		return
 	}
-	data := s.authBaseData(c.Request.Context())
+	data := s.authBaseData(ctx)
 	data["Page"] = "destinations_edit"
 	data["DestType"] = string(row.Type)
 	data["DestTypeLabel"] = destinationTypeLabel(row.Type)
 	data["Dest"] = row // template uses Dest.DisplayName, .URL, .LibraryID, .PlexSectionID
-	c.HTML(http.StatusOK, "destinations_form.html", data)
+	c.HTML(http.StatusOK, "destinations_form.html", s.withSidebar(ctx, data))
 }
 
 // handleDestinationUpdate persists an edit. Sensitive fields (PlexToken,
@@ -1137,8 +1140,9 @@ func (s *Server) handleDestinationToggle(c *gin.Context) {
 //   - first POST (no `confirm` field) renders the confirmation page
 //   - second POST (confirm=1, set by the confirmation page's submit) deletes
 func (s *Server) handleDestinationDelete(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
-	d, err := s.db.GetLibraryDestination(c.Request.Context(), id)
+	d, err := s.db.GetLibraryDestination(ctx, id)
 	if err != nil || d == nil {
 		s.renderAuthPage(c, http.StatusNotFound, gin.H{"Error": "Destination not found."})
 		return
@@ -1146,7 +1150,7 @@ func (s *Server) handleDestinationDelete(c *gin.Context) {
 
 	if c.PostForm("confirm") != "1" {
 		// First POST: render the confirmation page.
-		data := s.authBaseData(c.Request.Context())
+		data := s.authBaseData(ctx)
 		data["Page"] = "destinations_delete"
 		data["Dest"] = destinationView{
 			ID:          d.ID,
@@ -1154,7 +1158,7 @@ func (s *Server) handleDestinationDelete(c *gin.Context) {
 			Type:        string(d.Type),
 			TypeLabel:   destinationTypeLabel(d.Type),
 		}
-		c.HTML(http.StatusOK, "destinations_delete.html", data)
+		c.HTML(http.StatusOK, "destinations_delete.html", s.withSidebar(ctx, data))
 		return
 	}
 

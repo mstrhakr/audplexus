@@ -16,6 +16,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,6 +59,10 @@ type Server struct {
 	audiobooksPath string
 	downloadsPath  string
 	configPath     string
+	// startedAt is set at construction and used by the sidebar footer
+	// to render uptime ("6d 14h"). Not used for any business logic, so
+	// no need to plumb it through; reads from time.Since(s.startedAt).
+	startedAt time.Time
 	// destItemCountCache caches per-destination LibraryItemCount results
 	// (30s TTL) so the dashboard's 12s poll doesn't hammer remote servers.
 	// Keyed by destination ID; entries expire independently.
@@ -104,6 +109,7 @@ func NewServer(
 		audiobooksPath: audiobooksPath,
 		downloadsPath:  downloadsPath,
 		configPath:     configPath,
+		startedAt:      time.Now(),
 	}
 
 	// Wire up the media-server sync callbacks. With multi-destination, the
@@ -557,7 +563,7 @@ func normalizeClientIPForLog(ip string) string {
 func (s *Server) handleDashboard(c *gin.Context) {
 	ctx := c.Request.Context()
 	_, _ = s.clearStaleFailedDownloads(ctx)
-	c.HTML(http.StatusOK, "dashboard.html", s.getDashboardData(ctx))
+	c.HTML(http.StatusOK, "dashboard.html", s.withSidebar(ctx, s.getDashboardData(ctx)))
 }
 
 func (s *Server) getDashboardData(ctx context.Context) gin.H {
@@ -881,7 +887,7 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		c.HTML(http.StatusOK, "library_table.html", data)
 		return
 	}
-	c.HTML(http.StatusOK, "library.html", data)
+	c.HTML(http.StatusOK, "library.html", s.withSidebar(ctx, data))
 }
 
 // libraryStatusCounts returns the count of books per status bucket used by
@@ -1266,7 +1272,7 @@ func (s *Server) handleDownloads(c *gin.Context) {
 		tab = "active"
 	}
 
-	c.HTML(http.StatusOK, "downloads.html", gin.H{
+	c.HTML(http.StatusOK, "downloads.html", s.withSidebar(ctx, gin.H{
 		"Active":              active,
 		"Pending":             pending,
 		"Complete":            complete,
@@ -1280,7 +1286,7 @@ func (s *Server) handleDownloads(c *gin.Context) {
 		"ActiveTab":           tab,
 		"CompletedWindow":     window,
 		"CompletedWindowOpts": completedWindowOptions(),
-	})
+	}))
 }
 
 // completedWindowOption is a single option in the Completed tab's
@@ -1408,8 +1414,9 @@ func (s *Server) clearStaleFailedDownloads(ctx context.Context) (int, error) {
 
 // handleSettings renders the settings page.
 func (s *Server) handleSettings(c *gin.Context) {
-	data := s.settingsPageData(c.Request.Context())
-	c.HTML(http.StatusOK, "settings.html", data)
+	ctx := c.Request.Context()
+	data := s.settingsPageData(ctx)
+	c.HTML(http.StatusOK, "settings.html", s.withSidebar(ctx, data))
 }
 
 // handleTagProfileSelect persists the active tag profile. Strict validation
@@ -1522,6 +1529,98 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 	}
 
 	data["Page"] = "settings"
+	return data
+}
+
+// sidebarData is the per-render snapshot used by the sidebar in base.html:
+// the badge counts, version, and uptime string. Computed cheaply per full-
+// page render (a handful of LIMIT 1 / len() queries) — for HTMX fragment
+// responses the value is omitted since base.html isn't part of the swap.
+type sidebarData struct {
+	NewBooks       int
+	ActiveDL       int
+	FailedDestAlert int
+	Version        string
+	Uptime         string
+	Healthy        bool // true when no failed destinations and Audible auth is good
+}
+
+// computeSidebar gathers the fields the sidebar template renders. Cheap
+// enough to call per full-page request (a few LIMIT-1 counts), but the
+// numbers are stale across the lifetime of the page; the dashboard and
+// pipeline pages refresh them on their HTMX polls anyway.
+func (s *Server) computeSidebar(ctx context.Context) sidebarData {
+	out := sidebarData{
+		Version: serverVersion(),
+		Uptime:  formatUptime(time.Since(s.startedAt)),
+	}
+
+	newStatus := database.BookStatusNew
+	_, newCount, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &newStatus, Limit: 1})
+	out.NewBooks = newCount
+
+	activeStatus := database.DownloadStatusActive
+	activeDL, _ := s.db.ListDownloads(ctx, &activeStatus)
+	out.ActiveDL = len(activeDL)
+
+	// Failed-destination alert count drives the danger-styled badge on the
+	// Destinations nav link. We look at the saved health column rather
+	// than re-probing remotes — the dashboard's destination summaries do
+	// the live probing on their own poll.
+	if rows, err := s.db.ListLibraryDestinations(ctx); err == nil {
+		for _, r := range rows {
+			if !r.Enabled {
+				continue
+			}
+			if r.LastHealthCheckOK != nil && !*r.LastHealthCheckOK {
+				out.FailedDestAlert++
+			}
+		}
+	}
+
+	out.Healthy = out.FailedDestAlert == 0 && s.audible.IsAuthenticated()
+	return out
+}
+
+// serverVersion returns a printable version string. Pulled from the Go
+// build info — in a release build this is the module version tag; in
+// "go run" / dev builds it's "(devel)". Trimmed to something compact.
+func serverVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		v := info.Main.Version
+		if v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "dev"
+}
+
+// formatUptime returns a compact "6d 14h" / "3h 12m" / "47s" string.
+func formatUptime(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		h := int(d / time.Hour)
+		m := int(d/time.Minute) - h*60
+		return fmt.Sprintf("%dh %dm", h, m)
+	}
+	days := int(d / (24 * time.Hour))
+	h := int(d/time.Hour) - days*24
+	return fmt.Sprintf("%dd %dh", days, h)
+}
+
+// withSidebar merges the sidebar snapshot into the page data map. Use on
+// every full-page render so base.html can render the nav badges + footer.
+// Safe to call with a nil/empty map.
+func (s *Server) withSidebar(ctx context.Context, data gin.H) gin.H {
+	if data == nil {
+		data = gin.H{}
+	}
+	data["Sidebar"] = s.computeSidebar(ctx)
 	return data
 }
 
@@ -2482,13 +2581,14 @@ func (s *Server) authBaseData(ctx context.Context) gin.H {
 }
 
 func (s *Server) renderAuthPage(c *gin.Context, status int, extra gin.H) {
-	data := s.settingsPageData(c.Request.Context())
+	ctx := c.Request.Context()
+	data := s.settingsPageData(ctx)
 	data["FocusSection"] = "auth"
 	for k, v := range extra {
 		data[k] = v
 	}
 	data["Page"] = "settings"
-	c.HTML(status, "settings.html", data)
+	c.HTML(status, "settings.html", s.withSidebar(ctx, data))
 }
 
 // handleAudibleMarketplaceSelect updates the preferred Audible marketplace.
