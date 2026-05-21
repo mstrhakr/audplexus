@@ -36,6 +36,7 @@ import (
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
 	"github.com/mstrhakr/audplexus/internal/organizer"
 	audible "github.com/mstrhakr/go-audible"
+	"github.com/robfig/cron/v3"
 )
 
 var webLog = logging.Component("web")
@@ -236,6 +237,54 @@ func (s *Server) setupTemplates() {
 				return ""
 			}
 			return t.Format("Jan 2, 2006")
+		},
+		// formatRelative renders a human-friendly "5 minutes ago" /
+		// "2 hours ago" / "in 4 hours" string. Returns "" for zero so
+		// the template can skip rendering altogether. Bidirectional —
+		// past times read "X ago", future times read "in X".
+		"formatRelative": func(t time.Time) string {
+			if t.IsZero() {
+				return ""
+			}
+			d := time.Since(t)
+			future := d < 0
+			if future {
+				d = -d
+			}
+			fmtUnit := func(n int, unit string) string {
+				if n == 1 {
+					if future {
+						return "in 1 " + unit
+					}
+					return "1 " + unit + " ago"
+				}
+				if future {
+					return fmt.Sprintf("in %d %ss", n, unit)
+				}
+				return fmt.Sprintf("%d %ss ago", n, unit)
+			}
+			switch {
+			case d < time.Minute:
+				if future {
+					return "in under a minute"
+				}
+				return "just now"
+			case d < time.Hour:
+				return fmtUnit(int(d/time.Minute), "minute")
+			case d < 24*time.Hour:
+				return fmtUnit(int(d/time.Hour), "hour")
+			case d < 7*24*time.Hour:
+				days := int(d / (24 * time.Hour))
+				if !future && days == 1 {
+					return "yesterday"
+				}
+				if future && days == 1 {
+					return "tomorrow"
+				}
+				return fmtUnit(days, "day")
+			default:
+				return t.Format("Jan 2, 2006")
+			}
 		},
 		"statusBadge": func(status database.BookStatus) string {
 			switch status {
@@ -1953,6 +2002,17 @@ func (s *Server) triggerSync(c *gin.Context, mode library.SyncMode) {
 }
 
 // syncStatusData converts a SyncProgress into template data.
+//
+// When no sync is running, we also surface the last completed sync's
+// summary (when it ran, how many books were found / added, status,
+// error) so the panel doesn't look empty between runs. The data
+// source has two layers:
+//   - in-memory: SyncService keeps the last completed progress in
+//     s.progress between runs, so as long as the process hasn't
+//     restarted we can read it for free.
+//   - DB fallback: on cold start the in-memory progress is zero-valued,
+//     so we hit sync_history.GetLastSync to recover the most recent
+//     row. Cheap (single indexed lookup) and only runs when needed.
 func (s *Server) syncStatusData(progress library.SyncProgress) gin.H {
 	phases := progress.Phases
 	if len(phases) == 0 {
@@ -1974,6 +2034,80 @@ func (s *Server) syncStatusData(progress library.SyncProgress) gin.H {
 		"Phases":       phases,
 		"CurrentPhase": string(progress.CurrentPhase),
 	}
+
+	// "Idle" panel: surface last-run summary so the user sees what
+	// happened on the previous sync. We treat the panel as idle when
+	// the service isn't currently running.
+	if !progress.Running {
+		var (
+			lastCompletedAt time.Time
+			lastBooksFound  int
+			lastBooksAdded  int
+			lastStatus      string
+			lastError       string
+		)
+
+		if !progress.CompletedAt.IsZero() {
+			// In-memory state from the most recent run in this process.
+			lastCompletedAt = progress.CompletedAt
+			lastBooksFound = progress.BooksFound
+			lastBooksAdded = progress.BooksAdded
+			lastStatus = progress.Status
+			lastError = progress.Error
+		} else if row, err := s.db.GetLastSync(context.Background()); err == nil && row != nil {
+			// Cold-start fallback — read the most recent sync_history row.
+			if row.CompletedAt != nil {
+				lastCompletedAt = *row.CompletedAt
+			} else {
+				lastCompletedAt = row.StartedAt
+			}
+			lastBooksFound = row.BooksFound
+			lastBooksAdded = row.BooksAdded
+			lastStatus = row.Status
+			lastError = row.Error
+		}
+
+		data["LastCompletedAt"] = lastCompletedAt
+		data["LastBooksFound"] = lastBooksFound
+		data["LastBooksAdded"] = lastBooksAdded
+		data["LastStatus"] = lastStatus
+		data["LastError"] = lastError
+		data["HasLastSync"] = !lastCompletedAt.IsZero()
+
+		// Next auto-run: read the same cron string + enabled flag the
+		// scheduler is configured from, parse it here, and project the
+		// next fire time. Done in the web layer (rather than asking the
+		// scheduler) so the panel reflects the persisted intent rather
+		// than the in-process state — if the scheduler crashed and the
+		// app is showing the panel, we still tell the user when their
+		// library *should* refresh.
+		dbCtx := context.Background()
+		schedule, _ := s.db.GetSetting(dbCtx, "sync_schedule")
+		schedule = strings.TrimSpace(schedule)
+		enabledRaw, _ := s.db.GetSetting(dbCtx, "sync_enabled")
+		// sync_enabled defaults to true when unset, matching the rest
+		// of the app (s.settingBool's default is true at the readers).
+		enabled := true
+		if enabledRaw != "" {
+			enabled = enabledRaw == "true"
+		}
+
+		data["SyncEnabled"] = enabled
+		data["SyncSchedule"] = schedule
+
+		if enabled && schedule != "" {
+			if parsed, err := cron.ParseStandard(schedule); err == nil {
+				next := parsed.Next(time.Now())
+				if !next.IsZero() {
+					data["NextSyncAt"] = next
+					data["HasNextSync"] = true
+				}
+			} else {
+				data["ScheduleInvalid"] = true
+			}
+		}
+	}
+
 	return data
 }
 

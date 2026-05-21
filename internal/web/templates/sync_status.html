@@ -1,5 +1,8 @@
 {{define "sync_status.html"}}
 <div class="sync-status-container sync-status-v2">
+	{{/* Header reflects the live state: actively running, just failed,
+	     partial, complete, or idle. When idle we surface last-sync info
+	     below so the panel is never blank. */}}
 	<div class="sync-head">
 		{{if .Running}}
 			<span class="pulse-dot"></span>
@@ -13,11 +16,75 @@
 		{{else if eq .Status "complete"}}
 			<span class="ok-dot"></span>
 			<strong>{{if .Message}}{{.Message}}{{else}}Last sync complete{{end}}</strong>
+		{{else if .HasLastSync}}
+			{{/* Idle but we have a previous run on record: tint the dot
+			     to match the previous outcome so the user knows at a
+			     glance whether their library is fresh. */}}
+			{{if eq .LastStatus "failed"}}
+				<span class="ok-dot" style="background:var(--error);box-shadow:0 0 0 3px rgba(244,67,54,.18)"></span>
+				<strong>Last sync failed</strong>
+			{{else if eq .LastStatus "partial"}}
+				<span class="ok-dot" style="background:var(--warning);box-shadow:0 0 0 3px rgba(255,152,0,.18)"></span>
+				<strong>Last sync finished with errors</strong>
+			{{else if eq .LastStatus "complete"}}
+				<span class="ok-dot"></span>
+				<strong>Library is up to date</strong>
+			{{else}}
+				<span class="ok-dot" style="background:var(--text-muted);box-shadow:none"></span>
+				<strong>No sync running</strong>
+			{{end}}
 		{{else}}
 			<span class="ok-dot" style="background:var(--text-muted);box-shadow:none"></span>
-			<strong>No sync running</strong>
+			<strong>No sync has run yet</strong>
 		{{end}}
 	</div>
+
+	{{if not .Running}}
+	{{if or .HasLastSync .HasNextSync .ScheduleInvalid (not .SyncEnabled)}}
+	<div class="sync-last-summary">
+		{{if .HasLastSync}}
+		<span class="sync-last-time" title="Last sync at {{formatDate .LastCompletedAt}}">
+			<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+			{{formatRelative .LastCompletedAt}}
+		</span>
+		<span class="sync-last-sep" aria-hidden="true">·</span>
+		<span class="sync-last-stat"><b>{{.LastBooksFound}}</b> {{if eq .LastBooksFound 1}}book{{else}}books{{end}} found</span>
+		{{if gt .LastBooksAdded 0}}
+		<span class="sync-last-sep" aria-hidden="true">·</span>
+		<span class="sync-last-stat sync-last-stat--accent"><b>+{{.LastBooksAdded}}</b> new</span>
+		{{end}}
+		{{if and (eq .LastStatus "failed") .LastError}}
+		<span class="sync-last-sep" aria-hidden="true">·</span>
+		<span class="sync-last-stat sync-last-stat--error" title="{{.LastError}}">{{.LastError}}</span>
+		{{end}}
+		{{end}}
+
+		{{/* Forward-looking pill — sits to the right of the recap so
+		     the user reads "last sync … / next sync …" in a single
+		     glance. The schedule comes from the same setting the
+		     scheduler reads, so it stays in lockstep with intent
+		     rather than runtime. */}}
+		{{if .HasNextSync}}
+		{{if .HasLastSync}}<span class="sync-last-sep" aria-hidden="true">·</span>{{end}}
+		<span class="sync-last-time sync-next-time" title="Next sync at {{formatDate .NextSyncAt}} ({{.SyncSchedule}})">
+			<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 10"/><polyline points="9 16 13 12 9 8"/></svg>
+			next {{formatRelative .NextSyncAt}}
+		</span>
+		{{else if .ScheduleInvalid}}
+		{{if .HasLastSync}}<span class="sync-last-sep" aria-hidden="true">·</span>{{end}}
+		<span class="sync-last-stat sync-last-stat--error" title="Cron expression {{.SyncSchedule}} could not be parsed">
+			Schedule misconfigured
+		</span>
+		{{else if not .SyncEnabled}}
+		{{if .HasLastSync}}<span class="sync-last-sep" aria-hidden="true">·</span>{{end}}
+		<span class="sync-last-time sync-next-time sync-next-time--off" title="Auto-sync is disabled in Settings">
+			<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+			manual sync only
+		</span>
+		{{end}}
+	</div>
+	{{end}}
+	{{end}}
 	{{if .Phases}}
 	<div class="sync-phases v2">
 		{{range .Phases}}

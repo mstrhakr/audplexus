@@ -599,6 +599,68 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     color: var(--text-muted);
 }
 
+/* Idle-state last-sync summary row */
+.sync-status-v2 .sync-last-summary {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.7rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+.sync-status-v2 .sync-last-time {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--text);
+    font-weight: 500;
+}
+.sync-status-v2 .sync-last-time svg {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+.sync-status-v2 .sync-last-sep {
+    color: var(--border);
+    user-select: none;
+}
+.sync-status-v2 .sync-last-stat b {
+    color: var(--text);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.sync-status-v2 .sync-last-stat--accent b { color: var(--accent); }
+.sync-status-v2 .sync-last-stat--error {
+    color: #ff9b9b;
+    max-width: 38ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Next-run pill — forward-looking sibling of the last-run timestamp.
+   Uses plex-cyan to read as schedule/metadata rather than action. */
+.sync-status-v2 .sync-next-time {
+    color: var(--plex-cyan);
+    font-weight: 500;
+}
+.sync-status-v2 .sync-next-time svg {
+    color: var(--plex-cyan);
+    opacity: 0.85;
+}
+.sync-status-v2 .sync-next-time--off {
+    color: var(--text-muted);
+    font-style: italic;
+}
+.sync-status-v2 .sync-next-time--off svg {
+    color: var(--text-muted);
+    opacity: 0.7;
+}
+
 /* Refined sync phases grid (DesignSystem look) — applied alongside legacy
    .sync-phase rules. Stacked classes (.sync-phases.v2) keep backward
    compat with the existing horizontal flex layout used elsewhere. */
