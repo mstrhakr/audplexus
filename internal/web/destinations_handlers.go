@@ -1134,6 +1134,12 @@ func (s *Server) handleDestinationEditForm(c *gin.Context) {
 	data["HasStoredCredential"] = strings.TrimSpace(row.PlexToken) != "" || strings.TrimSpace(row.APIKey) != ""
 	data["HasStoredURL"] = strings.TrimSpace(row.URL) != ""
 	data["HasStoredSection"] = strings.TrimSpace(row.PlexSectionID) != "" || strings.TrimSpace(row.LibraryID) != ""
+	// Three-state health: nil = never checked, true = OK, false = failed.
+	// Step 3's "done" badge requires an affirmative healthy result —
+	// "never checked" must NOT count as healthy because the saved
+	// library_id might no longer exist on the server (e.g. user deleted
+	// the Plex section since last save).
+	data["LastHealthOK"] = row.LastHealthCheckOK != nil && *row.LastHealthCheckOK
 	data["LastHealthFailed"] = row.LastHealthCheckOK != nil && !*row.LastHealthCheckOK
 	if row.LastHealthCheckErr != "" {
 		data["LastHealthErr"] = cleanErrorForDisplay(row.LastHealthCheckErr)

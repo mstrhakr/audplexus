@@ -65,12 +65,14 @@
 
         {{if eq $dt "plex"}}
         {{$guidedStart := not $isEdit}}
-        {{/* On edit, seed step states from the saved row so a working
-             destination opens with steps 1 + 2 pre-checked and step 3
-             showing the actual outcome of its last health check. */}}
+        {{/* On edit, seed step states from the saved row.
+             Step 3 only counts as DONE when the most recent test was
+             affirmatively OK — a "never checked" state must not flip
+             green because the saved section might no longer exist on
+             the server (we'll re-verify after discovery). */}}
         {{$step1Done := and $isEdit .HasStoredCredential}}
         {{$step2Done := and $isEdit .HasStoredURL}}
-        {{$step3Done := and $isEdit .HasStoredSection (not .LastHealthFailed)}}
+        {{$step3Done := and $isEdit .HasStoredSection .LastHealthOK}}
         {{$step3Error := and $isEdit .HasStoredSection .LastHealthFailed}}
         <section id="plex-setup-flow" class="dest-guided">
             {{/* Plex sign-in step — kicks off the plex.tv PIN flow.
@@ -244,6 +246,12 @@
                 var seededStep2Done = step2.classList.contains('is-done');
                 var seededStep3Done = step3.classList.contains('is-done');
                 var seededStep3Err  = step3.classList.contains('is-error');
+                // Step 3 only earns "done" via affirmative evidence:
+                //   - server says LastHealthOK (seededStep3Done = true), OR
+                //   - the user just picked from the dropdown, OR
+                //   - verifySavedSection() found the stored ID in the picker.
+                // A bare value in #plex_section_id is no longer enough.
+                var step3SelectionVerified = seededStep3Done;
 
                 function dim(el, isDim) {
                     if (!el) return;
@@ -273,10 +281,13 @@
                     done(step2, seededStep2Done || hasURL);
 
                     // Step 3: as above; respect the seeded error state.
+                    // Done only when the picker has affirmed the value —
+                    // either via the server's last-health-OK seed, a
+                    // post-discovery membership check, or a fresh user pick.
                     var step2IsDone = step2.classList.contains('is-done');
                     dim(step3, !step2IsDone && !manualOpen);
                     if (!step3.classList.contains('is-error')) {
-                        done(step3, seededStep3Done || (hasSectionInForm && step2IsDone));
+                        done(step3, step3SelectionVerified && hasSectionInForm);
                     }
 
                     // Auto-trigger discovery only when we have credentials
@@ -305,20 +316,89 @@
                     sectionInput.addEventListener('change', refreshState);
                 }
                 manualDetails.addEventListener('toggle', refreshState);
+                // When the discover-sections fragment lands, verify the
+                // saved section ID actually appears in the picker. The
+                // Plex section we stored (e.g. id=5) may have been deleted
+                // on the server since — we don't want to confirm step 3
+                // green for a section that no longer exists.
+                function verifySavedSection() {
+                    var picker = document.getElementById('plex_section_picker');
+                    if (!picker || !sectionInput) return;
+                    var savedID = sectionInput.value.trim();
+                    if (savedID === '') return;
+                    var found = false;
+                    for (var i = 0; i < picker.options.length; i++) {
+                        if (picker.options[i].value === savedID) { found = true; break; }
+                    }
+                    if (found) {
+                        // Discovery confirms the saved ID is real. Now
+                        // we can trust step 3 as done.
+                        step3SelectionVerified = true;
+                        step3.classList.remove('is-error');
+                    } else {
+                        // Saved ID is stale. Clear the stored value so
+                        // step 3 reverts to "needs a pick", paint it red,
+                        // and surface a one-line explanation above the
+                        // picker.
+                        sectionInput.value = '';
+                        seededStep3Done = false;
+                        step3SelectionVerified = false;
+                        step3.classList.add('is-error');
+                        var rs = document.getElementById('plex-section-discover-result');
+                        if (rs && !rs.querySelector('[data-stale-section]')) {
+                            var note = document.createElement('div');
+                            note.className = 'alert err';
+                            note.setAttribute('data-stale-section', '1');
+                            note.style.cssText = 'font-size:.78rem;padding:.45rem .6rem;margin:0 0 .4rem';
+                            note.innerHTML = '<span class="ico">!</span><div>Saved section <code>' +
+                                savedID + '</code> no longer exists on this Plex server. Pick a new library below.</div>';
+                            rs.insertBefore(note, rs.firstChild);
+                        }
+                    }
+                }
+
                 // When discovery returns and HTMX swaps the result in,
                 // refreshState reads the new input values and lights up
                 // subsequent steps. The XHR-status branching for failures
                 // is owned by plexStepFromResponse.
                 document.body.addEventListener('htmx:afterSwap', function(ev) {
-                    // A successful section pick should clear any stale
-                    // error halo we showed on open.
-                    if (ev.target && ev.target.id === 'plex-section-discover-result' &&
-                        sectionInput && sectionInput.value.trim() !== '') {
-                        seededStep3Err = false;
-                        step3.classList.remove('is-error');
+                    if (ev.target && ev.target.id === 'plex-section-discover-result') {
+                        // The new fragment may or may not contain the
+                        // picker (errors render an alert instead). Verify
+                        // before assuming success.
+                        verifySavedSection();
+                        // A user-driven pick clears any stale error.
+                        if (sectionInput && sectionInput.value.trim() !== '' &&
+                            step3.classList.contains('is-error') === false) {
+                            seededStep3Err = false;
+                        }
                     }
                     refreshState();
                 });
+
+                // The picker fires `change` on #plex_section_id when the
+                // user makes a selection. Use that as the affirmative
+                // signal to clear the error halo and refresh state.
+                if (sectionInput) {
+                    sectionInput.addEventListener('change', function() {
+                        if (sectionInput.value.trim() !== '') {
+                            // User picked from the dropdown (or typed a
+                            // valid value into the manual field). Either
+                            // way, treat it as affirmative selection.
+                            step3SelectionVerified = true;
+                            seededStep3Err = false;
+                            step3.classList.remove('is-error');
+                            var rs = document.getElementById('plex-section-discover-result');
+                            if (rs) {
+                                var stale = rs.querySelector('[data-stale-section]');
+                                if (stale) stale.remove();
+                            }
+                        } else {
+                            step3SelectionVerified = false;
+                        }
+                    });
+                }
+
                 refreshState();
             })();
             </script>
