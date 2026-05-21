@@ -1025,6 +1025,7 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		"Filter":       filter,
 		"Page":         "library",
 		"BookActions":  buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
+		"BookPresence": s.computeBookPresence(ctx, books),
 		"StatusCounts": counts,
 		"ActiveStatus": statusStr,
 		"PageNum":      pageNum,
@@ -1737,6 +1738,110 @@ func (s *Server) bookDestinationStatuses(ctx context.Context, bookID int64) []bo
 		out = append(out, v)
 	}
 	return out
+}
+
+// bookPresenceChip is one cell in the Library page's Presence column.
+// One chip per "place this book could live": local disk + each enabled
+// destination. Lit chips indicate the book is present; dimmed chips
+// indicate the book hasn't landed there yet. Failed sync gets a red
+// halo, in-flight sync gets a cyan halo.
+type bookPresenceChip struct {
+	Kind        string // "disk" | "destination"
+	Type        string // "plex" | "emby" | "jellyfin" | "abs" | "" for disk
+	LogoURL     string // empty for disk (template renders an HDD svg)
+	DisplayName string // tooltip
+	State       string // "present" | "synced" | "pending" | "syncing" | "failed"
+	Lit         bool
+}
+
+// computeBookPresence projects the per-book disk + destination state
+// into a slice of chips ready for the template. Returns a map keyed by
+// book ID. Issues one GetBookDestinations per book — fine at page sizes
+// in the tens; if libraries get larger we can add a bulk DB call later.
+func (s *Server) computeBookPresence(ctx context.Context, books []database.Book) map[int64][]bookPresenceChip {
+	out := make(map[int64][]bookPresenceChip, len(books))
+	if len(books) == 0 {
+		return out
+	}
+	dests, err := s.db.ListLibraryDestinations(ctx)
+	if err != nil {
+		dests = nil
+	}
+	// Pre-filter to enabled destinations; build a stable ordering so the
+	// chips don't shuffle between renders.
+	enabled := make([]database.LibraryDestination, 0, len(dests))
+	for _, d := range dests {
+		if d.Enabled {
+			enabled = append(enabled, d)
+		}
+	}
+
+	for i := range books {
+		b := &books[i]
+		chips := make([]bookPresenceChip, 0, 1+len(enabled))
+		hasDisk := strings.TrimSpace(b.FilePath) != ""
+		diskState := "pending"
+		if hasDisk {
+			diskState = "present"
+		}
+		chips = append(chips, bookPresenceChip{
+			Kind:        "disk",
+			DisplayName: "Local audiobooks directory",
+			State:       diskState,
+			Lit:         hasDisk,
+		})
+
+		if len(enabled) > 0 {
+			syncs, _ := s.db.GetBookDestinations(ctx, b.ID)
+			byDestID := make(map[string]database.BookDestination, len(syncs))
+			for _, ss := range syncs {
+				byDestID[ss.DestinationID] = ss
+			}
+			for _, d := range enabled {
+				chip := bookPresenceChip{
+					Kind:        "destination",
+					Type:        string(d.Type),
+					LogoURL:     destinationLogoPath(string(d.Type)),
+					DisplayName: d.DisplayName,
+					State:       "pending",
+				}
+				if sync, ok := byDestID[d.ID]; ok {
+					switch sync.SyncState {
+					case database.BookDestSyncSynced:
+						chip.State, chip.Lit = "synced", true
+					case database.BookDestSyncSyncing:
+						chip.State = "syncing"
+					case database.BookDestSyncFailed:
+						chip.State = "failed"
+					case database.BookDestSyncOrphaned:
+						chip.State = "orphaned"
+					case database.BookDestSyncRemovedFromDestination:
+						chip.State = "removed"
+					}
+				}
+				chips = append(chips, chip)
+			}
+		}
+		out[b.ID] = chips
+	}
+	return out
+}
+
+// destinationLogoPath mirrors the destLogo template func so the Go-side
+// presence builder can reuse the same URL mapping without going through
+// the template layer.
+func destinationLogoPath(t string) string {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "plex":
+		return "/static/plex.png"
+	case "emby":
+		return "/static/emby.png"
+	case "jellyfin":
+		return "/static/jellyfin.png"
+	case "abs", "audiobookshelf":
+		return "/static/audiobookshelf.png"
+	}
+	return ""
 }
 
 // sidebarData is the per-render snapshot used by the sidebar in base.html:

@@ -23,9 +23,28 @@
     <td class="cell-mono">{{formatDuration .Book.Duration}}</td>
     <td class="cell-mono">{{formatDate .Book.PurchaseDate}}</td>
     <td><span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span></td>
-    <td>
-        {{if .Book.FilePath}}<span class="dest-chip abs" title="On disk">A</span>
-        {{else}}<span class="cell-mono">—</span>{{end}}
+    <td class="col-presence">
+        {{if .Presence}}
+        <div class="presence-cell" role="list" aria-label="Presence">
+            {{range .Presence}}
+            {{if eq .Kind "disk"}}
+            <span class="presence-chip presence-chip--disk{{if .Lit}} is-lit{{end}}"
+                  role="listitem"
+                  title="{{if .Lit}}{{.DisplayName}}{{else}}Not on disk yet{{end}}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 11v6c0 1.66 4 3 9 3s9-1.34 9-3v-6"/></svg>
+            </span>
+            {{else}}
+            <span class="presence-chip presence-chip--dest{{if .Lit}} is-lit{{end}} is-{{.State}}"
+                  role="listitem"
+                  title="{{.DisplayName}} — {{.State}}">
+                {{if .LogoURL}}<img src="{{.LogoURL}}" alt="">{{else}}<span class="presence-chip-fallback">{{firstTwo .Type}}</span>{{end}}
+            </span>
+            {{end}}
+            {{end}}
+        </div>
+        {{else}}
+        <span class="cell-mono">—</span>
+        {{end}}
     </td>
     <td class="col-actions">
         <div class="table-actions" id="book-actions-{{.Book.ID}}" data-book-id="{{.Book.ID}}" data-asin="{{.Book.ASIN}}">

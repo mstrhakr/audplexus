@@ -22,13 +22,13 @@
                 <th class="sortable {{if eq $sort "status"}}sorted{{end}}">
                     <a href="?sort=status&dir={{if and (eq $sort "status") (eq $dir "asc")}}desc{{else}}asc{{end}}{{if $search}}&search={{$search}}{{end}}{{if $status}}&status={{$status}}{{end}}">Status <span class="sort-ind">{{if eq $sort "status"}}{{if eq $dir "asc"}}↑{{else}}↓{{end}}{{else}}↕{{end}}</span></a>
                 </th>
-                <th>On Disk</th>
+                <th title="Where this book lives: local disk and each enabled destination">Presence</th>
                 <th class="col-actions">Actions</th>
             </tr>
         </thead>
         <tbody>
             {{range .Books}}
-            {{template "library_row.html" (dict "Book" . "BookAction" (index $.BookActions .ID))}}
+            {{template "library_row.html" (dict "Book" . "BookAction" (index $.BookActions .ID) "Presence" (index $.BookPresence .ID))}}
             {{else}}
             <tr><td colspan="9" class="empty">No books match these filters.</td></tr>
             {{end}}
