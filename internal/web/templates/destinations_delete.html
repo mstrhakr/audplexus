@@ -8,23 +8,28 @@
     </div>
 </div>
 {{else}}
-<header style="margin-bottom:1rem">
-    <h2 style="margin:0">Delete destination</h2>
-    <p class="muted" style="margin:.35rem 0 0 0">{{.Dest.TypeLabel}} · {{.Dest.DisplayName}}</p>
+{{$logo := destLogo .Dest.Type}}
+
+<header class="dest-form-head dest-form-head--danger">
+    <div class="dest-form-head-mark">
+        {{if $logo}}<img src="{{$logo}}" alt="">{{else}}<span>{{firstTwo .Dest.TypeLabel}}</span>{{end}}
+    </div>
+    <div class="dest-form-head-text">
+        <div class="dest-form-eyebrow" style="color:#ff9b9b">Delete destination</div>
+        <h2 id="form-heading">{{.Dest.DisplayName}}</h2>
+        <p>{{.Dest.TypeLabel}}{{if .Dest.URL}} · {{.Dest.URL}}{{end}}</p>
+    </div>
 </header>
 
 <div class="alert err" style="margin-bottom:1rem">
     <span class="ico">!</span>
     <div>
-        <strong>Delete "{{.Dest.DisplayName}}"?</strong>
-        <div style="font-size:.85rem;margin-top:.35rem;line-height:1.5">
-            This removes the {{.Dest.TypeLabel}} destination from Audplexus.
+        <strong>This removes the {{.Dest.TypeLabel}} destination from Audplexus.</strong>
+        <div style="font-size:.85rem;margin-top:.35rem;line-height:1.55">
             Your media files and the {{.Dest.TypeLabel}} server itself are not touched —
-            Audplexus will simply stop fanning out post-download work here.
-        </div>
-        <div style="font-size:.85rem;margin-top:.5rem">
-            <strong>This cannot be undone.</strong> The per-(book, destination) sync
-            history for this destination is also deleted.
+            Audplexus will simply stop fanning out post-download work here. The
+            per-(book, destination) sync history for this destination is also deleted.
+            <strong>This cannot be undone.</strong>
         </div>
     </div>
 </div>
@@ -33,10 +38,41 @@
       hx-target="#dest-modal-content"
       hx-swap="innerHTML"
       hx-headers='{"X-Dest-Modal":"1"}'
-      style="display:flex;gap:.6rem;margin:0">
+      class="dest-form"
+      id="dest-delete-form">
     <input type="hidden" name="confirm" value="1">
-    <button type="button" class="btn btn-outline-ds" onclick="window.AudplexusDestModal && window.AudplexusDestModal.close()">Cancel</button>
-    <button type="submit" class="btn btn-danger">Permanently delete</button>
+
+    <div class="form-group">
+        <label for="dest-delete-confirm">
+            Type <code>DELETE</code> to confirm
+        </label>
+        <input id="dest-delete-confirm" type="text" autocomplete="off" spellcheck="false"
+               class="dest-delete-confirm-input" placeholder="DELETE" aria-describedby="dest-delete-confirm-help">
+        <small id="dest-delete-confirm-help">Case-sensitive. Guards against accidental removal of a healthy destination.</small>
+    </div>
+
+    <div class="dest-form-actions">
+        <button type="button" class="btn btn-outline-ds" onclick="window.AudplexusDestModal && window.AudplexusDestModal.close()">Cancel</button>
+        <span class="spacer" aria-hidden="true"></span>
+        <button type="submit" class="btn btn-danger" id="dest-delete-submit" disabled>
+            Permanently delete
+        </button>
+    </div>
 </form>
+
+<script>
+(function() {
+    var input = document.getElementById('dest-delete-confirm');
+    var submit = document.getElementById('dest-delete-submit');
+    if (!input || !submit) return;
+    function check() {
+        var ok = input.value === 'DELETE';
+        submit.disabled = !ok;
+        input.classList.toggle('is-armed', ok);
+    }
+    input.addEventListener('input', check);
+    check();
+})();
+</script>
 {{end}}
 {{end}}
