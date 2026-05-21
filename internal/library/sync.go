@@ -956,18 +956,6 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		return 0, err
 	}
 
-	// One-shot diagnostic: log the first book's purchase/release fields so
-	// we can see whether the API populates purchase_date at all with the
-	// SDK's default response groups. Remove once resolved.
-	if len(books) > 0 {
-		b0 := books[0]
-		syncLog.Info().
-			Str("asin", b0.BestID()).
-			Str("title", b0.Title).
-			Str("purchase_date", b0.PurchaseDate).
-			Str("release_date", b0.ReleaseDate).
-			Msg("sync diagnostic: first-book date fields")
-	}
 
 	syncRecord.BooksFound = len(books)
 	s.mu.Lock()
@@ -1169,6 +1157,32 @@ func ucfirst(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
+// audibleDateLayouts is the priority-ordered list of layouts we accept
+// when parsing Audible-supplied timestamps. RFC3339 nano covers the
+// "2026-05-19T07:29:29.505Z" purchase_date shape; RFC3339 covers the
+// no-fractional variant; the date-only layout covers release_date.
+var audibleDateLayouts = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02",
+}
+
+// parseAudibleDate tolerates the multiple shapes Audible returns for
+// purchase_date / release_date. Returns the zero time when the input is
+// empty or in none of the known formats.
+func parseAudibleDate(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}
+	}
+	for _, layout := range audibleDateLayouts {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
 func convertBook(b audible.Book) database.Book {
 	authors := make([]string, len(b.Authors))
 	for i, a := range b.Authors {
@@ -1198,8 +1212,14 @@ func convertBook(b audible.Book) database.Book {
 		coverURL = b.ProductImages.Image500
 	}
 
-	purchaseDate, _ := time.Parse("2006-01-02", b.PurchaseDate)
-	releaseDate, _ := time.Parse("2006-01-02", b.ReleaseDate)
+	// Audible is inconsistent across fields and accounts: purchase_date
+	// comes back as RFC3339 ("2026-05-19T07:29:29.505Z"), release_date
+	// as plain ISO date ("2023-08-23"), and occasionally either field
+	// is just empty. parseAudibleDate tries the formats we've seen in
+	// the wild in order; failures fall through to the zero time, which
+	// the UI already renders as a blank cell.
+	purchaseDate := parseAudibleDate(b.PurchaseDate)
+	releaseDate := parseAudibleDate(b.ReleaseDate)
 
 	drmType := b.ContentDeliveryType
 	if drmType == "" {
