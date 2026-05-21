@@ -956,6 +956,19 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		return 0, err
 	}
 
+	// One-shot diagnostic: log the first book's purchase/release fields so
+	// we can see whether the API populates purchase_date at all with the
+	// SDK's default response groups. Remove once resolved.
+	if len(books) > 0 {
+		b0 := books[0]
+		syncLog.Info().
+			Str("asin", b0.BestID()).
+			Str("title", b0.Title).
+			Str("purchase_date", b0.PurchaseDate).
+			Str("release_date", b0.ReleaseDate).
+			Msg("sync diagnostic: first-book date fields")
+	}
+
 	syncRecord.BooksFound = len(books)
 	s.mu.Lock()
 	s.progress.BooksFound = len(books)
