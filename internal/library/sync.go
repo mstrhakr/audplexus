@@ -943,7 +943,14 @@ func phaseRunsInMode(mode SyncMode, phase SyncPhase) bool {
 func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.SyncHistory) (int, error) {
 	syncLog.Info().Msg("starting audible library sync")
 
-	books, err := s.client.GetAllLibrary(ctx)
+	// Audible's /library endpoint only returns purchase_date when the
+	// `relationships` response group is requested — it lives on the
+	// user↔asset relationship payload, not the product itself. The SDK's
+	// DefaultResponseGroups omits it, so without this override the
+	// Library page renders Purchased as blank for every row.
+	libraryGroups := append([]string{}, audible.DefaultResponseGroups...)
+	libraryGroups = append(libraryGroups, "relationships")
+	books, err := s.client.GetAllLibrary(ctx, audible.WithResponseGroups(libraryGroups...))
 	if err != nil {
 		syncLog.Error().Err(err).Msg("failed to fetch audible library")
 		return 0, err
