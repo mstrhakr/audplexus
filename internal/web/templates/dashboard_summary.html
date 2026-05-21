@@ -70,7 +70,7 @@
             </div>
             {{end}}
             {{if .HealthDetail}}
-            <div class="dest-row" style="color:#ff9b9b;font-size:.72rem">{{.HealthDetail}}</div>
+            <div class="dest-row" style="color:#ff9b9b;font-size:.72rem">{{cleanError .HealthDetail}}</div>
             {{end}}
             <div class="dest-actions">
                 <span class="dest-checked">

@@ -9,7 +9,7 @@
 			<strong>{{if eq .Mode "quick"}}Quick{{else}}Full{{end}} sync in progress</strong>
 		{{else if eq .Status "failed"}}
 			<span class="ok-dot" style="background:var(--error);box-shadow:0 0 0 3px rgba(244,67,54,.18)"></span>
-			<strong>Sync failed{{if .Error}}: {{.Error}}{{end}}</strong>
+			<strong>Sync failed{{if .Error}}: {{cleanError .Error}}{{end}}</strong>
 		{{else if eq .Status "partial"}}
 			<span class="ok-dot" style="background:var(--warning);box-shadow:0 0 0 3px rgba(255,152,0,.18)"></span>
 			<strong>Sync finished with errors</strong>
@@ -55,7 +55,8 @@
 		{{end}}
 		{{if and (eq .LastStatus "failed") .LastError}}
 		<span class="sync-last-sep" aria-hidden="true">·</span>
-		<span class="sync-last-stat sync-last-stat--error" title="{{.LastError}}">{{.LastError}}</span>
+		{{$cleanLast := cleanError .LastError}}
+		<span class="sync-last-stat sync-last-stat--error" title="{{$cleanLast}}">{{$cleanLast}}</span>
 		{{end}}
 		{{end}}
 

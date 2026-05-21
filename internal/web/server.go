@@ -317,6 +317,14 @@ func (s *Server) setupTemplates() {
 			}
 			return template.HTML(htmlPolicy.Sanitize(raw))
 		},
+		// cleanError is the shared render path for error strings shown in
+		// the UI. Strips embedded HTML, collapses whitespace, rewrites
+		// common HTTP codes into friendly hints, and truncates. The
+		// destinations test path runs errors through this before storage;
+		// dashboard fields (failed-download errors, sync errors, cached
+		// destination health detail) are raw, so templates pipe through
+		// this helper to keep the render uniform.
+		"cleanError": cleanErrorForDisplay,
 		"hasSuffix": strings.HasSuffix,
 		"coveragePct": func(part, total int) int {
 			if total <= 0 {
