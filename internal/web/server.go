@@ -296,6 +296,8 @@ func (s *Server) setupTemplates() {
 				return "badge-warning"
 			case database.BookStatusQueued:
 				return "badge-info"
+			case database.BookStatusUnavailable:
+				return "badge-warning"
 			default:
 				return "badge-neutral"
 			}
@@ -1059,6 +1061,7 @@ func (s *Server) libraryStatusCounts(ctx context.Context) map[string]int {
 		"waiting":     0,
 		"complete":    0,
 		"failed":      0,
+		"unavailable": 0,
 	}
 
 	byStatus, err := s.db.CountBooksByStatus(ctx)
@@ -1078,6 +1081,8 @@ func (s *Server) libraryStatusCounts(ctx context.Context) map[string]int {
 			out["waiting"] += n
 		case database.BookStatusDownloading, database.BookStatusDecrypting, database.BookStatusProcessing:
 			out["in_progress"] += n
+		case database.BookStatusUnavailable:
+			out["unavailable"] += n
 		}
 		// Other statuses (skipped) contribute to "all" but not to any
 		// filter tab; that matches the legacy behaviour where skipped
@@ -3292,9 +3297,11 @@ func (s *Server) handleDeleteBookMedia(c *gin.Context) {
 		msg += "; redownload queued immediately"
 	}
 	if c.Query("view") == "row" {
+		presence := s.computeBookPresence(ctx, []database.Book{*book})
 		c.HTML(http.StatusOK, "library_row.html", gin.H{
 			"Book":       book,
 			"BookAction": buildLibraryBookActions([]database.Book{*book}, autoQueueNew)[book.ID],
+			"Presence":   presence[book.ID],
 		})
 		return
 	}

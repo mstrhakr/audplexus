@@ -84,6 +84,13 @@
             {{if .Book.FilePath}}<span class="badge badge-success">On disk</span>{{end}}
         </div>
 
+        {{if eq (printf "%s" .Book.Status) "unavailable"}}
+        <div class="unavailable-notice" role="status" style="display:flex;gap:.5rem;align-items:flex-start;background:var(--color-warning-bg,#3a2e15);color:var(--color-warning-fg,#ffd479);border:1px solid var(--color-warning-border,#6b5320);padding:.6rem .75rem;border-radius:6px;margin:.75rem 0;font-size:.85rem;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:0 0 auto;margin-top:1px;"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <div><strong>Unavailable.</strong> {{if .Book.UnavailableReason}}{{.Book.UnavailableReason}}{{else}}Audible reports this title cannot be downloaded with your current account.{{end}}</div>
+        </div>
+        {{end}}
+
         <dl class="meta-grid">
             <dt>Author</dt><dd>{{.Book.Author}}</dd>
             <dt>Narrator</dt><dd>{{if .Book.Narrator}}{{.Book.Narrator}}{{else}}—{{end}}</dd>

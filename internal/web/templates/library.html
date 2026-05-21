@@ -26,6 +26,7 @@
         <a href="/library?status=queued{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "queued"}}active{{end}}" role="tab">Waiting <span class="count">{{index .StatusCounts "waiting"}}</span></a>
         <a href="/library?status=complete{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "complete"}}active{{end}}" role="tab">Complete <span class="count">{{index .StatusCounts "complete"}}</span></a>
         <a href="/library?status=failed{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "failed"}}active{{end}}" role="tab">Failed <span class="count">{{index .StatusCounts "failed"}}</span></a>
+        <a href="/library?status=unavailable{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "unavailable"}}active{{end}}" role="tab" title="In your Audible library but not downloadable (e.g. removed from Plus)">Unavailable <span class="count">{{index .StatusCounts "unavailable"}}</span></a>
     </div>
 
     <div class="filter-bar">
@@ -47,6 +48,7 @@
             <option value="downloading" {{if eq $active "downloading"}}selected{{end}}>Downloading</option>
             <option value="complete" {{if eq $active "complete"}}selected{{end}}>Complete</option>
             <option value="failed" {{if eq $active "failed"}}selected{{end}}>Failed</option>
+            <option value="unavailable" {{if eq $active "unavailable"}}selected{{end}}>Unavailable</option>
         </select>
         <select name="sort" aria-label="Sort by"
                 hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"

@@ -1017,10 +1017,10 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     font-size: 0.6rem;
     font-weight: 700;
 }
-.dest-chip.plex     { background: linear-gradient(135deg, #1ddbe9, #114e88); }
-.dest-chip.abs      { background: linear-gradient(135deg, #f4a261, #e76f51); }
-.dest-chip.emby     { background: linear-gradient(135deg, #52b54b, #154e15); }
-.dest-chip.jellyfin { background: linear-gradient(135deg, #aa5cc3, #00a4dc); }
+.dest-chip.plex     { background: none; }
+.dest-chip.abs      { background: none; }
+.dest-chip.emby     { background: none; }
+.dest-chip.jellyfin { background: none; }
 .dest-chip img {
     width: 100%; height: 100%; object-fit: contain; display: block;
 }
@@ -3249,6 +3249,97 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     width: 26px;
     height: 26px;
     min-width: 26px;
+}
+
+/* ── Library: Presence column ────────────────────────────────────────
+   A horizontal strip of small chips per book — disk + each enabled
+   destination. Lit chips show where the book currently lives; dimmed
+   chips are pending. Failed sync rings the chip in red so problem rows
+   are scannable at a glance across the table. */
+.col-presence { white-space: nowrap; vertical-align: middle; }
+.presence-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: nowrap;
+}
+.presence-chip {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    flex-shrink: 0;
+    transition: opacity 0.12s, filter 0.12s, box-shadow 0.12s, border-color 0.12s;
+    opacity: 0.32;
+    filter: grayscale(1);
+    position: relative;
+}
+.presence-chip.is-lit {
+    opacity: 1;
+    filter: none;
+}
+.presence-chip img {
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+    display: block;
+}
+.presence-chip svg { color: var(--text-muted); }
+.presence-chip.is-lit svg { color: var(--plex-cyan); }
+.presence-chip-fallback {
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+}
+
+/* Disk chip — slightly distinct treatment from destination chips so
+   the eye reads "local thing" vs "remote thing" without a label. */
+.presence-chip--disk {
+    background: var(--bg);
+}
+.presence-chip--disk.is-lit { background: var(--surface-2); }
+.presence-chip--disk.is-lit svg { color: var(--text); }
+
+/* In-flight: cyan ring with a gentle pulse. Always fully opaque so
+   the user notices motion even on rows they aren't hovering. */
+.presence-chip.is-syncing {
+    opacity: 1;
+    filter: none;
+    border-color: var(--plex-cyan);
+    box-shadow: 0 0 0 2px rgba(124, 201, 255, 0.18);
+    animation: presence-syncing-pulse 1.4s ease-in-out infinite;
+}
+@keyframes presence-syncing-pulse {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(124, 201, 255, 0.18); }
+    50%      { box-shadow: 0 0 0 3px rgba(124, 201, 255, 0.32); }
+}
+
+/* Failed: red ring, always lit so the failure isn't easy to miss. */
+.presence-chip.is-failed {
+    opacity: 1;
+    filter: none;
+    border-color: var(--error);
+    box-shadow: 0 0 0 2px rgba(244, 67, 54, 0.22);
+}
+
+/* Removed / orphaned: lit but a muted amber border — the book is known
+   to the destination but in a weird state. */
+.presence-chip.is-orphaned,
+.presence-chip.is-removed {
+    opacity: 0.65;
+    filter: grayscale(0.5);
+    border-color: rgba(255, 152, 0, 0.5);
+}
+
+.presence-chip:hover {
+    cursor: default;
 }
 
 .picker-list { display: flex; flex-direction: column; gap: 0.5rem; }
