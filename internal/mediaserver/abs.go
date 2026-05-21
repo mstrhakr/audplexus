@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -179,10 +180,12 @@ func (a *ABSBackend) ReconcileLibrary(ctx context.Context, progressFn func(curre
 	}
 	msLog.Info().Int("abs_items", len(items)).Msg("abs: fetched library item list for reconcile")
 
-	completeStatus := database.BookStatusComplete
-	books, _, err := a.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 100000})
+	// Match all local books regardless of status — a book can exist in ABS
+	// before its local status reaches "complete" (e.g. user dragged files in
+	// manually, or status got stuck after a partial run).
+	books, _, err := a.db.ListBooks(ctx, database.BookFilter{Limit: 100000})
 	if err != nil {
-		return fmt.Errorf("list complete books: %w", err)
+		return fmt.Errorf("list books: %w", err)
 	}
 	booksByASIN := make(map[string]database.Book, len(books))
 	for _, b := range books {
@@ -195,16 +198,31 @@ func (a *ABSBackend) ReconcileLibrary(ctx context.Context, progressFn func(curre
 		progressFn(0, len(items))
 	}
 	matched := 0
+	noASIN := 0
+	unmatched := 0
 	for i, it := range items {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		asin := strings.ToUpper(strings.TrimSpace(it.ASIN))
 		if asin == "" {
-			continue
+			// ABS didn't extract an ASIN from metadata. Audplexus's own
+			// download layout puts the ASIN in the folder name (e.g.
+			// "Title B0CJS1PS67 [us]"), so try that as a fallback.
+			asin = extractASINFromPath(it.Path)
+			if asin == "" {
+				asin = extractASINFromPath(it.RelPath)
+			}
+			if asin == "" {
+				noASIN++
+				msLog.Debug().Str("abs_id", it.ID).Str("title", it.Title).Str("path", it.RelPath).Msg("abs: item has no ASIN in metadata or path")
+				continue
+			}
 		}
 		book, ok := booksByASIN[asin]
 		if !ok {
+			unmatched++
+			msLog.Debug().Str("abs_id", it.ID).Str("asin", asin).Str("title", it.Title).Msg("abs: no local book matches this ASIN")
 			continue
 		}
 		if a.destination != nil {
@@ -218,17 +236,42 @@ func (a *ABSBackend) ReconcileLibrary(ctx context.Context, progressFn func(curre
 			progressFn(i+1, len(items))
 		}
 	}
-	msLog.Info().Int("matched", matched).Int("abs_items", len(items)).Int("local_books", len(books)).Msg("abs: reconcile complete")
+	msLog.Info().
+		Int("matched", matched).
+		Int("abs_items", len(items)).
+		Int("local_books", len(books)).
+		Int("abs_no_asin", noASIN).
+		Int("abs_unmatched", unmatched).
+		Msg("abs: reconcile complete")
 	return nil
+}
+
+// asinPathRe matches a 10-char Audible ASIN (always starts with B0) as a
+// whole token in a folder name. Audplexus's download layout produces folders
+// like "Title B0CJS1PS67 [us]"; this lets us recover the ASIN when ABS's
+// own metadata extraction missed it.
+var asinPathRe = regexp.MustCompile(`\b(B0[A-Z0-9]{8})\b`)
+
+func extractASINFromPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	m := asinPathRe.FindStringSubmatch(strings.ToUpper(p))
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
 }
 
 // absLibraryItem is a thin DTO of the fields ReconcileLibrary needs from
 // /api/libraries/{id}/items — keeps the parser tolerant to ABS's larger
 // response shape without forcing us to model every field.
 type absLibraryItem struct {
-	ID    string
-	Title string
-	ASIN  string
+	ID      string
+	Title   string
+	ASIN    string
+	Path    string
+	RelPath string
 }
 
 func (a *ABSBackend) listAllItems(ctx context.Context, baseURL, apiKey, libraryID string) ([]absLibraryItem, error) {
@@ -264,8 +307,10 @@ func (a *ABSBackend) listAllItems(ctx context.Context, baseURL, apiKey, libraryI
 
 		var r struct {
 			Results []struct {
-				ID    string `json:"id"`
-				Media struct {
+				ID      string `json:"id"`
+				Path    string `json:"path"`
+				RelPath string `json:"relPath"`
+				Media   struct {
 					Metadata struct {
 						Title string `json:"title"`
 						ASIN  string `json:"asin"`
@@ -282,9 +327,11 @@ func (a *ABSBackend) listAllItems(ctx context.Context, baseURL, apiKey, libraryI
 
 		for _, hit := range r.Results {
 			all = append(all, absLibraryItem{
-				ID:    hit.ID,
-				Title: hit.Media.Metadata.Title,
-				ASIN:  hit.Media.Metadata.ASIN,
+				ID:      hit.ID,
+				Title:   hit.Media.Metadata.Title,
+				ASIN:    hit.Media.Metadata.ASIN,
+				Path:    hit.Path,
+				RelPath: hit.RelPath,
 			})
 		}
 		if len(r.Results) < pageSize {
