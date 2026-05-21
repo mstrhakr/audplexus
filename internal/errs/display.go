@@ -69,3 +69,41 @@ func CleanForDisplay(raw string) string {
 	}
 	return s
 }
+
+// CleanEntitlementReason turns Audible's verbose license-denied error
+// (a multi-clause string listing every eligibility check that failed,
+// often 600+ chars) into a short user-facing reason. Examples of input:
+//
+//	license denied for ASIN B0... (status=Denied): License not granted to
+//	customer ... for asin [B0...]; reasons: Customer is not part of any
+//	plans [RequesterEligibility/Membership] | Ownership: ... | ...
+//
+// The user just needs to know "Audible says you don't have access" plus
+// a hint at WHY (no membership, ownership not found, AYCL ineligible).
+// We keep the full raw message in logs, not in the UI.
+func CleanEntitlementReason(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "Audible entitlement denied"
+	}
+	lower := strings.ToLower(s)
+	switch {
+	case strings.Contains(lower, "not part of any plans"),
+		strings.Contains(lower, "requestereligibility/membership"):
+		return "No longer included with your Audible plan"
+	case strings.Contains(lower, "no ownership"),
+		strings.Contains(lower, "requestereligibility/ownership"):
+		return "Audible reports no ownership of this title"
+	case strings.Contains(lower, "not eligible for aycl"),
+		strings.Contains(lower, "contenteligibility/aycl"):
+		return "No longer included with Audible Plus"
+	case strings.Contains(lower, "license denied"),
+		strings.Contains(lower, "license not granted"):
+		return "Audible denied the download license"
+	}
+	const maxLen = 160
+	if len(s) > maxLen {
+		s = strings.TrimSpace(s[:maxLen]) + "…"
+	}
+	return s
+}

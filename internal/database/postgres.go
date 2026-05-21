@@ -70,7 +70,7 @@ func (p *PostgresDB) GetBook(ctx context.Context, id int64) (*Book, error) {
 	return p.scanBook(p.db.QueryRowContext(ctx,
 		`SELECT id, asin, title, author, author_asin, narrator, publisher, description,
 		        duration, series, series_position, cover_url, purchase_date, release_date,
-		        drm_type, status, file_path, file_size,
+		        drm_type, status, unavailable_reason, file_path, file_size,
 		        created_at, updated_at
 		 FROM books WHERE id = $1`, id))
 }
@@ -79,7 +79,7 @@ func (p *PostgresDB) GetBookByASIN(ctx context.Context, asin string) (*Book, err
 	return p.scanBook(p.db.QueryRowContext(ctx,
 		`SELECT id, asin, title, author, author_asin, narrator, publisher, description,
 		        duration, series, series_position, cover_url, purchase_date, release_date,
-		        drm_type, status, file_path, file_size,
+		        drm_type, status, unavailable_reason, file_path, file_size,
 		        created_at, updated_at
 		 FROM books WHERE asin = $1`, asin))
 }
@@ -119,7 +119,7 @@ func (p *PostgresDB) ListBooks(ctx context.Context, filter BookFilter) ([]Book, 
 
 	query := `SELECT id, asin, title, author, author_asin, narrator, publisher, description,
 	                 duration, series, series_position, cover_url, purchase_date, release_date,
-	                 drm_type, status, file_path, file_size,
+	                 drm_type, status, unavailable_reason, file_path, file_size,
 	                 created_at, updated_at
 	          FROM books` + where + orderBy + limit + offset
 
@@ -171,20 +171,20 @@ func (p *PostgresDB) UpsertBook(ctx context.Context, book *Book) error {
 	err := p.db.QueryRowContext(ctx,
 		`INSERT INTO books (asin, title, author, author_asin, narrator, publisher, description,
 		                    duration, series, series_position, cover_url, purchase_date, release_date,
-		                    drm_type, status, file_path, file_size, created_at, updated_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		                    drm_type, status, unavailable_reason, file_path, file_size, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		 ON CONFLICT(asin) DO UPDATE SET
 		    title=EXCLUDED.title, author=EXCLUDED.author, author_asin=EXCLUDED.author_asin,
 		    narrator=EXCLUDED.narrator, publisher=EXCLUDED.publisher, description=EXCLUDED.description,
 		    duration=EXCLUDED.duration, series=EXCLUDED.series, series_position=EXCLUDED.series_position,
 		    cover_url=EXCLUDED.cover_url, purchase_date=EXCLUDED.purchase_date, release_date=EXCLUDED.release_date,
-		    drm_type=EXCLUDED.drm_type, status=EXCLUDED.status, file_path=EXCLUDED.file_path,
-		    file_size=EXCLUDED.file_size, updated_at=EXCLUDED.updated_at
+		    drm_type=EXCLUDED.drm_type, status=EXCLUDED.status, unavailable_reason=EXCLUDED.unavailable_reason,
+		    file_path=EXCLUDED.file_path, file_size=EXCLUDED.file_size, updated_at=EXCLUDED.updated_at
 		 RETURNING id`,
 		book.ASIN, book.Title, book.Author, book.AuthorASIN, book.Narrator, book.Publisher,
 		book.Description, book.Duration, book.Series, book.SeriesPosition, book.CoverURL,
-		book.PurchaseDate, book.ReleaseDate, book.DRMType, book.Status, book.FilePath,
-		book.FileSize, book.CreatedAt, book.UpdatedAt).Scan(&book.ID)
+		book.PurchaseDate, book.ReleaseDate, book.DRMType, book.Status, book.UnavailableReason,
+		book.FilePath, book.FileSize, book.CreatedAt, book.UpdatedAt).Scan(&book.ID)
 	if err != nil {
 		return fmt.Errorf("upsert book: %w", err)
 	}
@@ -545,7 +545,7 @@ func (p *PostgresDB) scanBook(row *sql.Row) (*Book, error) {
 	err := row.Scan(&b.ID, &b.ASIN, &b.Title, &b.Author, &b.AuthorASIN, &b.Narrator,
 		&b.Publisher, &b.Description, &b.Duration, &b.Series, &b.SeriesPosition,
 		&b.CoverURL, &b.PurchaseDate, &b.ReleaseDate, &b.DRMType, &b.Status,
-		&b.FilePath, &b.FileSize,
+		&b.UnavailableReason, &b.FilePath, &b.FileSize,
 		&b.CreatedAt, &b.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -561,7 +561,7 @@ func (p *PostgresDB) scanBookRow(rows *sql.Rows) (*Book, error) {
 	err := rows.Scan(&b.ID, &b.ASIN, &b.Title, &b.Author, &b.AuthorASIN, &b.Narrator,
 		&b.Publisher, &b.Description, &b.Duration, &b.Series, &b.SeriesPosition,
 		&b.CoverURL, &b.PurchaseDate, &b.ReleaseDate, &b.DRMType, &b.Status,
-		&b.FilePath, &b.FileSize,
+		&b.UnavailableReason, &b.FilePath, &b.FileSize,
 		&b.CreatedAt, &b.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("scan book row: %w", err)

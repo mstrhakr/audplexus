@@ -1029,14 +1029,25 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		}
 
 		// For brand-new books only: verify entitlement before adding to the DB.
+		// If denied, still record the book — just flag it as unavailable so the
+		// UI can show it under the "Unavailable" tab with the denial reason
+		// (e.g. once-Plus-catalog titles the user no longer has access to).
 		if existing == nil {
 			canDownload, cdErr := s.client.CanDownload(ctx, item)
 			if cdErr != nil || !canDownload {
-				logMsg := "skipping new item after entitlement check"
+				reason := "Audible entitlement denied"
 				if cdErr != nil {
-					logMsg = fmt.Sprintf("skipping new item after entitlement check: %v", cdErr)
+					reason = errs.CleanEntitlementReason(cdErr.Error())
 				}
-				syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Msg(logMsg)
+				syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Str("reason", reason).Msg("marking new item as unavailable: entitlement denied")
+				book.Status = database.BookStatusUnavailable
+				book.UnavailableReason = reason
+				if err := s.db.UpsertBook(ctx, &book); err != nil {
+					syncLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to upsert unavailable book")
+				} else {
+					keepASIN[book.ASIN] = struct{}{}
+					added++
+				}
 				scanned++
 				s.mu.Lock()
 				s.progress.BooksScanned = scanned
@@ -1051,16 +1062,34 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 				s.mu.Unlock()
 				continue
 			}
+		} else if existing.Status == database.BookStatusUnavailable {
+			// User may have regained access (Plus added title back). Re-check.
+			canDownload, cdErr := s.client.CanDownload(ctx, item)
+			if cdErr == nil && canDownload {
+				syncLog.Info().Str("asin", book.ASIN).Msg("previously-unavailable book is now accessible")
+				book.Status = database.BookStatusNew
+				book.UnavailableReason = ""
+			} else {
+				book.Status = database.BookStatusUnavailable
+				book.UnavailableReason = existing.UnavailableReason
+				if cdErr != nil {
+					book.UnavailableReason = errs.CleanEntitlementReason(cdErr.Error())
+				}
+			}
 		}
 
 		keepASIN[book.ASIN] = struct{}{}
 
-		// Preserve status/file info for existing books
+		// Preserve status/file info for existing books — unless the
+		// unavailable-recheck above already decided a new status for this row.
 		if existing != nil {
-			book.Status = existing.Status
+			if book.Status == "" {
+				book.Status = existing.Status
+				book.UnavailableReason = existing.UnavailableReason
+			}
 			book.FilePath = existing.FilePath
 			book.FileSize = existing.FileSize
-			syncLog.Debug().Str("asin", book.ASIN).Str("status", string(existing.Status)).Msg("book already exists, preserving state")
+			syncLog.Debug().Str("asin", book.ASIN).Str("status", string(book.Status)).Msg("book already exists, preserving state")
 		} else {
 			book.Status = database.BookStatusNew
 			added++
