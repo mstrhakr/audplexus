@@ -2890,6 +2890,54 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     font-family: var(--font-sans);
     font-size: 0.95rem;
 }
+
+/* Loading state — number plate becomes a small spinning ring while
+   the discover request is in flight. Overrides .is-done / .is-error
+   visually because plexStepLoading() clears those classes first. */
+.dest-guided-step.is-loading .dest-guided-num {
+    background: var(--surface-2);
+    border-color: var(--plex-cyan);
+    color: transparent;
+    box-shadow: 0 0 0 4px rgba(124, 201, 255, 0.14);
+}
+.dest-guided-step.is-loading .dest-guided-num::before {
+    content: "";
+    position: absolute;
+    inset: 4px;
+    border-radius: 999px;
+    border: 2px solid currentColor;
+    border-top-color: var(--plex-cyan);
+    color: rgba(124, 201, 255, 0.25);
+    animation: dest-guided-spin 0.7s linear infinite;
+}
+@keyframes dest-guided-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Error state — paints the step red so a 404/credential failure on
+   the saved library is obvious the moment the form opens. */
+.dest-guided-step.is-error {
+    border-color: rgba(244, 67, 54, 0.45);
+    background: rgba(244, 67, 54, 0.05);
+}
+.dest-guided-step.is-error .dest-guided-num {
+    background: var(--error);
+    border-color: var(--error);
+    color: transparent;
+    box-shadow: 0 0 0 4px rgba(244, 67, 54, 0.18);
+}
+.dest-guided-step.is-error .dest-guided-num::before {
+    content: "!";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-family: var(--font-sans);
+    font-weight: 700;
+    font-size: 0.9rem;
+}
 .dest-guided-body { min-width: 0; flex: 1; }
 .dest-guided-row {
     display: flex;

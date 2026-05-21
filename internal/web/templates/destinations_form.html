@@ -65,18 +65,27 @@
 
         {{if eq $dt "plex"}}
         {{$guidedStart := not $isEdit}}
+        {{/* On edit, seed step states from the saved row so a working
+             destination opens with steps 1 + 2 pre-checked and step 3
+             showing the actual outcome of its last health check. */}}
+        {{$step1Done := and $isEdit .HasStoredCredential}}
+        {{$step2Done := and $isEdit .HasStoredURL}}
+        {{$step3Done := and $isEdit .HasStoredSection (not .LastHealthFailed)}}
+        {{$step3Error := and $isEdit .HasStoredSection .LastHealthFailed}}
         <section id="plex-setup-flow" class="dest-guided">
             {{/* Plex sign-in step — kicks off the plex.tv PIN flow.
                  Posts to /destinations/plex/pin/start which returns a
                  fragment containing an "Open plex.tv sign-in" button
                  plus a hidden HTMX poller. */}}
-            <div class="dest-guided-step" id="plex-guided-step-1">
+            <div class="dest-guided-step{{if $step1Done}} is-done{{end}}" id="plex-guided-step-1">
                 <span class="dest-guided-num" aria-hidden="true">1</span>
                 <div class="dest-guided-body">
                     <div class="dest-guided-row">
                         <div class="dest-guided-text">
                             <div class="dest-guided-title">Sign in with Plex</div>
-                            <div class="dest-guided-desc">Approve in plex.tv and we fill the token automatically.</div>
+                            <div class="dest-guided-desc">
+                                {{if $step1Done}}Token on file — re-sign in only if it has been revoked.{{else}}Approve in plex.tv and we fill the token automatically.{{end}}
+                            </div>
                         </div>
                         <button id="plex-signin-btn" type="button" class="btn btn-secondary"
                                 hx-post="/destinations/plex/pin/start"
@@ -85,7 +94,7 @@
                                 hx-disabled-elt="this"
                                 hx-on::before-request="document.getElementById('plex-pin-result').setAttribute('aria-busy','true'); document.getElementById('plex-pin-result').textContent='Starting plex.tv sign-in…';"
                                 hx-on::after-request="document.getElementById('plex-pin-result').setAttribute('aria-busy','false');">
-                            Sign in
+                            {{if $step1Done}}Re-sign in{{else}}Sign in{{end}}
                         </button>
                     </div>
                     <div id="plex-pin-result" class="dest-guided-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false"></div>
@@ -94,23 +103,25 @@
 
             {{/* Discover servers — calls plex.tv /api/v2/resources, lists
                  the user's Plex servers, fills the URL field on pick. */}}
-            <div class="dest-guided-step{{if $guidedStart}} is-dim{{end}}" id="plex-guided-step-2">
+            <div class="dest-guided-step{{if $step2Done}} is-done{{else if and $guidedStart (not $step1Done)}} is-dim{{end}}" id="plex-guided-step-2">
                 <span class="dest-guided-num" aria-hidden="true">2</span>
                 <div class="dest-guided-body">
                     <div class="dest-guided-row">
                         <div class="dest-guided-text">
                             <div class="dest-guided-title">Select your Plex server</div>
-                            <div class="dest-guided-desc">Lists every server linked to your account.</div>
+                            <div class="dest-guided-desc">
+                                {{if $step2Done}}Currently <code>{{.Dest.URL}}</code> — change with the button.{{else}}Lists every server linked to your account.{{end}}
+                            </div>
                         </div>
-                        <button id="plex-discover-servers-btn" type="button" class="btn btn-secondary is-hidden"
+                        <button id="plex-discover-servers-btn" type="button" class="btn btn-secondary{{if and (not $step1Done) $guidedStart}} is-hidden{{end}}"
                                 hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/plex/discover/servers{{else}}/destinations/plex/discover/servers{{end}}"
                                 hx-include="closest form"
                                 hx-target="#plex-server-discover-result"
                                 hx-swap="innerHTML"
                                 hx-disabled-elt="this"
-                                hx-on::before-request="document.getElementById('plex-server-discover-result').setAttribute('aria-busy','true'); document.getElementById('plex-server-discover-result').textContent='Listing your Plex servers…';"
-                                hx-on::after-request="document.getElementById('plex-server-discover-result').setAttribute('aria-busy','false');">
-                            Discover
+                                hx-on::before-request="plexStepLoading('plex-guided-step-2', true); document.getElementById('plex-server-discover-result').setAttribute('aria-busy','true'); document.getElementById('plex-server-discover-result').textContent='Listing your Plex servers…';"
+                                hx-on::after-request="plexStepLoading('plex-guided-step-2', false); document.getElementById('plex-server-discover-result').setAttribute('aria-busy','false');">
+                            {{if $step2Done}}Change server{{else}}Discover{{end}}
                         </button>
                     </div>
                     <div id="plex-server-discover-result" class="dest-guided-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false"></div>
@@ -120,26 +131,32 @@
             {{/* Discover sections — calls the configured Plex server's
                  /library/sections, lists all sections, fills section_id
                  on pick. */}}
-            <div class="dest-guided-step{{if $guidedStart}} is-dim{{end}}" id="plex-guided-step-3">
+            <div class="dest-guided-step{{if $step3Done}} is-done{{else if $step3Error}} is-error{{else if and $guidedStart (not $step2Done)}} is-dim{{end}}" id="plex-guided-step-3">
                 <span class="dest-guided-num" aria-hidden="true">3</span>
                 <div class="dest-guided-body">
                     <div class="dest-guided-row">
                         <div class="dest-guided-text">
                             <div class="dest-guided-title">Pick the audiobook library</div>
-                            <div class="dest-guided-desc">Choose the Plex section that holds your audiobooks.</div>
+                            <div class="dest-guided-desc">
+                                {{if $step3Error}}<span style="color:#ff9b9b">Saved section <code>{{.Dest.PlexSectionID}}</code> is no longer reachable on this server.</span>
+                                {{else if $step3Done}}Saved section <code>{{.Dest.PlexSectionID}}</code>. Re-discover to change.
+                                {{else}}Choose the Plex section that holds your audiobooks.{{end}}
+                            </div>
                         </div>
-                        <button id="plex-discover-sections-btn" type="button" class="btn btn-secondary is-hidden"
+                        <button id="plex-discover-sections-btn" type="button" class="btn btn-secondary{{if and (not $step2Done) $guidedStart}} is-hidden{{end}}"
                                 hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/plex/discover/sections{{else}}/destinations/plex/discover/sections{{end}}"
                                 hx-include="closest form"
                                 hx-target="#plex-section-discover-result"
                                 hx-swap="innerHTML"
                                 hx-disabled-elt="this"
-                                hx-on::before-request="document.getElementById('plex-section-discover-result').setAttribute('aria-busy','true'); document.getElementById('plex-section-discover-result').textContent='Listing library sections…';"
-                                hx-on::after-request="document.getElementById('plex-section-discover-result').setAttribute('aria-busy','false');">
-                            Discover
+                                hx-on::before-request="plexStepLoading('plex-guided-step-3', true); document.getElementById('plex-section-discover-result').setAttribute('aria-busy','true'); document.getElementById('plex-section-discover-result').textContent='Listing library sections…';"
+                                hx-on::after-request="plexStepLoading('plex-guided-step-3', false); plexStepFromResponse('plex-guided-step-3', event); document.getElementById('plex-section-discover-result').setAttribute('aria-busy','false');">
+                            {{if $step3Error}}Re-discover{{else if $step3Done}}Change library{{else}}Discover{{end}}
                         </button>
                     </div>
-                    <div id="plex-section-discover-result" class="dest-guided-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false"></div>
+                    <div id="plex-section-discover-result" class="dest-guided-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false">
+                        {{if $step3Error}}<div class="alert err" style="font-size:.78rem;padding:.45rem .6rem;margin:.4rem 0 0"><span class="ico">!</span><div>{{if .LastHealthErr}}{{.LastHealthErr}}{{else}}Last check failed. Re-discover to recover.{{end}}</div></div>{{end}}
+                    </div>
                 </div>
             </div>
 
@@ -178,9 +195,40 @@
             </details>
 
             <script>
+            // Toggle a loading spinner on a guided step's number plate.
+            // Exposed globally so the inline hx-on attributes can call it.
+            window.plexStepLoading = function(stepId, on) {
+                var el = document.getElementById(stepId);
+                if (!el) return;
+                el.classList.toggle('is-loading', !!on);
+                // While loading, clear the done/error halo so the spinner
+                // doesn't render under a green check or red ring. The
+                // post-request state machine restores done/error.
+                if (on) {
+                    el.classList.remove('is-done');
+                    el.classList.remove('is-error');
+                }
+            };
+            // After a discover request completes, peek at the XHR status
+            // and surface failures by painting the step red. Success cases
+            // fall through to refreshState() which sets is-done from
+            // input values.
+            window.plexStepFromResponse = function(stepId, ev) {
+                var el = document.getElementById(stepId);
+                if (!el) return;
+                var ok = ev && ev.detail && ev.detail.successful;
+                if (!ok) {
+                    el.classList.add('is-error');
+                    el.classList.remove('is-done');
+                } else {
+                    el.classList.remove('is-error');
+                }
+            };
+
             (function () {
                 var tokenInput = document.getElementById('plex_token');
                 var urlInput = document.getElementById('url');
+                var sectionInput = document.getElementById('plex_section_id');
                 var step1 = document.getElementById('plex-guided-step-1');
                 var step2 = document.getElementById('plex-guided-step-2');
                 var step3 = document.getElementById('plex-guided-step-3');
@@ -189,35 +237,62 @@
                     return;
                 }
 
+                // Seeded server-side flags so we don't clobber an edit
+                // that opens with steps already complete. These read off
+                // the initial className the template assigned.
+                var seededStep1Done = step1.classList.contains('is-done');
+                var seededStep2Done = step2.classList.contains('is-done');
+                var seededStep3Done = step3.classList.contains('is-done');
+                var seededStep3Err  = step3.classList.contains('is-error');
+
                 function dim(el, isDim) {
                     if (!el) return;
-                    if (isDim) el.classList.add('is-dim');
-                    else el.classList.remove('is-dim');
+                    el.classList.toggle('is-dim', !!isDim);
                 }
                 function done(el, isDone) {
                     if (!el) return;
-                    if (isDone) el.classList.add('is-done');
-                    else el.classList.remove('is-done');
+                    el.classList.toggle('is-done', !!isDone);
                 }
 
                 function refreshState() {
-                    var hasToken = tokenInput.value.trim() !== '';
+                    var hasTokenInForm = tokenInput.value.trim() !== '';
                     var hasURL = urlInput.value.trim() !== '';
+                    var hasSectionInForm = sectionInput ? sectionInput.value.trim() !== '' : false;
                     var manualOpen = manualDetails.open;
-                    done(step1, hasToken);
-                    dim(step2, !hasToken && !manualOpen);
-                    done(step2, hasURL);
-                    dim(step3, !hasURL && !manualOpen);
 
-                    if (manualOpen || hasToken) {
-                        var btn = document.getElementById('plex-discover-servers-btn');
+                    // Step 1: either a token is stored server-side OR the
+                    // user is typing one in. Don't un-set done from the
+                    // seeded value just because the password field is
+                    // empty (it always is on edit).
+                    done(step1, seededStep1Done || hasTokenInForm);
+
+                    // Step 2: dimmed only when nothing upstream has put us
+                    // in a state to discover servers.
+                    var step1IsDone = step1.classList.contains('is-done');
+                    dim(step2, !step1IsDone && !manualOpen);
+                    done(step2, seededStep2Done || hasURL);
+
+                    // Step 3: as above; respect the seeded error state.
+                    var step2IsDone = step2.classList.contains('is-done');
+                    dim(step3, !step2IsDone && !manualOpen);
+                    if (!step3.classList.contains('is-error')) {
+                        done(step3, seededStep3Done || (hasSectionInForm && step2IsDone));
+                    }
+
+                    // Auto-trigger discovery only when we have credentials
+                    // in the form AND no prior result. Don't re-fire on
+                    // edit-mode page open — we already know the answers.
+                    if (manualOpen || hasTokenInForm) {
+                        var serversBtn = document.getElementById('plex-discover-servers-btn');
                         var rs = document.getElementById('plex-server-discover-result');
-                        if (btn && rs && rs.innerHTML.trim() === '' && hasToken) btn.click();
+                        if (serversBtn && rs && rs.innerHTML.trim() === '' && hasTokenInForm) serversBtn.click();
                     }
                     if (manualOpen || hasURL) {
-                        var btn = document.getElementById('plex-discover-sections-btn');
-                        var rs = document.getElementById('plex-section-discover-result');
-                        if (btn && rs && rs.innerHTML.trim() === '' && hasURL) btn.click();
+                        var sectionsBtn = document.getElementById('plex-discover-sections-btn');
+                        var rs2 = document.getElementById('plex-section-discover-result');
+                        if (sectionsBtn && rs2 && rs2.innerHTML.trim() === '' && hasURL && !seededStep3Done && !seededStep3Err) {
+                            sectionsBtn.click();
+                        }
                     }
                 }
 
@@ -225,8 +300,25 @@
                 tokenInput.addEventListener('change', refreshState);
                 urlInput.addEventListener('input', refreshState);
                 urlInput.addEventListener('change', refreshState);
+                if (sectionInput) {
+                    sectionInput.addEventListener('input', refreshState);
+                    sectionInput.addEventListener('change', refreshState);
+                }
                 manualDetails.addEventListener('toggle', refreshState);
-                document.body.addEventListener('htmx:afterSwap', refreshState);
+                // When discovery returns and HTMX swaps the result in,
+                // refreshState reads the new input values and lights up
+                // subsequent steps. The XHR-status branching for failures
+                // is owned by plexStepFromResponse.
+                document.body.addEventListener('htmx:afterSwap', function(ev) {
+                    // A successful section pick should clear any stale
+                    // error halo we showed on open.
+                    if (ev.target && ev.target.id === 'plex-section-discover-result' &&
+                        sectionInput && sectionInput.value.trim() !== '') {
+                        seededStep3Err = false;
+                        step3.classList.remove('is-error');
+                    }
+                    refreshState();
+                });
                 refreshState();
             })();
             </script>
