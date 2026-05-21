@@ -51,6 +51,10 @@
                             <option value="error">ERROR</option>
                             <option value="debug">DEBUG</option>
                         </select>
+                        <button type="button" class="btn btn-ghost btn-small" onclick="diagCopyVisibleLogs(this)" title="Copy visible log lines (respects level filter)">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                            Copy
+                        </button>
                         <button type="button" class="btn btn-ghost btn-small" onclick="diagRefreshLogs(true)">Refresh</button>
                     </span>
                 </div>
@@ -170,9 +174,15 @@ function diagRefreshLogs(scrollToBottom) {
             if (level !== 'all' && lvl !== level) return '';
             var color = ({info:'#6ab6ff', warn:'#ffb547', error:'#ff7c7c', debug:'#9aa9b3'})[lvl] || 'var(--text-muted)';
             var ts = new Date(e.time).toLocaleTimeString();
-            return '<div style="display:grid;grid-template-columns:80px 1fr;gap:.6rem;padding:1px 0;border-bottom:1px solid rgba(255,255,255,.03)">' +
-                '<span style="color:var(--text-muted)">' + escDiag(ts) + '</span>' +
-                '<span style="color:' + color + ';white-space:pre-wrap;word-break:break-word">' + escDiag(e.line) + '</span>' +
+            // data-log-line carries the raw line so the per-row copy
+            // button can grab the unescaped value via dataset, and
+            // diagCopyVisibleLogs can gather every visible row in order.
+            return '<div class="diag-log-row" data-log-line="' + escDiag(e.line) + '" data-log-ts="' + escDiag(ts) + '">' +
+                '<span class="diag-log-ts">' + escDiag(ts) + '</span>' +
+                '<span class="diag-log-msg" style="color:' + color + '">' + escDiag(e.line) + '</span>' +
+                '<button type="button" class="diag-log-copy" title="Copy line" aria-label="Copy line" onclick="diagCopyRow(event, this)">' +
+                    '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
+                '</button>' +
             '</div>';
         }).filter(Boolean).join('');
         stream.innerHTML = rows || '<div class="muted">No log lines in buffer yet.</div>';
@@ -180,6 +190,79 @@ function diagRefreshLogs(scrollToBottom) {
     }).catch(function(err) {
         document.getElementById('diag-log-stream').innerHTML = '<div class="muted">Log fetch failed: ' + escDiag(err.message) + '</div>';
     });
+}
+
+// diagCopyVisibleLogs grabs every .diag-log-row currently rendered
+// (which is exactly what the user sees — the level filter runs at
+// render time, not at copy time). Each line is prefixed with its
+// timestamp so the pasted block stays useful out of context.
+function diagCopyVisibleLogs(btn) {
+    var rows = document.querySelectorAll('#diag-log-stream .diag-log-row');
+    if (!rows.length) {
+        diagFlashCopy(btn, 'Nothing to copy', false);
+        return;
+    }
+    var lines = [];
+    for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var ts = r.getAttribute('data-log-ts') || '';
+        var line = r.getAttribute('data-log-line') || '';
+        lines.push((ts ? ts + '  ' : '') + line);
+    }
+    diagWriteClipboard(lines.join('\n')).then(function(ok) {
+        diagFlashCopy(btn, ok ? ('Copied ' + lines.length + ' line' + (lines.length === 1 ? '' : 's')) : 'Copy failed', ok);
+    });
+}
+
+// diagCopyRow copies a single row's raw line. Stops propagation so the
+// row's own click handlers don't fire.
+function diagCopyRow(ev, btn) {
+    ev.stopPropagation();
+    var row = btn.closest('.diag-log-row');
+    if (!row) return;
+    var line = row.getAttribute('data-log-line') || '';
+    diagWriteClipboard(line).then(function(ok) {
+        btn.classList.toggle('is-ok', ok);
+        btn.classList.toggle('is-err', !ok);
+        setTimeout(function() {
+            btn.classList.remove('is-ok');
+            btn.classList.remove('is-err');
+        }, 1200);
+    });
+}
+
+// diagWriteClipboard wraps navigator.clipboard with a textarea fallback
+// for older browsers / non-secure contexts. Returns a promise<boolean>.
+function diagWriteClipboard(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text).then(function() { return true; }, function() { return diagFallbackCopy(text); });
+    }
+    return Promise.resolve(diagFallbackCopy(text));
+}
+function diagFallbackCopy(text) {
+    try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch (e) {
+        return false;
+    }
+}
+function diagFlashCopy(btn, label, ok) {
+    if (!btn) return;
+    var orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = (ok ? '✓ ' : '⚠ ') + escDiag(label);
+    setTimeout(function() {
+        btn.innerHTML = orig;
+        btn.disabled = false;
+    }, 1400);
 }
 function diagDetectLevel(s) {
     var t = s.toLowerCase();
@@ -189,31 +272,83 @@ function diagDetectLevel(s) {
     return 'info';
 }
 
-// Connection tests — lists destinations + Audible. Test buttons hit the
-// existing /destinations/:id/test endpoint (which already records health)
-// and write the result inline.
+// Connection tests — Audible auth + every configured destination.
+// Both endpoints return JSON; the destination rows reuse the global
+// data-test-button affordance so the spinner→check/X feedback from
+// base.html fires here too.
 function diagLoadConnList() {
     var list = document.getElementById('diag-conn-list');
-    fetch('/api/diagnostics/env').then(function(r) { return r.json(); }).then(function(env) {
-        // Pull destinations by hitting the dashboard summary JSON would be
-        // overkill; the dest list lives on /destinations itself but isn't
-        // a JSON endpoint. Easiest: fetch the destinations page and parse
-        // out the cards. Cheaper alternative: just show Audible here and
-        // let users use /destinations for per-dest tests.
+    Promise.all([
+        fetch('/api/diagnostics/env').then(function(r) { return r.json(); }),
+        fetch('/api/diagnostics/destinations').then(function(r) { return r.json(); }).catch(function() { return { destinations: [] }; })
+    ]).then(function(res) {
+        var env = res[0];
+        var dests = (res[1] && res[1].destinations) || [];
         var rows = [];
-        rows.push(diagConnRow('Audible API', env.authenticated ? 'ok' : 'err', env.authenticated ? 'authenticated' : 'not connected', null));
+        rows.push(diagConnRow({
+            name: 'Audible API',
+            status: env.authenticated ? 'ok' : 'err',
+            detail: env.authenticated ? 'authenticated' : 'not connected'
+        }));
+        for (var i = 0; i < dests.length; i++) {
+            var d = dests[i];
+            rows.push(diagConnRow(diagDestRowProps(d)));
+        }
         list.innerHTML = rows.join('') + '<a href="/destinations" class="muted" style="font-size:.78rem;margin-top:.4rem;display:inline-block">Manage destinations →</a>';
+        // Activate the hx-post test buttons we just injected so the
+        // global data-test-button feedback (spinner → check/X) fires.
+        if (window.htmx) htmx.process(list);
     }).catch(function(err) {
         list.innerHTML = '<div class="muted">' + escDiag(err.message) + '</div>';
     });
 }
-function diagConnRow(name, status, detail, testURL) {
-    var dotClass = status === 'ok' ? 'ok' : (status === 'err' ? 'err' : 'idle');
-    var btn = testURL ? '<button type="button" class="btn btn-ghost btn-small" onclick="diagRunTest(\'' + testURL + '\', this)">Test</button>' : '';
-    return '<div class="flex" style="padding:.4rem .55rem;background:var(--bg);border-radius:6px;border:1px solid var(--border);font-size:.82rem">' +
-        '<span>' + escDiag(name) + '</span>' +
-        '<span class="dot-status ' + dotClass + '" style="margin-left:auto">' + escDiag(detail) + '</span>' +
-        (btn ? '<span style="margin-left:.5rem">' + btn + '</span>' : '') +
+
+// diagDestRowProps maps a destination JSON record onto the row helper's
+// status/detail/test-URL contract.
+function diagDestRowProps(d) {
+    var name = d.display_name || d.type_label || d.type;
+    var status, detail;
+    if (!d.enabled) {
+        status = 'idle';
+        detail = 'disabled';
+    } else if (!d.configured) {
+        status = 'idle';
+        detail = 'not configured';
+    } else if (d.health === 'healthy') {
+        status = 'ok';
+        detail = d.url ? d.url : 'healthy';
+    } else if (d.health === 'failed') {
+        status = 'err';
+        detail = d.health_detail || d.last_error || 'connection failed';
+    } else if (d.health === 'never') {
+        status = 'idle';
+        detail = 'never checked';
+    } else {
+        status = 'idle';
+        detail = d.health || 'unknown';
+    }
+    return {
+        name: name,
+        subtitle: d.type_label || d.type,
+        status: status,
+        detail: detail,
+        testURL: d.enabled && d.configured ? '/destinations/' + encodeURIComponent(d.id) + '/test' : ''
+    };
+}
+
+function diagConnRow(opts) {
+    var dotClass = opts.status === 'ok' ? 'ok' : (opts.status === 'err' ? 'err' : 'idle');
+    var subtitle = opts.subtitle ? '<span class="muted" style="font-size:.7rem;margin-left:.4rem;text-transform:uppercase;letter-spacing:.08em">' + escDiag(opts.subtitle) + '</span>' : '';
+    var btn = opts.testURL
+        ? '<button type="button" class="btn btn-ghost btn-small btn-icon" data-test-button title="Test connection"' +
+          ' hx-post="' + escDiag(opts.testURL) + '" hx-swap="none">' +
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>' +
+          '</button>'
+        : '';
+    return '<div class="diag-conn-row">' +
+        '<span class="diag-conn-name">' + escDiag(opts.name) + subtitle + '</span>' +
+        '<span class="dot-status ' + dotClass + ' diag-conn-detail" title="' + escDiag(opts.detail) + '">' + escDiag(opts.detail) + '</span>' +
+        (btn ? '<span class="diag-conn-action">' + btn + '</span>' : '') +
     '</div>';
 }
 function escDiag(s) {

@@ -3066,6 +3066,111 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     box-shadow: 0 0 0 3px rgba(244, 67, 54, 0.18);
 }
 
+/* ── Diagnostics: Live logs row + copy affordance ───────────────────
+   Three-column grid: monospace timestamp, message, copy button. The
+   button stays invisible until the row is hovered or keyboard-focused
+   so the stream reads cleanly during fast updates, then materializes
+   with the cursor for one-click copy. */
+.diag-log-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 24px;
+    gap: 0.6rem;
+    align-items: start;
+    padding: 1px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    position: relative;
+}
+.diag-log-row .diag-log-ts {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+.diag-log-row .diag-log-msg {
+    white-space: pre-wrap;
+    word-break: break-word;
+    min-width: 0;
+}
+.diag-log-row .diag-log-copy {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-muted);
+    border-radius: 5px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    opacity: 0;
+    transform: translateY(-1px);
+    transition: opacity 0.1s, color 0.1s, border-color 0.1s, background 0.1s;
+}
+.diag-log-row:hover .diag-log-copy,
+.diag-log-row:focus-within .diag-log-copy,
+.diag-log-copy:focus-visible {
+    opacity: 1;
+}
+.diag-log-copy:hover {
+    color: var(--text);
+    border-color: var(--text-muted);
+    background: var(--surface-2);
+}
+.diag-log-copy.is-ok {
+    opacity: 1;
+    color: var(--success);
+    border-color: var(--success);
+    background: rgba(76, 175, 80, 0.12);
+}
+.diag-log-copy.is-err {
+    opacity: 1;
+    color: var(--error);
+    border-color: var(--error);
+    background: rgba(244, 67, 54, 0.12);
+}
+.diag-log-copy svg { display: block; }
+
+/* Diagnostics: Connection tests list */
+#diag-conn-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+.diag-conn-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0.65rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    font-size: 0.82rem;
+    min-width: 0;
+}
+.diag-conn-row .diag-conn-name {
+    color: var(--text);
+    font-weight: 500;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: baseline;
+    min-width: 0;
+}
+.diag-conn-row .diag-conn-detail {
+    margin-left: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 60%;
+    min-width: 0;
+    font-variant-numeric: tabular-nums;
+}
+.diag-conn-row .diag-conn-action { flex-shrink: 0; }
+.diag-conn-row .diag-conn-action .btn-icon {
+    width: 26px;
+    height: 26px;
+    min-width: 26px;
+}
+
 .picker-list { display: flex; flex-direction: column; gap: 0.5rem; }
 .picker-list .picker { flex-direction: row; align-items: center; gap: 0.85rem; }
 .picker-list .picker .lg { flex: 1; }

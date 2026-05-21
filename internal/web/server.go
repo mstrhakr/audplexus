@@ -562,6 +562,7 @@ func (s *Server) setupRoutes() {
 		// DS-style ops tab — read-only system state. JSON so the
 		// browser can pretty-render in the diagnostics page.
 		api.GET("/diagnostics/env", s.handleDiagnosticsEnv)
+		api.GET("/diagnostics/destinations", s.handleDiagnosticsDestinations)
 		api.GET("/diagnostics/logs/tail", s.handleDiagnosticsLogsTail)
 		api.POST("/downloads/redownload/:asin", s.handleRedownload)
 

@@ -152,7 +152,11 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 			FetchHealthy: inv.FetchErr == nil,
 		}
 		if inv.FetchErr != nil {
-			card.FetchError = inv.FetchErr.Error()
+			// Strip embedded HTML / map HTTP codes to friendly hints
+			// using the shared cleaner so the Drift Inbox card reads
+			// the same way the destination card and Connection-test
+			// list do for the same underlying failure.
+			card.FetchError = cleanErrorForDisplay(inv.FetchErr.Error())
 		}
 		destCards = append(destCards, card)
 	}
@@ -970,6 +974,42 @@ func (s *Server) handleDiagnosticsEnv(c *gin.Context) {
 		"last_sync":       lastSyncOut,
 		"server_time":     time.Now(),
 	})
+}
+
+// handleDiagnosticsDestinations returns a JSON snapshot of every
+// configured destination's connection state for the Connection-tests
+// list on the Logs & Environment diagnostics tab. Read-only; per-row
+// Test buttons hit the existing /destinations/:id/test endpoint.
+//
+// We reuse destinationSummaries (the same view-model the dashboard
+// reads) so disabled / never-checked / failed states render identically
+// across the app. Sensitive fields (api_key, plex_token) are not in
+// the summary struct, so this can't leak credentials.
+func (s *Server) handleDiagnosticsDestinations(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// Coverage stat needs a books-complete count, but the diagnostics
+	// list doesn't render coverage — pass 0 so the helper skips that
+	// branch and we avoid a per-call books table scan.
+	summaries := s.destinationSummaries(ctx, 0)
+
+	out := make([]gin.H, 0, len(summaries))
+	for _, v := range summaries {
+		out = append(out, gin.H{
+			"id":              v.ID,
+			"display_name":    v.DisplayName,
+			"type":            v.Type,
+			"type_label":      v.TypeLabel,
+			"enabled":         v.Enabled,
+			"configured":      v.Configured,
+			"url":             v.URL,
+			"health":          v.Health,
+			"health_detail":   v.HealthDetail,
+			"last_error":      v.LastError,
+			"last_checked_at": v.LastCheckedAt,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"destinations": out})
 }
 
 // handleDiagnosticsLogsTail returns the most recent log lines from the

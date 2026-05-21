@@ -1123,6 +1123,22 @@ func (s *Server) handleDestinationEditForm(c *gin.Context) {
 	data["DestType"] = string(row.Type)
 	data["DestTypeLabel"] = destinationTypeLabel(row.Type)
 	data["Dest"] = row
+
+	// Seed the guided stepper's initial state for the Plex edit flow.
+	// The template can't easily peek at LastHealthCheckOK (it's *bool),
+	// so we project the booleans the JS state machine wants:
+	//   - HasStoredCredential: token already saved → step 1 done.
+	//   - HasStoredURL:        server picked → step 2 done.
+	//   - HasStoredSection:    library chosen → step 3 done.
+	//   - LastHealthFailed:    most recent test bombed → step 3 red.
+	data["HasStoredCredential"] = strings.TrimSpace(row.PlexToken) != "" || strings.TrimSpace(row.APIKey) != ""
+	data["HasStoredURL"] = strings.TrimSpace(row.URL) != ""
+	data["HasStoredSection"] = strings.TrimSpace(row.PlexSectionID) != "" || strings.TrimSpace(row.LibraryID) != ""
+	data["LastHealthFailed"] = row.LastHealthCheckOK != nil && !*row.LastHealthCheckOK
+	if row.LastHealthCheckErr != "" {
+		data["LastHealthErr"] = cleanErrorForDisplay(row.LastHealthCheckErr)
+	}
+
 	c.HTML(http.StatusOK, "destination_form_body", data)
 }
 
