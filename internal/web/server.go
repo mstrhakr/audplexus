@@ -281,6 +281,23 @@ func (s *Server) setupTemplates() {
 			}
 			return strings.ToUpper(s[:2])
 		},
+		// destLogo maps a destination type key to its static logo URL.
+		// `abs` is the internal short code; the file on disk is named
+		// audiobookshelf.png so we expand it here. Returns "" for
+		// unknown types so the template can fall back to a letter pill.
+		"destLogo": func(t string) string {
+			switch strings.ToLower(strings.TrimSpace(t)) {
+			case "plex":
+				return "/static/plex.png"
+			case "emby":
+				return "/static/emby.png"
+			case "jellyfin":
+				return "/static/jellyfin.png"
+			case "abs", "audiobookshelf":
+				return "/static/audiobookshelf.png"
+			}
+			return ""
+		},
 		"joinDestinationNames": func(dests []destinationSummaryView) string {
 			names := make([]string, 0, len(dests))
 			for _, d := range dests {

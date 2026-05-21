@@ -125,7 +125,10 @@
                     {{range .Destinations}}
                     <div class="picker selected" style="cursor:default">
                         <span class="lg">
-                            <span class="pill" style="background:linear-gradient(135deg,#1ddbe9,#114e88)">{{firstTwo .TypeLabel}}</span>
+                            {{$logo := destLogo .Type}}
+                            <span class="pill {{if $logo}}pill-logo{{end}}">
+                                {{if $logo}}<img src="{{$logo}}" alt="{{.TypeLabel}}">{{else}}{{firstTwo .TypeLabel}}{{end}}
+                            </span>
                             {{.DisplayName}}
                         </span>
                         <span class="meta">{{if .URL}}{{.URL}}{{else}}{{.TypeLabel}}{{end}}</span>

@@ -739,7 +739,7 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     gap: 0.55rem;
 }
 .dest-card .type-icon {
-    width: 28px; height: 28px;
+    width: 32px; height: 32px;
     border-radius: 6px;
     display: inline-flex;
     align-items: center;
@@ -748,7 +748,23 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
     font-weight: 700;
     color: #fff;
     flex-shrink: 0;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.04);
+    padding: 3px;
 }
+.dest-card .type-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+/* When the logo img is present, drop the per-type gradient backgrounds
+   so the actual brand mark shows on neutral chrome. */
+.dest-card .type-icon:has(img) { background: rgba(255, 255, 255, 0.06); }
+.dest-card.plex     .type-icon:has(img),
+.dest-card.emby     .type-icon:has(img),
+.dest-card.jellyfin .type-icon:has(img),
+.dest-card.abs      .type-icon:has(img) { background-image: none; }
 .dest-card.plex     .type-icon { background: linear-gradient(135deg, #1ddbe9, #114e88); }
 .dest-card.emby     .type-icon { background: linear-gradient(135deg, #52b54b, #154e15); }
 .dest-card.jellyfin .type-icon { background: linear-gradient(135deg, #aa5cc3, #00a4dc); }
@@ -943,6 +959,13 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 .dest-chip.abs      { background: linear-gradient(135deg, #f4a261, #e76f51); }
 .dest-chip.emby     { background: linear-gradient(135deg, #52b54b, #154e15); }
 .dest-chip.jellyfin { background: linear-gradient(135deg, #aa5cc3, #00a4dc); }
+.dest-chip img {
+    width: 100%; height: 100%; object-fit: contain; display: block;
+}
+.dest-chip:has(img) {
+    background: rgba(255, 255, 255, 0.06);
+    padding: 2px;
+}
 
 /* Pagination */
 .table-pagination {
@@ -2632,6 +2655,18 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     width: 28px; height: 28px; border-radius: 6px;
     display: inline-flex; align-items: center; justify-content: center;
     color: #fff; font-size: 0.75rem; font-weight: 700; flex-shrink: 0;
+}
+.picker .lg .pill.pill-logo,
+.pill.pill-logo {
+    background: rgba(255, 255, 255, 0.06);
+    padding: 3px;
+    overflow: hidden;
+}
+.pill.pill-logo img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
 }
 .picker .desc { color: var(--text-muted); font-size: 0.76rem; line-height: 1.4; }
 

@@ -45,7 +45,7 @@
         <li class="dest-card {{.Type}}{{if not .Enabled}} dest-card-disabled{{end}}" id="dest-card-{{.ID}}" aria-labelledby="dest-sum-{{.ID}}-name">
             <span class="dest-ribbon"></span>
             <div class="dest-head">
-                <span class="type-icon">{{firstTwo .TypeLabel}}</span>
+                <span class="type-icon">{{$logo := destLogo .Type}}{{if $logo}}<img src="{{$logo}}" alt="{{.TypeLabel}}">{{else}}{{firstTwo .TypeLabel}}{{end}}</span>
                 <div class="dest-head-text">
                     <div class="dest-name" id="dest-sum-{{.ID}}-name">{{.DisplayName}}</div>
                     <div class="dest-url">{{if .URL}}{{.URL}}{{else}}{{.TypeLabel}}{{end}}</div>

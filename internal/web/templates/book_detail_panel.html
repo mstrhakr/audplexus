@@ -100,7 +100,7 @@
         <ul class="dest-status-list">
             {{range .BookDestinationStatuses}}
             <li>
-                <span class="dest-chip {{.Type}}">{{firstTwo .TypeLabel}}</span>
+                <span class="dest-chip {{.Type}}">{{$logo := destLogo .Type}}{{if $logo}}<img src="{{$logo}}" alt="{{.TypeLabel}}">{{else}}{{firstTwo .TypeLabel}}{{end}}</span>
                 <span>{{.DisplayName}}</span>
                 <span class="pull-right">
                     {{if eq .State "synced"}}<span class="badge badge-success">{{.Label}}</span>
