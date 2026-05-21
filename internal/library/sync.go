@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/errs"
 	"github.com/mstrhakr/audplexus/internal/logging"
 	audible "github.com/mstrhakr/go-audible"
 )
@@ -211,8 +212,18 @@ func NewSyncService(db database.Database, client *audible.Client, libraryDir str
 
 // subPhaseFnFor returns a SubPhaseFn closure that upserts a named SubPhaseStatus into the named
 // phase and emits a progress event. Safe to call concurrently from multiple goroutines.
+//
+// Sanitizes the incoming message via errs.CleanForDisplay before storing
+// it on the SubPhaseStatus. Destination backends (Plex/Emby/…) wrap raw
+// HTTP response bodies into their error strings — those bodies can
+// contain HTML markup like <h1>404 Not Found</h1>, which when rendered
+// by the SSE client into innerHTML blew out the row height. Cleaning
+// at the chokepoint guarantees every sub-phase message shown in the
+// UI is plain text and matches the wording used by the dashboard
+// destination card for the same underlying failure.
 func (s *SyncService) subPhaseFnFor(phase SyncPhase) SubPhaseFn {
 	return func(id, label, status, message string, current, total int) {
+		cleaned := errs.CleanForDisplay(message)
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for i := range s.progress.Phases {
@@ -222,7 +233,7 @@ func (s *SyncService) subPhaseFnFor(phase SyncPhase) SubPhaseFn {
 					if (*sub)[j].ID == id {
 						(*sub)[j].Label = label
 						(*sub)[j].Status = status
-						(*sub)[j].Message = message
+						(*sub)[j].Message = cleaned
 						(*sub)[j].Current = current
 						(*sub)[j].Total = total
 						if total > 0 {
@@ -240,7 +251,7 @@ func (s *SyncService) subPhaseFnFor(phase SyncPhase) SubPhaseFn {
 					ID:            id,
 					Label:         label,
 					Status:        status,
-					Message:       message,
+					Message:       cleaned,
 					Current:       current,
 					Total:         total,
 					Indeterminate: total == 0 && status == "running",
@@ -732,6 +743,7 @@ func (s *SyncService) buildPhases(mode SyncMode, prev []PhaseStatus) []PhaseStat
 }
 
 func (s *SyncService) setPhase(phase SyncPhase, status, message string) {
+	cleaned := errs.CleanForDisplay(message)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.progress.CurrentPhase = phase
@@ -739,7 +751,7 @@ func (s *SyncService) setPhase(phase SyncPhase, status, message string) {
 		if s.progress.Phases[i].Name == phase {
 			now := time.Now()
 			s.progress.Phases[i].Status = status
-			s.progress.Phases[i].Message = message
+			s.progress.Phases[i].Message = cleaned
 			if status == "running" {
 				s.progress.Phases[i].StartedAt = now
 				s.progress.Phases[i].EndedAt = time.Time{}
@@ -768,7 +780,7 @@ func (s *SyncService) setPhase(phase SyncPhase, status, message string) {
 				s.progress.Phases[i].EndedAt = now
 			}
 			if status == "failed" {
-				s.progress.Phases[i].Error = message
+				s.progress.Phases[i].Error = cleaned
 				s.progress.Phases[i].Indeterminate = false
 				setPhaseProgress(&s.progress.Phases[i], s.progress.Phases[i].Current, s.progress.Phases[i].Total, false, status)
 			}
@@ -788,7 +800,7 @@ func (s *SyncService) setPhase(phase SyncPhase, status, message string) {
 	// Update the top-level message
 	for i := range s.progress.Phases {
 		if s.progress.Phases[i].Name == phase {
-			s.progress.Message = s.progress.Phases[i].Label + ": " + message
+			s.progress.Message = s.progress.Phases[i].Label + ": " + cleaned
 			break
 		}
 	}

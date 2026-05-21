@@ -3115,13 +3115,15 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
 }
 
 /* ── Diagnostics: Live logs row + copy affordance ───────────────────
-   Three-column grid: monospace timestamp, message, copy button. The
-   button stays invisible until the row is hovered or keyboard-focused
-   so the stream reads cleanly during fast updates, then materializes
-   with the cursor for one-click copy. */
+   Layout stays as a clean 2-column grid (timestamp · message). The
+   copy button is absolute-positioned on the right edge so it never
+   reserves layout space — it materializes only when the row is hovered
+   or keyboard-focused. A short gradient feather behind it bleeds the
+   message into surface so long lines don't render visibly under the
+   icon. */
 .diag-log-row {
     display: grid;
-    grid-template-columns: 80px 1fr 24px;
+    grid-template-columns: 80px 1fr;
     gap: 0.6rem;
     align-items: start;
     padding: 1px 0;
@@ -3137,7 +3139,27 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     word-break: break-word;
     min-width: 0;
 }
+
+/* Gradient feather under the floating button — only visible on hover.
+   Fades the last ~60px of the row to the panel surface so the copy
+   icon never sits visually on top of message text. */
+.diag-log-row::after {
+    content: "";
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: 64px;
+    background: linear-gradient(to right, transparent, var(--surface) 70%);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+.diag-log-row:hover::after,
+.diag-log-row:focus-within::after { opacity: 1; }
+
 .diag-log-row .diag-log-copy {
+    position: absolute;
+    top: 1px;
+    right: 4px;
     width: 22px;
     height: 22px;
     padding: 0;
@@ -3149,32 +3171,42 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    flex-shrink: 0;
     opacity: 0;
-    transform: translateY(-1px);
-    transition: opacity 0.1s, color 0.1s, border-color 0.1s, background 0.1s;
+    transform: translateX(4px);
+    transition: opacity 0.12s ease, transform 0.12s ease,
+                color 0.12s, border-color 0.12s, background 0.12s;
+    z-index: 1;
 }
 .diag-log-row:hover .diag-log-copy,
 .diag-log-row:focus-within .diag-log-copy,
 .diag-log-copy:focus-visible {
     opacity: 1;
+    transform: translateX(0);
 }
 .diag-log-copy:hover {
-    color: var(--text);
-    border-color: var(--text-muted);
+    color: var(--plex-cyan);
+    border-color: var(--plex-cyan);
     background: var(--surface-2);
 }
-.diag-log-copy.is-ok {
-    opacity: 1;
-    color: var(--success);
-    border-color: var(--success);
-    background: rgba(76, 175, 80, 0.12);
-}
+.diag-log-copy:active { transform: translateX(0) scale(0.94); }
+
+/* Transient feedback after the JS copies. is-ok / is-err are sticky
+   for ~1.2s so the user catches the outcome even if their cursor has
+   already left the row. */
+.diag-log-copy.is-ok,
 .diag-log-copy.is-err {
     opacity: 1;
+    transform: translateX(0);
+}
+.diag-log-copy.is-ok {
+    color: var(--success);
+    border-color: var(--success);
+    background: rgba(76, 175, 80, 0.14);
+}
+.diag-log-copy.is-err {
     color: var(--error);
     border-color: var(--error);
-    background: rgba(244, 67, 54, 0.12);
+    background: rgba(244, 67, 54, 0.14);
 }
 .diag-log-copy svg { display: block; }
 
