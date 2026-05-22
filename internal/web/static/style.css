@@ -3268,7 +3268,6 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     height: 22px;
     border-radius: 6px;
     border: 1px solid var(--border);
-    background: var(--surface-2);
     display: inline-flex;
     align-items: center;
     justify-content: center;

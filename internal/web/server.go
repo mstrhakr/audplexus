@@ -1004,6 +1004,34 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		filter.Status = &status
 	}
 
+	// Presence filters. on_disk is a tri-state: missing/empty = any,
+	// "yes" = on disk, "no" = missing locally. Per-destination filters
+	// arrive as presence_<dest_id>=in|out — iterating the raw query
+	// keeps the param list extensible as the user adds destinations.
+	switch c.Query("on_disk") {
+	case "yes":
+		v := true
+		filter.OnDisk = &v
+	case "no":
+		v := false
+		filter.OnDisk = &v
+	}
+	destFilterState := map[string]string{}
+	for key, vals := range c.Request.URL.Query() {
+		if !strings.HasPrefix(key, "presence_") || len(vals) == 0 {
+			continue
+		}
+		destID := strings.TrimPrefix(key, "presence_")
+		switch vals[0] {
+		case "in":
+			filter.PresentInDestinations = append(filter.PresentInDestinations, destID)
+			destFilterState[destID] = "in"
+		case "out":
+			filter.MissingFromDestinations = append(filter.MissingFromDestinations, destID)
+			destFilterState[destID] = "out"
+		}
+	}
+
 	books, total, err := s.db.ListBooks(ctx, filter)
 	if err != nil {
 		webLog.Error().Err(err).Msg("failed to list books")
@@ -1025,20 +1053,22 @@ func (s *Server) handleLibrary(c *gin.Context) {
 	}
 
 	data := gin.H{
-		"Books":        books,
-		"Total":        total,
-		"Filter":       filter,
-		"Page":         "library",
-		"BookActions":  buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
-		"BookPresence": s.computeBookPresence(ctx, books),
-		"StatusCounts": counts,
-		"ActiveStatus": statusStr,
-		"PageNum":      pageNum,
-		"TotalPages":   totalPages,
-		"PageSize":     pageSize,
-		"PageFrom":     from,
-		"PageTo":       to,
-		"PageNums":     paginationNumbers(pageNum, totalPages),
+		"Books":             books,
+		"Total":             total,
+		"Filter":            filter,
+		"Page":              "library",
+		"BookActions":       buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
+		"BookPresence":      s.computeBookPresence(ctx, books),
+		"StatusCounts":      counts,
+		"ActiveStatus":      statusStr,
+		"PresenceFilters":   s.libraryPresenceFilterOpts(ctx, destFilterState),
+		"OnDiskFilter":      c.Query("on_disk"),
+		"PageNum":           pageNum,
+		"TotalPages":        totalPages,
+		"PageSize":          pageSize,
+		"PageFrom":          from,
+		"PageTo":            to,
+		"PageNums":          paginationNumbers(pageNum, totalPages),
 	}
 
 	// For HTMX partial requests, render only the table body
@@ -1047,6 +1077,37 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		return
 	}
 	c.HTML(http.StatusOK, "library.html", s.withSidebar(ctx, data))
+}
+
+// libraryPresenceFilterOption is one row in the per-destination presence
+// dropdown — rendered as a <select> in the filter bar.
+type libraryPresenceFilterOption struct {
+	ID          string
+	DisplayName string
+	State       string // "" | "in" | "out" — current selection
+}
+
+// libraryPresenceFilterOpts returns one option entry per enabled
+// library destination, carrying the currently-selected state from the
+// URL so the dropdown re-renders with the right option selected after
+// an HTMX swap.
+func (s *Server) libraryPresenceFilterOpts(ctx context.Context, state map[string]string) []libraryPresenceFilterOption {
+	dests, err := s.db.ListLibraryDestinations(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]libraryPresenceFilterOption, 0, len(dests))
+	for _, d := range dests {
+		if !d.Enabled {
+			continue
+		}
+		out = append(out, libraryPresenceFilterOption{
+			ID:          d.ID,
+			DisplayName: d.DisplayName,
+			State:       state[d.ID],
+		})
+	}
+	return out
 }
 
 // libraryStatusCounts returns the count of books per status bucket used by

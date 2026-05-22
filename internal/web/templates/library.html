@@ -29,19 +29,22 @@
         <a href="/library?status=unavailable{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "unavailable"}}active{{end}}" role="tab" title="In your Audible library but not downloadable (e.g. removed from Plus)">Unavailable <span class="count">{{index .StatusCounts "unavailable"}}</span></a>
     </div>
 
+    {{$onDisk := .OnDiskFilter}}
     <div class="filter-bar">
         <div class="search-input">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input type="text" name="search" placeholder="Search title, author, narrator, ASIN…"
+                   class="lib-filter"
                    hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
                    hx-trigger="keyup changed delay:300ms"
-                   hx-include="[name='status'],[name='sort'],[name='dir']"
+                   hx-include=".lib-filter"
                    value="{{$search}}">
         </div>
         <select name="status" aria-label="Filter books by status"
+                class="lib-filter"
                 hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
                 hx-trigger="change"
-                hx-include="[name='search'],[name='sort'],[name='dir']">
+                hx-include=".lib-filter">
             <option value="" {{if eq $active ""}}selected{{end}}>All statuses</option>
             <option value="new" {{if eq $active "new"}}selected{{end}}>New</option>
             <option value="queued" {{if eq $active "queued"}}selected{{end}}>Queued</option>
@@ -50,19 +53,41 @@
             <option value="failed" {{if eq $active "failed"}}selected{{end}}>Failed</option>
             <option value="unavailable" {{if eq $active "unavailable"}}selected{{end}}>Unavailable</option>
         </select>
-        <select name="sort" aria-label="Sort by"
+        <select name="on_disk" aria-label="Filter by disk presence"
+                class="lib-filter"
                 hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
                 hx-trigger="change"
-                hx-include="[name='search'],[name='status'],[name='dir']">
+                hx-include=".lib-filter">
+            <option value="" {{if eq $onDisk ""}}selected{{end}}>Any disk state</option>
+            <option value="yes" {{if eq $onDisk "yes"}}selected{{end}}>On disk</option>
+            <option value="no" {{if eq $onDisk "no"}}selected{{end}}>Not on disk</option>
+        </select>
+        {{range .PresenceFilters}}
+        <select name="presence_{{.ID}}" aria-label="Filter by presence in {{.DisplayName}}"
+                class="lib-filter"
+                hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
+                hx-trigger="change"
+                hx-include=".lib-filter">
+            <option value="" {{if eq .State ""}}selected{{end}}>Any · {{.DisplayName}}</option>
+            <option value="in" {{if eq .State "in"}}selected{{end}}>In {{.DisplayName}}</option>
+            <option value="out" {{if eq .State "out"}}selected{{end}}>Missing from {{.DisplayName}}</option>
+        </select>
+        {{end}}
+        <select name="sort" aria-label="Sort by"
+                class="lib-filter"
+                hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
+                hx-trigger="change"
+                hx-include=".lib-filter">
             <option value="purchase_date" {{if eq .Filter.SortBy "purchase_date"}}selected{{end}}>Purchased</option>
             <option value="title" {{if eq .Filter.SortBy "title"}}selected{{end}}>Title</option>
             <option value="author" {{if eq .Filter.SortBy "author"}}selected{{end}}>Author</option>
             <option value="status" {{if eq .Filter.SortBy "status"}}selected{{end}}>Status</option>
         </select>
         <select name="dir" aria-label="Sort direction"
+                class="lib-filter"
                 hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
                 hx-trigger="change"
-                hx-include="[name='search'],[name='status'],[name='sort']">
+                hx-include=".lib-filter">
             <option value="desc" {{if eq .Filter.SortDir "desc"}}selected{{end}}>Desc</option>
             <option value="asc" {{if eq .Filter.SortDir "asc"}}selected{{end}}>Asc</option>
         </select>

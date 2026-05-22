@@ -650,6 +650,24 @@ func buildBookWhere(filter BookFilter) (string, []interface{}) {
 		search := "%" + filter.Search + "%"
 		args = append(args, search, search, search, search)
 	}
+	if filter.OnDisk != nil {
+		if *filter.OnDisk {
+			clauses = append(clauses, "file_path != ''")
+		} else {
+			clauses = append(clauses, "(file_path IS NULL OR file_path = '')")
+		}
+	}
+	// "Present in destination" — there is a synced/syncing row for
+	// this (book, destination). The index on (destination_id, sync_state)
+	// keeps the subquery cheap.
+	for _, destID := range filter.PresentInDestinations {
+		clauses = append(clauses, "EXISTS (SELECT 1 FROM book_library_destinations bld WHERE bld.book_id = books.id AND bld.destination_id = ? AND bld.sync_state IN ('synced','syncing'))")
+		args = append(args, destID)
+	}
+	for _, destID := range filter.MissingFromDestinations {
+		clauses = append(clauses, "NOT EXISTS (SELECT 1 FROM book_library_destinations bld WHERE bld.book_id = books.id AND bld.destination_id = ? AND bld.sync_state IN ('synced','syncing'))")
+		args = append(args, destID)
+	}
 
 	if len(clauses) == 0 {
 		return "", nil
