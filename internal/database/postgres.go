@@ -605,10 +605,10 @@ func buildBookWherePostgres(filter BookFilter) (string, []interface{}) {
 		paramIdx++
 	}
 	if filter.Search != "" {
-		clauses = append(clauses, fmt.Sprintf("(title ILIKE $%d OR author ILIKE $%d)", paramIdx, paramIdx+1))
+		clauses = append(clauses, fmt.Sprintf("(title ILIKE $%d OR author ILIKE $%d OR series ILIKE $%d OR asin ILIKE $%d)", paramIdx, paramIdx+1, paramIdx+2, paramIdx+3))
 		search := "%" + filter.Search + "%"
-		args = append(args, search, search)
-		paramIdx += 2
+		args = append(args, search, search, search, search)
+		paramIdx += 4
 	}
 
 	if len(clauses) == 0 {
