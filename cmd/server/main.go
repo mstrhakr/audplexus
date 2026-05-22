@@ -103,6 +103,11 @@ func main() {
 	syncSvc := library.NewSyncService(db, audibleClient, cfg.Paths.Audiobooks)
 	anClient := audnexus.NewClientWithRegion(region)
 	log.Info().Str("region", region).Msg("audnexus client initialized with region")
+	// Wire optional dependencies for the Metadata Repair sync phase.
+	// Both are tolerated as nil at the SyncService boundary so tests
+	// and lightweight uses don't have to construct them.
+	syncSvc.SetFFmpeg(ffmpeg)
+	syncSvc.SetAudnexusClient(anClient)
 	org := organizer.NewPlexOrganizer(db, ffmpeg, cfg.Paths.Audiobooks, cfg.Output.EmbedCover, cfg.Output.ChapterFile, cfg.Output.PlexMatchFile)
 
 	// First-boot synthesis: if library_destinations is empty AND legacy
