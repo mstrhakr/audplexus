@@ -175,7 +175,7 @@ func main() {
 	log.Info().Bool("enabled", cfg.Sync.Enabled).Str("schedule", cfg.Sync.Schedule).Msg("scheduler started")
 
 	// Start web server
-	webServer := web.NewServer(db, syncSvc, dlMgr, anClient, org, audibleClient, credPath, cfg.Server.Port, cfg.Paths.Audiobooks, cfg.Paths.Downloads, cfg.Paths.Config)
+	webServer := web.NewServer(db, syncSvc, dlMgr, anClient, org, audibleClient, ffmpeg, credPath, cfg.Server.Port, cfg.Paths.Audiobooks, cfg.Paths.Downloads, cfg.Paths.Config)
 	go func() {
 		if err := webServer.Start(); err != nil {
 			log.Fatal().Err(err).Msg("web server failed")

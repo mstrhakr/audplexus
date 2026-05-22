@@ -152,12 +152,74 @@
         <p class="muted" style="margin-top:1rem;font-size:.85rem">Unable to list files from disk right now.</p>
         {{end}}
 
+        {{with .BookFileInfo}}
+        <h3 class="section-label">File info</h3>
+        <dl class="meta-grid book-file-info-grid">
+            {{if .Format}}<dt>Format</dt><dd>{{.Format}}{{if .Extension}} <span class="muted">(.{{.Extension}})</span>{{end}}</dd>{{end}}
+            {{if .Codec}}<dt>Codec</dt><dd>{{if .CodecLong}}{{.CodecLong}} <span class="muted">({{.Codec}})</span>{{else}}{{.Codec}}{{end}}</dd>{{end}}
+            {{if .BitRate}}<dt>Bitrate</dt><dd>{{.BitRate}}</dd>{{end}}
+            {{if .SampleRate}}<dt>Sample rate</dt><dd>{{.SampleRate}}</dd>{{end}}
+            {{if .Channels}}<dt>Channels</dt><dd>{{.Channels}}</dd>{{end}}
+            {{if .Duration}}<dt>Duration</dt><dd>{{.Duration}}</dd>{{end}}
+            {{if gt .ChapterCount 0}}<dt>Chapters</dt><dd>{{.ChapterCount}}</dd>{{end}}
+            <dt>Embedded artwork</dt><dd>{{if .HasArtwork}}Yes{{else}}No{{end}}</dd>
+            {{if .SizeLabel}}<dt>File size</dt><dd>{{.SizeLabel}} <span class="muted">({{.SizeBytes}} bytes)</span></dd>{{end}}
+            {{if .ModifiedAt}}<dt>Modified</dt><dd>{{.ModifiedAt}}</dd>{{end}}
+            {{if .ActivationBytes}}<dt>Activation bytes</dt><dd class="cell-mono">{{.ActivationBytes}}</dd>{{end}}
+            <dt>Path</dt><dd class="cell-mono book-file-info-path">{{.Path}}</dd>
+        </dl>
+        {{if .ProbeError}}
+        <p class="muted" style="margin-top:.4rem;font-size:.78rem">Probe error: {{.ProbeError}}</p>
+        {{end}}
+        {{if .Tags}}
+        <details class="book-file-tags-details">
+            <summary>Container tags ({{len .Tags}})</summary>
+            <dl class="meta-grid book-file-tags-grid">
+                {{range .Tags}}
+                <dt class="cell-mono">{{.Key}}</dt>
+                <dd class="cell-mono book-file-tag-value">{{.Value}}</dd>
+                {{end}}
+            </dl>
+        </details>
+        {{end}}
+        {{end}}
+
         {{if .Book.Description}}
-        <div class="desc">
-            <h3 class="section-label">Description</h3>
-            <div class="book-description-html">{{safeHTML .Book.Description}}</div>
+        <h3 class="section-label">Description</h3>
+        <div class="book-description" data-collapsible>
+            <div class="book-description-html book-description-clamp">{{safeHTML .Book.Description}}</div>
+            <button type="button" class="book-description-toggle" data-collapsed-label="Show more" data-expanded-label="Show less" aria-expanded="false">Show more</button>
         </div>
         {{end}}
     </div>
 </div>
+<script>
+// Description collapse: clamp via .book-description-clamp; the toggle
+// flips the class + button label. Hides itself when the clamped
+// content fits without clipping so short descriptions don't get a
+// dangling "Show more" affordance.
+(function(){
+    var roots = document.querySelectorAll('.book-description[data-collapsible]');
+    roots.forEach(function(root){
+        var content = root.querySelector('.book-description-html');
+        var toggle  = root.querySelector('.book-description-toggle');
+        if (!content || !toggle) return;
+        // Hide the toggle when nothing is being clipped — read after a
+        // microtask so layout has settled.
+        requestAnimationFrame(function(){
+            if (content.scrollHeight <= content.clientHeight + 2) {
+                toggle.style.display = 'none';
+                content.classList.remove('book-description-clamp');
+            }
+        });
+        toggle.addEventListener('click', function(){
+            var expanded = content.classList.toggle('book-description-clamp') === false;
+            toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            toggle.textContent = expanded
+                ? toggle.dataset.expandedLabel
+                : toggle.dataset.collapsedLabel;
+        });
+    });
+})();
+</script>
 {{end}}

@@ -56,6 +56,7 @@ type Server struct {
 	audnexus       *audnexus.Client
 	organizer      *organizer.PlexOrganizer
 	audible        *audible.Client
+	ffmpeg         *audio.FFmpeg
 	credPath       string
 	port           int
 	audiobooksPath string
@@ -95,6 +96,7 @@ func NewServer(
 	anClient *audnexus.Client,
 	org *organizer.PlexOrganizer,
 	audibleClient *audible.Client,
+	ffmpeg *audio.FFmpeg,
 	credPath string,
 	port int,
 	audiobooksPath string,
@@ -113,6 +115,7 @@ func NewServer(
 		audnexus:       anClient,
 		organizer:      org,
 		audible:        audibleClient,
+		ffmpeg:         ffmpeg,
 		credPath:       credPath,
 		port:           port,
 		audiobooksPath: audiobooksPath,
@@ -1287,6 +1290,7 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 	}
 
 	folderPath, files := buildBookFileDetails(book.FilePath)
+	fileInfo := s.buildBookFileInfo(ctx, book)
 
 	data := gin.H{
 		"Book":          book,
@@ -1294,6 +1298,7 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 		"BookFolderPath": folderPath,
 		"BookFiles":     files,
 		"BookFileCount": len(files),
+		"BookFileInfo":  fileInfo,
 		"BookAction":    buildLibraryBookActions([]database.Book{*book}, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false))[book.ID],
 		"BookDestinationStatuses": s.bookDestinationStatuses(ctx, book.ID),
 	}
@@ -1432,6 +1437,225 @@ func isAudioFile(path string) bool {
 	default:
 		return false
 	}
+}
+
+// bookFileInfoTag is one row of the raw-tag list on the File info
+// block. Stays as a slice rather than a map so the template can render
+// in a deterministic order — the ffprobe map iteration order is
+// otherwise nondeterministic and shuffles between requests.
+type bookFileInfoTag struct {
+	Key   string
+	Value string
+}
+
+// bookFileInfoView is the view-model for the "File info" block on
+// Book Details. Every field is independently optional — the template
+// uses zero values + an empty tag list to silently omit rows so a
+// degraded probe (file moved, container quirks) still renders a
+// useful partial card instead of a hard failure.
+type bookFileInfoView struct {
+	Path            string
+	Extension       string
+	SizeBytes       int64
+	SizeLabel       string
+	ModifiedAt      string
+	Format          string
+	Codec           string
+	CodecLong       string
+	BitRate         string
+	SampleRate      string
+	Channels        string
+	ChapterCount    int
+	HasArtwork      bool
+	Duration        string
+	ActivationBytes string
+	Tags            []bookFileInfoTag
+	ProbeError      string
+}
+
+// buildBookFileInfo populates the File info block for a book that is
+// known to be on disk. Returns nil for books with no FilePath so the
+// template can skip the whole section with a single nil check.
+//
+// The function tolerates partial failures: a missing file still
+// surfaces what's in the DB; a probe that errors leaves Format/etc
+// blank but keeps the size/modified-time rows. Activation bytes are
+// fetched from the audible client when available (account-scoped),
+// since they're what was used to decrypt this file — handy for
+// re-decryption.
+func (s *Server) buildBookFileInfo(ctx context.Context, book *database.Book) *bookFileInfoView {
+	if book == nil || strings.TrimSpace(book.FilePath) == "" {
+		return nil
+	}
+
+	v := &bookFileInfoView{
+		Path:      book.FilePath,
+		Extension: strings.TrimPrefix(strings.ToLower(filepath.Ext(book.FilePath)), "."),
+	}
+
+	if info, err := os.Stat(book.FilePath); err == nil && !info.IsDir() {
+		v.SizeBytes = info.Size()
+		v.SizeLabel = humanFileSize(info.Size())
+		v.ModifiedAt = info.ModTime().Format("2006-01-02 15:04")
+	}
+
+	if s.ffmpeg != nil {
+		probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		defer cancel()
+		probe, err := s.ffmpeg.ProbeFile(probeCtx, book.FilePath)
+		if err != nil {
+			v.ProbeError = err.Error()
+		} else if probe != nil {
+			if probe.FormatLongName != "" {
+				v.Format = probe.FormatLongName
+			} else {
+				v.Format = probe.FormatName
+			}
+			v.Codec = probe.AudioCodec
+			v.CodecLong = probe.AudioCodecLong
+			v.BitRate = formatProbeBitRate(probe.AudioBitRate, probe.BitRate)
+			v.SampleRate = formatSampleRate(probe.SampleRate)
+			v.Channels = formatChannels(probe.Channels, probe.ChannelLayout)
+			v.ChapterCount = probe.ChapterCount
+			v.HasArtwork = probe.HasArtwork
+			if probe.DurationSec > 0 {
+				v.Duration = formatDurationSeconds(probe.DurationSec)
+			}
+			// Size from ffprobe wins when stat failed (rare; usually
+			// the same number).
+			if v.SizeBytes == 0 && probe.Size > 0 {
+				v.SizeBytes = probe.Size
+				v.SizeLabel = humanFileSize(probe.Size)
+			}
+			v.Tags = sortedProbeTags(probe.Tags)
+		}
+	}
+
+	// Activation bytes are per-account, not per-book — but the field
+	// belongs on the file-info card because they're the secret that
+	// decrypted this particular file. Skip silently when the audible
+	// client isn't authenticated or the call errors.
+	if s.audible != nil && s.audible.IsAuthenticated() {
+		abCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if resp, err := s.audible.GetActivationBytes(abCtx); err == nil && resp != nil {
+			v.ActivationBytes = resp.ActivationBytes
+		}
+	}
+
+	return v
+}
+
+// formatProbeBitRate picks the most informative of two bit-rate
+// candidates (audio stream first, container second) and converts
+// bits/sec → "128 kb/s". ffprobe sometimes reports "0" or "" for
+// the audio stream on lossy containers — fall back to the container.
+func formatProbeBitRate(streamBPS, containerBPS string) string {
+	pick := streamBPS
+	if pick == "" || pick == "0" {
+		pick = containerBPS
+	}
+	if pick == "" || pick == "0" {
+		return ""
+	}
+	var bps int64
+	if _, err := fmt.Sscanf(pick, "%d", &bps); err != nil || bps <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d kb/s", bps/1000)
+}
+
+func formatSampleRate(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	var hz int64
+	if _, err := fmt.Sscanf(raw, "%d", &hz); err != nil || hz <= 0 {
+		return ""
+	}
+	if hz%1000 == 0 {
+		return fmt.Sprintf("%d kHz", hz/1000)
+	}
+	return fmt.Sprintf("%.1f kHz", float64(hz)/1000.0)
+}
+
+func formatChannels(n int, layout string) string {
+	if n <= 0 {
+		return ""
+	}
+	if layout != "" {
+		return fmt.Sprintf("%d (%s)", n, layout)
+	}
+	switch n {
+	case 1:
+		return "1 (mono)"
+	case 2:
+		return "2 (stereo)"
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+func formatDurationSeconds(sec float64) string {
+	total := int(sec)
+	h := total / 3600
+	m := (total % 3600) / 60
+	s := total % 60
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm %ds", h, m, s)
+	}
+	if m > 0 {
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
+}
+
+// sortedProbeTags returns the tag map as a slice. Container-level
+// identity tags (encoder, major_brand, asin, series) bubble to the
+// top so the most useful info renders first; the rest sort
+// alphabetically. Empty values are dropped.
+func sortedProbeTags(tags map[string]string) []bookFileInfoTag {
+	if len(tags) == 0 {
+		return nil
+	}
+	priority := map[string]int{
+		"encoder":           1,
+		"major_brand":       2,
+		"minor_version":     3,
+		"compatible_brands": 4,
+		"asin":              5,
+		"series":            6,
+		"series-part":       7,
+		"title":             8,
+		"artist":            9,
+		"album_artist":      10,
+		"album":             11,
+		"date":              12,
+		"genre":             13,
+		"language":          14,
+		"media_type":        15,
+	}
+	out := make([]bookFileInfoTag, 0, len(tags))
+	for k, val := range tags {
+		if strings.TrimSpace(val) == "" {
+			continue
+		}
+		out = append(out, bookFileInfoTag{Key: k, Value: val})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		pi, oki := priority[out[i].Key]
+		pj, okj := priority[out[j].Key]
+		switch {
+		case oki && okj:
+			return pi < pj
+		case oki:
+			return true
+		case okj:
+			return false
+		default:
+			return out[i].Key < out[j].Key
+		}
+	})
+	return out
 }
 
 func humanFileSize(sizeBytes int64) string {

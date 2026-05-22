@@ -2010,6 +2010,75 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     margin: 0.25rem 0;
 }
 
+/* Collapsible description — clamps to ~9.5rem with a fade-out, then
+   the JS-driven toggle below flips the class to reveal the rest. */
+.book-description {
+    position: relative;
+    margin-top: 0.5rem;
+}
+.book-description-clamp {
+    max-height: 9.5rem;
+    overflow: hidden;
+    position: relative;
+}
+.book-description-clamp::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3rem;
+    pointer-events: none;
+    background: linear-gradient(to bottom,
+        rgba(22, 33, 62, 0) 0%,
+        var(--surface) 100%);
+}
+.book-description-toggle {
+    margin-top: 0.5rem;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.82rem;
+}
+.book-description-toggle:hover { text-decoration: underline; }
+
+/* File info — same meta-grid recipe as the top-of-card metadata,
+   but path/tag rows can be long so they break on word boundaries. */
+.book-file-info-grid {
+    margin-top: 0.5rem;
+}
+.book-file-info-path {
+    word-break: break-all;
+    font-size: 0.78rem;
+}
+.book-file-tags-details {
+    margin-top: 0.6rem;
+}
+.book-file-tags-details > summary {
+    display: inline-block;
+    cursor: pointer;
+    color: #9cc9ff;
+    padding: 0.35rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: rgba(15, 52, 96, 0.35);
+    user-select: none;
+    font-size: 0.82rem;
+}
+.book-file-tags-details[open] > summary { margin-bottom: 0.55rem; }
+.book-file-tags-grid {
+    grid-template-columns: max-content 1fr;
+    gap: 0.2rem 0.75rem;
+    font-size: 0.78rem;
+}
+.book-file-tag-value {
+    word-break: break-word;
+    max-width: 100%;
+}
+
 /* Progress bar */
 .progress-bar {
     height: 8px;
