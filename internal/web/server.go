@@ -702,7 +702,11 @@ func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
 		// Per-destination summary cards. Replaces the legacy
 		// single-active-backend stat cards. Empty slice means "no
 		// destinations configured yet" — template shows a CTA.
-		"DestinationSummaries": s.destinationSummaries(ctx, completeBooks),
+		// Coverage % uses totalBooks (Audible library size) as the
+		// denominator so it represents "fraction of the library present
+		// in this destination" — stable across status transitions and
+		// matches the user's mental model.
+		"DestinationSummaries": s.destinationSummaries(ctx, totalBooks),
 	}
 }
 
@@ -750,7 +754,7 @@ type destinationSummaryView struct {
 //
 // Per a11y-lead: badges are role="status" so SR users hear destination
 // state changes (Healthy → Failed) without per-tick count chatter.
-func (s *Server) destinationSummaries(ctx context.Context, completeBooks int) []destinationSummaryView {
+func (s *Server) destinationSummaries(ctx context.Context, libraryTotal int) []destinationSummaryView {
 	rows, err := s.db.ListLibraryDestinations(ctx)
 	if err != nil {
 		webLog.Warn().Err(err).Msg("dashboard: list destinations failed")
@@ -763,7 +767,7 @@ func (s *Server) destinationSummaries(ctx context.Context, completeBooks int) []
 	out := make([]destinationSummaryView, 0, len(rows))
 	for _, r := range rows {
 		row := r
-		out = append(out, s.buildDestinationSummary(ctx, &row, completeBooks))
+		out = append(out, s.buildDestinationSummary(ctx, &row, libraryTotal))
 	}
 	return out
 }
@@ -778,12 +782,11 @@ func (s *Server) singleDestinationSummary(ctx context.Context, id string) *desti
 	if err != nil || row == nil {
 		return nil
 	}
-	// Coverage % is relative to the count of complete books; we need
-	// that number for the meter to render the same as it does on the
-	// full grid. Cheap LIMIT-1 count.
-	completeStatus := database.BookStatusComplete
-	_, completeBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
-	v := s.buildDestinationSummary(ctx, row, completeBooks)
+	// Coverage % uses the total library size as the denominator so the
+	// meter renders the same as it does on the full grid. Cheap
+	// LIMIT-1 count.
+	_, libraryTotal, _ := s.db.ListBooks(ctx, database.BookFilter{Limit: 1})
+	v := s.buildDestinationSummary(ctx, row, libraryTotal)
 	return &v
 }
 
@@ -791,7 +794,7 @@ func (s *Server) singleDestinationSummary(ctx context.Context, id string) *desti
 // builder and the single-row swap path. Probes LibraryItemCount (with
 // the 30s cache) only for enabled+configured destinations so toggling
 // a disabled row stays cheap.
-func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, completeBooks int) destinationSummaryView {
+func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, libraryTotal int) destinationSummaryView {
 	hasCred := row.APIKey != "" || row.PlexToken != ""
 	v := destinationSummaryView{
 		ID:              row.ID,
@@ -832,8 +835,8 @@ func (s *Server) buildDestinationSummary(ctx context.Context, row *database.Libr
 	}
 	v.ItemCount = count
 	v.ItemCountSet = true
-	if completeBooks > 0 {
-		cov := int(math.Round((float64(count) / float64(completeBooks)) * 100))
+	if libraryTotal > 0 {
+		cov := int(math.Round((float64(count) / float64(libraryTotal)) * 100))
 		if cov < 0 {
 			cov = 0
 		}
