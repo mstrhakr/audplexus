@@ -822,7 +822,7 @@
                         if (empty) empty.remove();
                         var tr = document.createElement('tr');
                         var label = d.title || d.asin;
-                        tr.innerHTML = '<td>' + d.asin + '</td><td>' + label + '</td><td>just now</td>';
+                        tr.innerHTML = '<td>' + escHTML(label) + '</td><td class="cell-mono">' + escHTML(d.asin) + '</td><td>just now</td>';
                         cb.insertBefore(tr, cb.firstChild);
                         adj('complete-count', 1);
                     }
@@ -837,7 +837,7 @@
                         var tr = document.createElement('tr');
                         var label = d.title || d.asin;
                         var errMsg = d.error || 'unknown error';
-                        tr.innerHTML = '<td>' + d.asin + '</td><td class="error-text">' + errMsg + '</td><td>' + label + '</td>';
+                        tr.innerHTML = '<td>' + escHTML(label) + '</td><td class="cell-mono">' + escHTML(d.asin) + '</td><td class="error-text">' + escHTML(errMsg) + '</td>';
                         fb.insertBefore(tr, fb.firstChild);
                         adj('failed-count', 1);
                     }
