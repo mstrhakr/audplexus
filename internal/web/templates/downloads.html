@@ -1,83 +1,182 @@
 {{define "content"}}
-<h1>Pipeline</h1>
-
-<div class="actions-bar">
-    <button hx-post="/api/downloads/retry-all" hx-target="#dl-status" hx-swap="innerHTML" class="btn btn-danger">Retry All Failed</button>
-    <button id="queue-toggle-btn" data-paused="{{if .QueuePaused}}1{{else}}0{{end}}" class="btn {{if .QueuePaused}}btn-primary{{else}}btn-secondary{{end}}">{{if .QueuePaused}}Resume Queue{{else}}Pause Queue{{end}}</button>
-    <span id="dl-status"></span>
-</div>
-
-<div id="queue-paused-banner" class="queue-paused-banner" {{if not .QueuePaused}}style="display:none"{{end}}>
-    <strong>Queue paused:</strong> <span id="queue-paused-reason">{{.QueuePauseReason}}</span>
-</div>
-
-<h2>Worker Pools</h2>
-<div id="pipeline-pools" class="pool-grid"></div>
-
-<h2>Active Pipeline</h2>
-<div id="pipeline-cards">
-    {{range .Active}}
-    <div class="download-card" id="pipe-{{.ASIN}}">
-        <div class="dl-info">
-            <strong>{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</strong>
-            <span class="badge badge-warning">downloading {{printf "%.0f" (mul .Progress 100)}}%</span>
-            <div class="dl-info-actions"></div>
+{{$tab := .ActiveTab}}
+{{$window := .CompletedWindow}}
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1>Pipeline</h1>
+            <div class="sub">Items currently being processed by worker pools. {{len .Active}} active, {{len .Pending}} waiting.</div>
         </div>
-        <div class="progress-bar">
-            <div class="progress-fill" style="width: {{printf "%.0f" (mul .Progress 100)}}%"></div>
+        <div class="actions">
+            <button hx-post="/api/downloads/retry-all" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-danger" {{if not .RecentErrors}}disabled{{end}}>Retry All Failed</button>
+            <button id="queue-toggle-btn" data-paused="{{if .QueuePaused}}1{{else}}0{{end}}" class="btn {{if .QueuePaused}}btn-primary{{else}}btn-secondary{{end}}">{{if .QueuePaused}}Resume Queue{{else}}Pause Queue{{end}}</button>
+            <span id="dl-status"></span>
         </div>
     </div>
-    {{else}}
-    <p class="empty" id="pipe-empty">No active downloads</p>
-    {{end}}
+
+    <div id="queue-paused-banner" class="queue-paused-banner" {{if not .QueuePaused}}style="display:none"{{end}}>
+        <strong>Queue paused:</strong> <span id="queue-paused-reason">{{.QueuePauseReason}}</span>
+    </div>
+
+    {{/* Worker Pools — kept from the live app (DesignSystem omitted these
+         but they're useful operationally so we don't drop them).
+         #pipeline-pools is populated by the SSE renderer in base.html. */}}
+    <div class="section-h">Worker pools</div>
+    <div id="pipeline-pools" class="pool-grid"></div>
+
+    {{/* Tab strip — Active / Waiting / Failed / Completed. Each tab is
+         server-rendered (?tab=) so links are shareable, but the JS at
+         the bottom toggles panels without a round-trip when clicked. */}}
+    <div class="tabs" role="tablist" aria-label="Pipeline buckets" style="margin-top:1.5rem">
+        <a href="?tab=active" data-pipe-tab="active" class="{{if eq $tab "active"}}active{{end}}" role="tab">Active <span class="count" id="pipe-tab-count-active">{{len .Active}}</span></a>
+        <a href="?tab=waiting" data-pipe-tab="waiting" class="{{if eq $tab "waiting"}}active{{end}}" role="tab">Waiting <span class="count" id="pending-count">{{len .Pending}}</span></a>
+        <a href="?tab=failed" data-pipe-tab="failed" class="{{if eq $tab "failed"}}active{{end}}" role="tab">Failed <span class="count" id="failed-count">{{len .RecentErrors}}</span></a>
+        <a href="?tab=completed" data-pipe-tab="completed" class="{{if eq $tab "completed"}}active{{end}}" role="tab">Completed <span class="count" id="complete-count">{{len .Complete}}</span></a>
+    </div>
+
+    {{/* Active tab — live SSE-driven pipeline cards. #pipeline-cards is
+         the target of the renderPipelineCard JS in base.html, so the ID
+         must stay. We seed it server-side with whatever's active right
+         now to avoid the empty flash before the first SSE tick. */}}
+    <section class="pipe-tab-panel" data-pipe-panel="active" {{if ne $tab "active"}}hidden{{end}}>
+        <div id="pipeline-cards" class="dl-list">
+            {{range .Active}}
+            <div class="dl-card" id="pipe-{{.ASIN}}">
+                <div class="dl-head">
+                    <div class="dl-body">
+                        <div class="dl-title">{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</div>
+                        <div class="dl-by">{{.ASIN}}</div>
+                        <div class="dl-meta-row">
+                            <span class="badge badge-warning">downloading</span>
+                            <span class="pct">{{printf "%.0f" (mul .Progress 100)}}%</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="dl-progress"><div class="bar" style="width:{{printf "%.0f" (mul .Progress 100)}}%"></div></div>
+            </div>
+            {{else}}
+            <div class="empty-card" id="pipe-empty">No active downloads</div>
+            {{end}}
+        </div>
+    </section>
+
+    {{/* Waiting tab — queued items not yet pulled by a download worker. */}}
+    <section class="pipe-tab-panel" data-pipe-panel="waiting" {{if ne $tab "waiting"}}hidden{{end}}>
+        <div class="table-wrap">
+            <table class="tbl" id="pending-table">
+                <thead><tr><th>Title</th><th>ASIN</th><th>Priority</th><th>Queued</th><th class="col-actions">Actions</th></tr></thead>
+                <tbody id="pending-body">
+                {{range .Pending}}
+                <tr id="pending-{{.ASIN}}">
+                    <td>{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}<span class="cell-mono">{{.ASIN}}</span>{{end}}</td>
+                    <td class="cell-mono">{{.ASIN}}</td>
+                    <td class="cell-mono">{{.Priority}}</td>
+                    <td class="cell-mono">{{formatDate .CreatedAt}}</td>
+                    <td class="col-actions">
+                        <button hx-post="/api/downloads/cancel/{{.ID}}" hx-swap="none" hx-on::after-request="this.closest('tr').remove()" class="btn btn-small btn-danger">Cancel</button>
+                    </td>
+                </tr>
+                {{else}}
+                <tr id="pending-empty"><td colspan="5" class="empty">No queued items</td></tr>
+                {{end}}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    {{/* Failed tab — dedup'd by ASIN. Each row has a Retry button. */}}
+    <section class="pipe-tab-panel" data-pipe-panel="failed" {{if ne $tab "failed"}}hidden{{end}}>
+        <div class="table-wrap">
+            <table class="tbl" id="failed-table">
+                <thead><tr><th>Title</th><th>ASIN</th><th>Error</th><th class="col-actions">Actions</th></tr></thead>
+                <tbody id="failed-body">
+                {{range .RecentErrors}}
+                <tr id="failed-{{.ID}}">
+                    <td>{{with index $.DownloadTitles .ASIN}}{{.}}{{else}}<span class="cell-mono">{{.ASIN}}</span>{{end}}</td>
+                    <td class="cell-mono">{{.ASIN}}</td>
+                    <td class="error-text">{{.Error}}</td>
+                    <td class="col-actions">
+                        <button hx-post="/api/downloads/retry/{{.ID}}" hx-swap="none" hx-on::after-request="this.closest('tr').remove()" class="btn btn-small btn-primary">Retry</button>
+                    </td>
+                </tr>
+                {{else}}
+                <tr id="failed-empty"><td colspan="4" class="empty">No failed items</td></tr>
+                {{end}}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    {{/* Completed tab — windowed (24h default). The window select is a
+         plain GET form so the URL stays bookmarkable.
+         CompleteTotal is shown next to the window label so users can
+         see how many rows the wider windows would surface. */}}
+    <section class="pipe-tab-panel" data-pipe-panel="completed" {{if ne $tab "completed"}}hidden{{end}}>
+        <div class="filter-bar" style="margin-bottom:.75rem">
+            <form method="get" action="" style="display:flex;gap:.5rem;align-items:center;margin:0">
+                <input type="hidden" name="tab" value="completed">
+                <label for="completed-window" class="muted" style="font-size:.8rem">Show completions from</label>
+                <select id="completed-window" name="completed_window" onchange="this.form.submit()" style="padding:.4rem .55rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:7px;font-size:.85rem;width:auto">
+                    {{range .CompletedWindowOpts}}
+                    <option value="{{.Value}}" {{if eq .Value $window}}selected{{end}}>{{.Label}}</option>
+                    {{end}}
+                </select>
+                <span class="muted" style="font-size:.78rem;margin-left:auto">
+                    Showing {{len .Complete}} of {{.CompleteTotal}} total completions
+                </span>
+            </form>
+        </div>
+        <div class="table-wrap">
+            <table class="tbl" id="complete-table">
+                <thead><tr><th>Title</th><th>ASIN</th><th>Completed</th></tr></thead>
+                <tbody id="complete-body">
+                {{range .Complete}}
+                <tr>
+                    <td>{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}<span class="cell-mono">{{.ASIN}}</span>{{end}}</td>
+                    <td class="cell-mono">{{.ASIN}}</td>
+                    <td class="cell-mono">{{if .CompletedAt}}{{formatDate (deref .CompletedAt)}}{{else}}{{formatDate .UpdatedAt}}{{end}}</td>
+                </tr>
+                {{else}}
+                <tr id="complete-empty"><td colspan="3" class="empty">No completions in this window</td></tr>
+                {{end}}
+                </tbody>
+            </table>
+        </div>
+    </section>
 </div>
 
-<h2>Pending (<span id="pending-count">{{len .Pending}}</span>)</h2>
-<table class="data-table" id="pending-table">
-    <thead><tr><th>ASIN</th><th>Priority</th><th>Queued</th><th>Actions</th></tr></thead>
-    <tbody id="pending-body">
-    {{range .Pending}}
-    <tr id="pending-{{.ASIN}}">
-        <td>{{.ASIN}}</td>
-        <td>{{.Priority}}</td>
-        <td>{{formatDate .CreatedAt}}</td>
-        <td><button hx-post="/api/downloads/cancel/{{.ID}}" hx-swap="none" hx-on::after-request="this.closest('tr').remove()" class="btn btn-small btn-danger">Cancel</button></td>
-    </tr>
-    {{else}}
-    <tr id="pending-empty"><td colspan="4" class="empty">None</td></tr>
-    {{end}}
-    </tbody>
-</table>
-
-<h2>Completed (<span id="complete-count">{{len .Complete}}</span>)</h2>
-<table class="data-table" id="complete-table">
-    <thead><tr><th>ASIN</th><th>Title</th><th>Completed</th></tr></thead>
-    <tbody id="complete-body">
-    {{range .Complete}}
-    <tr>
-        <td>{{.ASIN}}</td>
-        <td>{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</td>
-        <td>{{if .CompletedAt}}{{formatDate (deref .CompletedAt)}}{{end}}</td>
-    </tr>
-    {{else}}
-    <tr id="complete-empty"><td colspan="3" class="empty">None</td></tr>
-    {{end}}
-    </tbody>
-</table>
-
-<h2>Recent Errors (<span id="failed-count">{{len .RecentErrors}}</span>)</h2>
-<table class="data-table" id="failed-table">
-    <thead><tr><th>Title</th><th>Error</th><th>Actions</th></tr></thead>
-    <tbody id="failed-body">
-    {{range .RecentErrors}}
-    <tr id="failed-{{.ID}}">
-        <td>{{with index $.DownloadTitles .ASIN}}{{.}}{{else}}{{.ASIN}}{{end}}</td>
-        <td class="error-text">{{.Error}}</td>
-        <td><button hx-post="/api/downloads/retry/{{.ID}}" hx-swap="none" hx-on::after-request="this.closest('tr').remove()" class="btn btn-small btn-primary">Retry</button></td>
-    </tr>
-    {{else}}
-    <tr id="failed-empty"><td colspan="3" class="empty">None</td></tr>
-    {{end}}
-    </tbody>
-</table>
+<script>
+// Pipeline tab switcher — toggles panel visibility without a round-trip
+// when the user clicks a tab. The href on each tab still resolves to the
+// server-rendered version so deep links + middle-click open keep working.
+(function() {
+    var tabs = document.querySelectorAll('[data-pipe-tab]');
+    var panels = document.querySelectorAll('[data-pipe-panel]');
+    if (!tabs.length || !panels.length) return;
+    function activate(key) {
+        tabs.forEach(function(a) {
+            a.classList.toggle('active', a.getAttribute('data-pipe-tab') === key);
+            a.setAttribute('aria-selected', a.getAttribute('data-pipe-tab') === key ? 'true' : 'false');
+        });
+        panels.forEach(function(s) {
+            s.hidden = (s.getAttribute('data-pipe-panel') !== key);
+        });
+        // Preserve query state when switching to/from the Completed tab so
+        // the window selection sticks across tabs. Other tabs strip
+        // completed_window because it's irrelevant there.
+        var url = new URL(window.location.href);
+        url.searchParams.set('tab', key);
+        if (key !== 'completed') url.searchParams.delete('completed_window');
+        history.replaceState({}, '', url.pathname + url.search + url.hash);
+    }
+    tabs.forEach(function(a) {
+        a.addEventListener('click', function(ev) {
+            // Cmd/Ctrl/middle-click should fall through to a real navigation.
+            if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button === 1) return;
+            ev.preventDefault();
+            activate(a.getAttribute('data-pipe-tab'));
+        });
+    });
+})();
+</script>
 {{end}}

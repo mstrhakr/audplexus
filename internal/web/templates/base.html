@@ -10,6 +10,9 @@
     <script src="/static/htmx.min.js"></script>
 </head>
 <body>
+    {{$sb := .Sidebar}}
+    {{$isWizard := eq .Page "setup"}}
+    {{if not $isWizard}}
     <nav class="sidebar">
         <div class="sidebar-header">
             <img src="/static/logo.svg" alt="Audplexus Logo" class="sidebar-logo" />
@@ -19,16 +22,100 @@
             </div>
         </div>
         <ul class="nav-links">
-            <li><a href="/" class="{{if eq .Page "dashboard"}}active{{end}}">Dashboard</a></li>
-            <li><a href="/library" class="{{if eq .Page "library"}}active{{end}}">Library</a></li>
-            <li><a href="/downloads" class="{{if eq .Page "pipeline"}}active{{end}}">Pipeline</a></li>
-            <li><a href="/diagnostics" class="{{if eq .Page "diagnostics"}}active{{end}}">Diagnostics</a></li>
-            <li><a href="/settings" class="{{if eq .Page "settings"}}active{{end}}">Settings</a></li>
+            <li>
+                <a href="/" class="{{if eq .Page "dashboard"}}active{{end}}">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+                    <span>Dashboard</span>
+                </a>
+            </li>
+            <li>
+                <a href="/library" class="{{if eq .Page "library"}}active{{end}}">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                    <span>Library</span>
+                    {{if and $sb (gt $sb.NewBooks 0)}}<span class="nav-badge muted">{{$sb.NewBooks}}</span>{{end}}
+                </a>
+            </li>
+            <li>
+                <a href="/downloads" class="{{if eq .Page "pipeline"}}active{{end}}">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 6h6a4 4 0 0 1 4 4v0"/><path d="M7 18h6a4 4 0 0 0 4-4v0"/></svg>
+                    <span>Pipeline</span>
+                    {{if and $sb (gt $sb.ActiveDL 0)}}<span class="nav-badge">{{$sb.ActiveDL}}</span>{{end}}
+                </a>
+            </li>
+            <li>
+                <a href="/destinations" class="{{if eq .Page "destinations"}}active{{end}}">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                    <span>Destinations</span>
+                    {{if and $sb (gt $sb.FailedDestAlert 0)}}<span class="nav-badge danger">{{$sb.FailedDestAlert}}</span>{{end}}
+                </a>
+            </li>
+            <li>
+                <a href="/diagnostics" class="{{if eq .Page "diagnostics"}}active{{end}}">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                    <span>Diagnostics</span>
+                </a>
+            </li>
+            <li>
+                <a href="/settings" class="{{if eq .Page "settings"}}active{{end}}">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    <span>Settings</span>
+                </a>
+            </li>
         </ul>
+        {{if $sb}}
+        <div class="sidebar-footer">
+            <span class="health-dot{{if not $sb.Healthy}} health-dot-warn{{end}}"></span>
+            <div class="meta">
+                <strong>{{if $sb.Healthy}}All systems operational{{else if gt $sb.FailedDestAlert 0}}Destination issues{{else}}Audible not connected{{end}}</strong>
+                {{$sb.Version}} · uptime {{$sb.Uptime}}
+            </div>
+        </div>
+        {{end}}
     </nav>
-    <main class="content">
+    <div class="main">
+        {{$pageLabels := dict "dashboard" "Dashboard" "library" "Library" "pipeline" "Pipeline" "destinations" "Destinations" "destinations_new_picker" "Destinations" "destinations_new_form" "Destinations" "diagnostics" "Diagnostics" "settings" "Settings"}}
+        {{$current := index $pageLabels .Page}}
+        <header class="topbar" role="banner">
+            <nav class="crumbs" aria-label="Breadcrumb">
+                <span>Audplexus</span>
+                {{if $current}}
+                <span class="sep">/</span>
+                <span class="current">{{$current}}</span>
+                {{end}}
+            </nav>
+            <div class="topbar-actions">
+                <form class="topbar-search" role="search" action="/library" method="get">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input type="search" name="search" placeholder="Search library, ASIN, author…" aria-label="Search library">
+                </form>
+            </div>
+        </header>
+        <main class="content">
+            {{template "content" .}}
+        </main>
+    </div>
+    {{else}}
         {{template "content" .}}
-    </main>
+    {{end}}
+
+    {{/*
+      Global add-destination modal. Any page can open it by triggering
+      hx-get="/destinations/modal" hx-target="#dest-modal-content".
+      The .open class controls visibility; the AudplexusDestModal helper
+      below handles open/close + listens for the dest-created event so
+      successful creates auto-close and refresh the page.
+    */}}
+    <div id="dest-modal" class="modal-overlay" aria-hidden="true" hidden>
+        <div class="modal-backdrop" data-dest-modal-close></div>
+        <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="dest-modal-title">
+            <button type="button" class="modal-close" data-dest-modal-close aria-label="Close">&times;</button>
+            <h2 id="dest-modal-title" class="visually-hidden">Add destination</h2>
+            <div id="dest-modal-content" class="modal-body">
+                <div class="muted">Loading…</div>
+            </div>
+        </div>
+    </div>
+
     <div id="pipeline-activity"></div>
     <script>
     (function() {
@@ -162,12 +249,14 @@
             var html = '';
             for (var i = 0; i < snapshot.pools.length; i++) {
                 var p = snapshot.pools[i];
+                var utilization = p.workers > 0 ? Math.round((p.active / p.workers) * 100) : 0;
+                if (utilization > 100) utilization = 100;
                 var waitingHtml = '';
                 if (p.waiting && p.waiting.length > 0) {
                     waitingHtml += '<ul class="pool-waiting-list">';
                     for (var j = 0; j < p.waiting.length && j < 8; j++) {
                         var w = p.waiting[j];
-                        waitingHtml += '<li><span class="pool-item-title">' + (w.title || w.asin) + '</span><span class="pool-item-asin">' + w.asin + '</span></li>';
+                        waitingHtml += '<li><span class="pool-item-title">' + escHTML(w.title || w.asin) + '</span><span class="pool-item-asin">' + escHTML(w.asin) + '</span></li>';
                     }
                     if (p.waiting.length > 8) {
                         waitingHtml += '<li class="pool-more">+' + (p.waiting.length - 8) + ' more</li>';
@@ -178,8 +267,9 @@
                 }
 
                 html += '<div class="pool-card">' +
-                    '<div class="pool-head"><strong>' + p.label + ' Pool</strong><span class="pool-workers">workers ' + p.workers + '</span></div>' +
-                    '<div class="pool-stats"><span>active ' + p.active + '</span><span>queue ' + p.queue_depth + '</span></div>' +
+                    '<div class="pool-head"><span class="pool-name">' + escHTML(p.label) + ' Pool</span><span class="pool-workers">' + p.active + '/' + p.workers + ' workers</span></div>' +
+                    '<div class="pool-meter"><span class="fill" style="display:block;width:' + utilization + '%;height:100%"></span></div>' +
+                    '<div class="pool-stats"><span><b>' + p.active + '</b> active</span><span><b>' + p.queue_depth + '</b> queued</span></div>' +
                     waitingHtml +
                 '</div>';
             }
@@ -888,6 +978,129 @@
         });
 
         connectEventSource();
+    })();
+    </script>
+
+    <script>
+    // Global Test-Connection feedback. Any button marked
+    // data-test-button gets:
+    //   • data-test-state="loading" while the HTMX request is in flight
+    //   • data-test-state="ok" / "fail" for ~2.4s based on the response
+    //   • attribute removed after the linger window so the default icon
+    //     comes back
+    // The response body is the renderTestResult fragment ("Connected." /
+    // "Failed."), so we just look at the prefix.
+    (function() {
+        var LINGER_MS = 2400;
+        var clearTimers = new WeakMap();
+
+        function scheduleClear(btn) {
+            var existing = clearTimers.get(btn);
+            if (existing) clearTimeout(existing);
+            var t = setTimeout(function() {
+                btn.removeAttribute('data-test-state');
+                clearTimers.delete(btn);
+            }, LINGER_MS);
+            clearTimers.set(btn, t);
+        }
+
+        document.body.addEventListener('htmx:beforeRequest', function(ev) {
+            var btn = ev.target;
+            if (!(btn instanceof HTMLElement) || !btn.hasAttribute('data-test-button')) return;
+            var existing = clearTimers.get(btn);
+            if (existing) {
+                clearTimeout(existing);
+                clearTimers.delete(btn);
+            }
+            btn.setAttribute('data-test-state', 'loading');
+        });
+
+        document.body.addEventListener('htmx:afterRequest', function(ev) {
+            var btn = ev.target;
+            if (!(btn instanceof HTMLElement) || !btn.hasAttribute('data-test-button')) return;
+            var xhr = ev.detail && ev.detail.xhr;
+            var text = xhr ? String(xhr.responseText || '') : '';
+            var ok = !!(ev.detail && ev.detail.successful) && text.indexOf('Connected.') !== -1;
+            btn.setAttribute('data-test-state', ok ? 'ok' : 'fail');
+            scheduleClear(btn);
+            // After the icon-state linger, reload the page so the card's
+            // health badge / last-checked timestamp picks up the new
+            // values. Only buttons opted into this via data-test-reload.
+            if (btn.hasAttribute('data-test-reload')) {
+                setTimeout(function() { location.reload(); }, LINGER_MS + 200);
+            }
+        });
+    })();
+    </script>
+
+    <script>
+    // AudplexusDestModal — global helper that drives the add-destination
+    // modal. Pages open it via hx-get="/destinations/modal" with target
+    // "#dest-modal-content"; the helper observes HTMX swaps to flip the
+    // overlay open, listens for the "dest-created" event the server fires
+    // via HX-Trigger on successful create, and exposes close() for the
+    // Cancel button inside the bare-body form.
+    (function() {
+        var overlay = document.getElementById('dest-modal');
+        if (!overlay) return;
+        var content = document.getElementById('dest-modal-content');
+        var previousOverflow = '';
+
+        function open() {
+            overlay.hidden = false;
+            overlay.setAttribute('aria-hidden', 'false');
+            overlay.classList.add('open');
+            previousOverflow = document.body.style.overflow || '';
+            document.body.style.overflow = 'hidden';
+        }
+        function close() {
+            overlay.hidden = true;
+            overlay.setAttribute('aria-hidden', 'true');
+            overlay.classList.remove('open');
+            document.body.style.overflow = previousOverflow;
+            // Reset content so the next open doesn't briefly flash the
+            // previous form before HTMX swaps in the fresh picker.
+            content.innerHTML = '<div class="muted">Loading…</div>';
+        }
+
+        // Click on backdrop or close button.
+        overlay.addEventListener('click', function(ev) {
+            if (ev.target.closest('[data-dest-modal-close]')) {
+                ev.preventDefault();
+                close();
+            }
+        });
+        // Escape closes.
+        document.addEventListener('keydown', function(ev) {
+            if (ev.key === 'Escape' && !overlay.hidden) close();
+        });
+
+        // Auto-open when content is swapped in by HTMX. We only open
+        // when the swap target IS the modal content slot — other swaps
+        // (library tables, sync status) don't trigger this.
+        document.body.addEventListener('htmx:afterSwap', function(ev) {
+            if (ev.target && ev.target.id === 'dest-modal-content') {
+                open();
+            }
+        });
+
+        // Server signals a successful CRUD via HX-Trigger. Auto-close
+        // after a beat so the user sees the success state, then reload
+        // so the parent page (Destinations list, wizard step 3) picks
+        // up the change. Same handler for create / update / delete —
+        // the events fire from different handlers but the modal flow
+        // is identical.
+        function destChanged() {
+            setTimeout(function() {
+                close();
+                window.location.reload();
+            }, 700);
+        }
+        document.body.addEventListener('dest-created', destChanged);
+        document.body.addEventListener('dest-updated', destChanged);
+        document.body.addEventListener('dest-deleted', destChanged);
+
+        window.AudplexusDestModal = { open: open, close: close };
     })();
     </script>
 </body>

@@ -16,10 +16,12 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -34,6 +36,7 @@ import (
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
 	"github.com/mstrhakr/audplexus/internal/organizer"
 	audible "github.com/mstrhakr/go-audible"
+	"github.com/robfig/cron/v3"
 )
 
 var webLog = logging.Component("web")
@@ -58,6 +61,17 @@ type Server struct {
 	audiobooksPath string
 	downloadsPath  string
 	configPath     string
+	// startedAt is set at construction and used by the sidebar footer
+	// to render uptime ("6d 14h"). Not used for any business logic, so
+	// no need to plumb it through; reads from time.Since(s.startedAt).
+	startedAt time.Time
+	// onboarded mirrors the "onboarded" setting so firstRunGate (which
+	// runs on every GET) can answer from memory instead of hitting the
+	// DB. Seeded from the DB once in NewServer and flipped whenever
+	// handleSetupFinish/Skip/Restart or handleFactoryReset write the
+	// underlying setting. atomic.Bool because reads are middleware and
+	// writes are spread across a handful of handler goroutines.
+	onboarded atomic.Bool
 	// destItemCountCache caches per-destination LibraryItemCount results
 	// (30s TTL) so the dashboard's 12s poll doesn't hammer remote servers.
 	// Keyed by destination ID; entries expire independently.
@@ -104,6 +118,14 @@ func NewServer(
 		audiobooksPath: audiobooksPath,
 		downloadsPath:  downloadsPath,
 		configPath:     configPath,
+		startedAt:      time.Now(),
+	}
+
+	// Seed the onboarded flag from the DB once. firstRunGate (which
+	// runs on every GET) reads s.onboarded.Load() after this — no per-
+	// request DB hit for the flag check.
+	if v, err := db.GetSetting(context.Background(), settingKeyOnboarded); err == nil && (v == "true" || v == "1") {
+		s.onboarded.Store(true)
 	}
 
 	// Wire up the media-server sync callbacks. With multi-destination, the
@@ -216,6 +238,54 @@ func (s *Server) setupTemplates() {
 			}
 			return t.Format("Jan 2, 2006")
 		},
+		// formatRelative renders a human-friendly "5 minutes ago" /
+		// "2 hours ago" / "in 4 hours" string. Returns "" for zero so
+		// the template can skip rendering altogether. Bidirectional —
+		// past times read "X ago", future times read "in X".
+		"formatRelative": func(t time.Time) string {
+			if t.IsZero() {
+				return ""
+			}
+			d := time.Since(t)
+			future := d < 0
+			if future {
+				d = -d
+			}
+			fmtUnit := func(n int, unit string) string {
+				if n == 1 {
+					if future {
+						return "in 1 " + unit
+					}
+					return "1 " + unit + " ago"
+				}
+				if future {
+					return fmt.Sprintf("in %d %ss", n, unit)
+				}
+				return fmt.Sprintf("%d %ss ago", n, unit)
+			}
+			switch {
+			case d < time.Minute:
+				if future {
+					return "in under a minute"
+				}
+				return "just now"
+			case d < time.Hour:
+				return fmtUnit(int(d/time.Minute), "minute")
+			case d < 24*time.Hour:
+				return fmtUnit(int(d/time.Hour), "hour")
+			case d < 7*24*time.Hour:
+				days := int(d / (24 * time.Hour))
+				if !future && days == 1 {
+					return "yesterday"
+				}
+				if future && days == 1 {
+					return "tomorrow"
+				}
+				return fmtUnit(days, "day")
+			default:
+				return t.Format("Jan 2, 2006")
+			}
+		},
 		"statusBadge": func(status database.BookStatus) string {
 			switch status {
 			case database.BookStatusComplete:
@@ -226,6 +296,8 @@ func (s *Server) setupTemplates() {
 				return "badge-warning"
 			case database.BookStatusQueued:
 				return "badge-info"
+			case database.BookStatusUnavailable:
+				return "badge-warning"
 			default:
 				return "badge-neutral"
 			}
@@ -233,6 +305,8 @@ func (s *Server) setupTemplates() {
 		"mul": func(a float64, b float64) float64 {
 			return a * b
 		},
+		"add": func(a, b int) int { return a + b },
+		"sub": func(a, b int) int { return a - b },
 		"deref": func(t *time.Time) time.Time {
 			if t == nil {
 				return time.Time{}
@@ -245,7 +319,51 @@ func (s *Server) setupTemplates() {
 			}
 			return template.HTML(htmlPolicy.Sanitize(raw))
 		},
+		// cleanError is the shared render path for error strings shown in
+		// the UI. Strips embedded HTML, collapses whitespace, rewrites
+		// common HTTP codes into friendly hints, and truncates. The
+		// destinations test path runs errors through this before storage;
+		// dashboard fields (failed-download errors, sync errors, cached
+		// destination health detail) are raw, so templates pipe through
+		// this helper to keep the render uniform.
+		"cleanError": cleanErrorForDisplay,
 		"hasSuffix": strings.HasSuffix,
+		"coveragePct": func(part, total int) int {
+			if total <= 0 {
+				return 0
+			}
+			return int(float64(part) / float64(total) * 100)
+		},
+		"firstTwo": func(s string) string {
+			if len(s) <= 2 {
+				return strings.ToUpper(s)
+			}
+			return strings.ToUpper(s[:2])
+		},
+		// destLogo maps a destination type key to its static logo URL.
+		// `abs` is the internal short code; the file on disk is named
+		// audiobookshelf.png so we expand it here. Returns "" for
+		// unknown types so the template can fall back to a letter pill.
+		"destLogo": func(t string) string {
+			switch strings.ToLower(strings.TrimSpace(t)) {
+			case "plex":
+				return "/static/plex.png"
+			case "emby":
+				return "/static/emby.png"
+			case "jellyfin":
+				return "/static/jellyfin.png"
+			case "abs", "audiobookshelf":
+				return "/static/audiobookshelf.png"
+			}
+			return ""
+		},
+		"joinDestinationNames": func(dests []destinationSummaryView) string {
+			names := make([]string, 0, len(dests))
+			for _, d := range dests {
+				names = append(names, d.DisplayName)
+			}
+			return strings.Join(names, ", ")
+		},
 		"dict": func(values ...any) (map[string]any, error) {
 			if len(values)%2 != 0 {
 				return nil, fmt.Errorf("dict expects an even number of args")
@@ -266,7 +384,7 @@ func (s *Server) setupTemplates() {
 	base := template.Must(template.New("base").Funcs(funcMap).ParseFS(templateFS, "templates/base.html"))
 
 	// Parse all partial/fragment templates that may be referenced by page templates
-	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html"}
+	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/book_detail_modal.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html", "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html", "templates/destinations_card.html"}
 	baseWithPartials := template.Must(template.Must(base.Clone()).ParseFS(templateFS, partials...))
 
 	r := &multiRender{templates: make(map[string]*template.Template)}
@@ -304,6 +422,19 @@ func (s *Server) setupTemplates() {
 		r.templates[name] = partialSet
 	}
 
+	// Bare body fragments for the destination modal. New / Edit / Delete
+	// all swap into #dest-modal-content via HTMX — the three files
+	// each define just an inner *_body block, no page chrome. The
+	// multiRender's Instance() path uses the template name as the entry
+	// point, so "destination_picker_body" / "destination_form_body" /
+	// "destination_delete_body" execute the matching {{define …}} block
+	// directly without going through base.
+	destModalSet := template.Must(template.Must(template.New("dest_modal").Funcs(funcMap).ParseFS(templateFS, "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html", "templates/destinations_card.html")).Clone())
+	r.templates["destination_picker_body"] = destModalSet
+	r.templates["destination_form_body"] = destModalSet
+	r.templates["destination_delete_body"] = destModalSet
+	r.templates["destination_card_body"] = destModalSet
+
 	s.router.HTMLRender = r
 }
 
@@ -317,6 +448,12 @@ func (s *Server) setupRoutes() {
 	})
 	static.StaticFS("/", http.FS(staticSub))
 
+	// First-run gate — runs before page handlers and redirects to the
+	// setup wizard on fresh installs (no auth + no "onboarded" setting).
+	// Settings, diagnostics, the wizard itself, and POST/api routes pass
+	// through so users can always escape and re-trigger the wizard.
+	s.router.Use(s.firstRunGate)
+
 	// Pages
 	s.router.GET("/", s.handleDashboard)
 	s.router.GET("/library", s.handleLibrary)
@@ -324,6 +461,14 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/downloads", s.handleDownloads)
 	s.router.GET("/settings", s.handleSettings)
 	s.router.GET("/diagnostics", s.handleDiagnostics)
+
+	// Setup wizard (5 steps). State is server-driven via ?step= so no JS
+	// is needed; "onboarded" setting tracks completion.
+	s.router.GET("/setup", s.handleSetupWizard)
+	s.router.POST("/setup/marketplace", s.handleSetupMarketplace)
+	s.router.POST("/setup/finish", s.handleSetupFinish)
+	s.router.GET("/setup/skip", s.handleSetupSkip)
+	s.router.POST("/setup/restart", s.handleSetupRestart)
 
 	// Auth
 	s.router.POST("/auth/marketplace", s.handleAudibleMarketplaceSelect)
@@ -336,24 +481,34 @@ func (s *Server) setupRoutes() {
 	// destination affordance — see /destinations/plex/* below.
 	s.router.POST("/settings/tag-profile", s.handleTagProfileSelect)
 
-	// Library destinations CRUD (multi-destination model). Two-page flow
-	// for add (type picker → type-specific form) and delete (GET confirm
-	// → POST with confirm=1) keeps the UI JS-free + back-button-safe.
-	s.router.GET("/destinations/new", s.handleDestinationsNewPicker)
-	s.router.POST("/destinations/new", s.handleDestinationsNewForm)
+	// Library destinations CRUD (multi-destination model). Modal-only —
+	// New / Edit / Delete all open inside the global #dest-modal-content
+	// overlay defined in base.html. Every handler returns a bare body
+	// partial (no page chrome) that HTMX swaps in, and mutating success
+	// fires an HX-Trigger event so the page auto-closes + reloads.
+	s.router.GET("/destinations", s.handleDestinations)
+	// Add: picker → type-specific form → POST /destinations/create.
+	s.router.GET("/destinations/modal", s.handleDestinationsModalPicker)
+	s.router.POST("/destinations/modal/form", s.handleDestinationsModalForm)
 	s.router.POST("/destinations/create", s.handleDestinationsCreate)
-	// Test connection — runs a live LibraryItemCount probe with current
-	// form values. HTMX-targeted; renders a small HTML fragment.
-	s.router.POST("/destinations/test", s.handleDestinationTest)
-	s.router.POST("/destinations/:id/test", s.handleDestinationTest)
+	// Edit: hx-get the form body, POST update.
 	s.router.GET("/destinations/:id/edit", s.handleDestinationEditForm)
 	s.router.POST("/destinations/:id", s.handleDestinationUpdate)
-	s.router.POST("/destinations/:id/toggle", s.handleDestinationToggle)
-	// Delete is POST-only — destructive actions must not be safe GETs (per
-	// RFC 9110 + WCAG link-purpose semantics for destructive controls).
-	// The same endpoint serves both: confirm=1 actually deletes;
-	// otherwise the confirmation page is rendered.
+	// Delete: hx-get the confirm body, POST with confirm=1 to delete.
+	// Destructive mutation stays POST-only (RFC 9110 + WCAG); the GET
+	// counterpart only renders the confirmation, no state changes.
+	s.router.GET("/destinations/:id/delete", s.handleDestinationDeleteModal)
 	s.router.POST("/destinations/:id/delete", s.handleDestinationDelete)
+	// Test connection + toggle enabled. Both still HTMX-fragment paths.
+	s.router.POST("/destinations/test", s.handleDestinationTest)
+	s.router.POST("/destinations/:id/test", s.handleDestinationTest)
+	s.router.POST("/destinations/:id/toggle", s.handleDestinationToggle)
+	// Legacy full-page entry points — old bookmarks and the wizard's
+	// "Add destination" link previously navigated here. Redirect to the
+	// Destinations page so users land somewhere useful instead of 404.
+	s.router.GET("/destinations/new", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/destinations")
+	})
 
 	// Discovery / sign-in endpoints — per-destination affordances that
 	// auto-populate the form. All HTMX-targeted, all render HTML fragments
@@ -406,11 +561,17 @@ func (s *Server) setupRoutes() {
 
 		api.GET("/diagnostics/compare", s.handleDiagnosticsCompare)
 		api.POST("/diagnostics/targeted-scan", s.handleDiagnosticsTargetedScan)
+		// DS-style ops tab — read-only system state. JSON so the
+		// browser can pretty-render in the diagnostics page.
+		api.GET("/diagnostics/env", s.handleDiagnosticsEnv)
+		api.GET("/diagnostics/destinations", s.handleDiagnosticsDestinations)
+		api.GET("/diagnostics/logs/tail", s.handleDiagnosticsLogsTail)
 		api.POST("/downloads/redownload/:asin", s.handleRedownload)
 
 		// Per-book conversion between m4b and chapter-split mp3.
 		api.POST("/books/:id/convert", s.handleConvertBook)
 		api.POST("/books/:id/delete-media", s.handleDeleteBookMedia)
+		api.POST("/books/:id/resync-metadata", s.handleResyncMetadata)
 	}
 }
 
@@ -500,7 +661,7 @@ func normalizeClientIPForLog(ip string) string {
 func (s *Server) handleDashboard(c *gin.Context) {
 	ctx := c.Request.Context()
 	_, _ = s.clearStaleFailedDownloads(ctx)
-	c.HTML(http.StatusOK, "dashboard.html", s.getDashboardData(ctx))
+	c.HTML(http.StatusOK, "dashboard.html", s.withSidebar(ctx, s.getDashboardData(ctx)))
 }
 
 func (s *Server) getDashboardData(ctx context.Context) gin.H {
@@ -559,19 +720,28 @@ func mediaServerLabel(t mediaserver.Type) (string, string) {
 // destinationSummaryView is the per-destination card rendered on the
 // dashboard. Sensitive fields are intentionally absent; only display info.
 type destinationSummaryView struct {
-	ID            string
-	DisplayName   string
-	Type          string
-	TypeLabel     string
-	Enabled       bool
-	Configured    bool
-	ItemCount     int
-	ItemCountSet  bool
-	Coverage      int
-	CoverageSet   bool
-	Health        string // "healthy" | "failed" | "never" | "not_configured"
-	HealthDetail  string // for failed: shorter human message
-	LastCheckedAt *time.Time
+	ID              string
+	DisplayName     string
+	Type            string
+	TypeLabel       string
+	Enabled         bool
+	Configured      bool
+	HasCredential   bool   // API key for Emby/Jellyfin/ABS, token for Plex
+	URL             string
+	PlexSectionID   string // plex-only
+	LibraryID       string // emby/jellyfin/abs
+	AudiobookPath   string
+	DestinationPath string
+	ItemCount       int
+	ItemCountSet    bool
+	Coverage        int
+	CoverageSet     bool
+	Health          string // "healthy" | "failed" | "never" | "not_configured"
+	HealthDetail    string // for failed: shorter human message
+	LastError       string
+	LastCheckedAt   *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // destinationSummaries computes per-destination summary cards for the
@@ -593,55 +763,87 @@ func (s *Server) destinationSummaries(ctx context.Context, completeBooks int) []
 	out := make([]destinationSummaryView, 0, len(rows))
 	for _, r := range rows {
 		row := r
-		v := destinationSummaryView{
-			ID:            row.ID,
-			DisplayName:   row.DisplayName,
-			Type:          string(row.Type),
-			TypeLabel:     destinationTypeLabel(row.Type),
-			Enabled:       row.Enabled,
-			Configured:    destinationConfigured(&row),
-			Health:        summarizeHealth(&row),
-			LastCheckedAt: row.LastHealthCheckAt,
-		}
-
-		if !v.Enabled || !v.Configured {
-			out = append(out, v)
-			continue
-		}
-
-		// Construct a backend instance bound to this destination row so
-		// LibraryItemCount uses the row's URL/api_key, not the legacy
-		// settings table.
-		backend, err := s.buildDestinationBackend(&row)
-		if err != nil {
-			v.HealthDetail = err.Error()
-			out = append(out, v)
-			continue
-		}
-
-		count, err := s.getCachedDestinationItemCount(ctx, row.ID, backend)
-		if err != nil {
-			webLog.Debug().Err(err).Str("destination_id", row.ID).Str("destination_name", row.DisplayName).Msg("dashboard: destination item count failed")
-			v.Health = "failed"
-			v.HealthDetail = err.Error()
-		} else {
-			v.ItemCount = count
-			v.ItemCountSet = true
-			if completeBooks > 0 {
-				cov := int(math.Round((float64(count) / float64(completeBooks)) * 100))
-				if cov < 0 {
-					cov = 0
-				}
-				if cov > 100 {
-					cov = 100
-				}
-				v.Coverage = cov
-				v.CoverageSet = true
-			}
-		}
-		out = append(out, v)
+		out = append(out, s.buildDestinationSummary(ctx, &row, completeBooks))
 	}
 	return out
+}
+
+// singleDestinationSummary returns the same view-model the destinations
+// page builds for one row. Used by handleDestinationToggle /
+// handleDestinationTest to swap a single card after a mutation without
+// reloading the whole grid. Returns nil if the destination doesn't
+// exist or the lookup fails.
+func (s *Server) singleDestinationSummary(ctx context.Context, id string) *destinationSummaryView {
+	row, err := s.db.GetLibraryDestination(ctx, id)
+	if err != nil || row == nil {
+		return nil
+	}
+	// Coverage % is relative to the count of complete books; we need
+	// that number for the meter to render the same as it does on the
+	// full grid. Cheap LIMIT-1 count.
+	completeStatus := database.BookStatusComplete
+	_, completeBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
+	v := s.buildDestinationSummary(ctx, row, completeBooks)
+	return &v
+}
+
+// buildDestinationSummary is the per-row factory shared by the grid
+// builder and the single-row swap path. Probes LibraryItemCount (with
+// the 30s cache) only for enabled+configured destinations so toggling
+// a disabled row stays cheap.
+func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, completeBooks int) destinationSummaryView {
+	hasCred := row.APIKey != "" || row.PlexToken != ""
+	v := destinationSummaryView{
+		ID:              row.ID,
+		DisplayName:     row.DisplayName,
+		Type:            string(row.Type),
+		TypeLabel:       destinationTypeLabel(row.Type),
+		Enabled:         row.Enabled,
+		Configured:      destinationConfigured(row),
+		HasCredential:   hasCred,
+		URL:             row.URL,
+		PlexSectionID:   row.PlexSectionID,
+		LibraryID:       row.LibraryID,
+		AudiobookPath:   row.AudiobookPath,
+		DestinationPath: row.DestinationPath,
+		Health:          summarizeHealth(row),
+		LastError:       row.LastHealthCheckErr,
+		LastCheckedAt:   row.LastHealthCheckAt,
+		CreatedAt:       row.CreatedAt,
+		UpdatedAt:       row.UpdatedAt,
+	}
+
+	if !v.Enabled || !v.Configured {
+		return v
+	}
+
+	backend, err := s.buildDestinationBackend(row)
+	if err != nil {
+		v.HealthDetail = err.Error()
+		return v
+	}
+
+	count, err := s.getCachedDestinationItemCount(ctx, row.ID, backend)
+	if err != nil {
+		webLog.Debug().Err(err).Str("destination_id", row.ID).Str("destination_name", row.DisplayName).Msg("dashboard: destination item count failed")
+		v.Health = "failed"
+		v.HealthDetail = err.Error()
+		return v
+	}
+	v.ItemCount = count
+	v.ItemCountSet = true
+	if completeBooks > 0 {
+		cov := int(math.Round((float64(count) / float64(completeBooks)) * 100))
+		if cov < 0 {
+			cov = 0
+		}
+		if cov > 100 {
+			cov = 100
+		}
+		v.Coverage = cov
+		v.CoverageSet = true
+	}
+	return v
 }
 
 // buildDestinationBackend delegates to DestinationManager.BuildBackend
@@ -716,6 +918,7 @@ func (s *Server) getDashboardDownloadsData(ctx context.Context) gin.H {
 		"FailedDownloads": failedRecent,
 		"DoneDownloads":   completeDownloads,
 		"DownloadTitles":  s.getDownloadTitles(ctx, rowsForTitles),
+		"DownloadBookIDs": s.getDownloadBookIDs(ctx, rowsForTitles),
 	}
 }
 
@@ -738,6 +941,25 @@ func (s *Server) getDownloadTitles(ctx context.Context, rows []database.Download
 	return titles
 }
 
+// getDownloadBookIDs returns ASIN→book-ID for download queue rows whose
+// matching book row still exists. Used by the dashboard tables so the
+// title/ASIN cells can deep-link to /library/<id>. Rows whose book has
+// been pruned simply get no entry (the template falls back to plain text).
+func (s *Server) getDownloadBookIDs(ctx context.Context, rows []database.DownloadQueue) map[string]int64 {
+	ids := make(map[string]int64)
+	for _, row := range rows {
+		if _, exists := ids[row.ASIN]; exists {
+			continue
+		}
+		book, err := s.db.GetBookByASIN(ctx, row.ASIN)
+		if err != nil || book == nil || book.ID == 0 {
+			continue
+		}
+		ids[row.ASIN] = book.ID
+	}
+	return ids
+}
+
 // handleDashboardSummary renders only the dashboard summary block for HTMX polling.
 func (s *Server) handleDashboardSummary(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -756,14 +978,25 @@ func (s *Server) handleDashboardDownloads(c *gin.Context) {
 func (s *Server) handleLibrary(c *gin.Context) {
 	ctx := c.Request.Context()
 
+	const pageSize = 50
+
+	pageNum := 1
+	if v := c.Query("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			pageNum = n
+		}
+	}
+
 	filter := database.BookFilter{
 		Search:  c.Query("search"),
 		SortBy:  c.DefaultQuery("sort", "purchase_date"),
 		SortDir: c.DefaultQuery("dir", "desc"),
-		Limit:   50,
+		Limit:   pageSize,
+		Offset:  (pageNum - 1) * pageSize,
 	}
 
-	if statusStr := c.Query("status"); statusStr != "" {
+	statusStr := c.Query("status")
+	if statusStr != "" {
 		status := database.BookStatus(statusStr)
 		filter.Status = &status
 	}
@@ -775,12 +1008,34 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		return
 	}
 
+	counts := s.libraryStatusCounts(ctx)
+
+	totalPages := (total + pageSize - 1) / pageSize
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	from := filter.Offset + 1
+	to := filter.Offset + len(books)
+	if total == 0 {
+		from = 0
+		to = 0
+	}
+
 	data := gin.H{
-		"Books":       books,
-		"Total":       total,
-		"Filter":      filter,
-		"Page":        "library",
-		"BookActions": buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
+		"Books":        books,
+		"Total":        total,
+		"Filter":       filter,
+		"Page":         "library",
+		"BookActions":  buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
+		"BookPresence": s.computeBookPresence(ctx, books),
+		"StatusCounts": counts,
+		"ActiveStatus": statusStr,
+		"PageNum":      pageNum,
+		"TotalPages":   totalPages,
+		"PageSize":     pageSize,
+		"PageFrom":     from,
+		"PageTo":       to,
+		"PageNums":     paginationNumbers(pageNum, totalPages),
 	}
 
 	// For HTMX partial requests, render only the table body
@@ -788,7 +1043,85 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		c.HTML(http.StatusOK, "library_table.html", data)
 		return
 	}
-	c.HTML(http.StatusOK, "library.html", data)
+	c.HTML(http.StatusOK, "library.html", s.withSidebar(ctx, data))
+}
+
+// libraryStatusCounts returns the count of books per status bucket used by
+// the filter tabs on the library page. We map fine-grained pipeline statuses
+// (downloading/decrypting/processing) into the "in_progress" bucket and
+// (queued/skipped) into "waiting" to mirror the dashboard mental model.
+//
+// Drives off a single GROUP BY query — previously did 7 LIMIT-1 counts
+// which was 7x what was actually needed.
+func (s *Server) libraryStatusCounts(ctx context.Context) map[string]int {
+	out := map[string]int{
+		"all":         0,
+		"new":         0,
+		"in_progress": 0,
+		"waiting":     0,
+		"complete":    0,
+		"failed":      0,
+		"unavailable": 0,
+	}
+
+	byStatus, err := s.db.CountBooksByStatus(ctx)
+	if err != nil {
+		return out
+	}
+	for st, n := range byStatus {
+		out["all"] += n
+		switch st {
+		case database.BookStatusNew:
+			out["new"] += n
+		case database.BookStatusComplete:
+			out["complete"] += n
+		case database.BookStatusFailed:
+			out["failed"] += n
+		case database.BookStatusQueued:
+			out["waiting"] += n
+		case database.BookStatusDownloading, database.BookStatusDecrypting, database.BookStatusProcessing:
+			out["in_progress"] += n
+		case database.BookStatusUnavailable:
+			out["unavailable"] += n
+		}
+		// Other statuses (skipped) contribute to "all" but not to any
+		// filter tab; that matches the legacy behaviour where skipped
+		// was implicitly counted via the unfiltered total only.
+	}
+	return out
+}
+
+// paginationNumbers returns a compact paginator sequence with ellipsis
+// markers. The marker is the literal "…" string, which the template
+// renders as a non-clickable span.
+func paginationNumbers(current, total int) []string {
+	if total <= 7 {
+		out := make([]string, 0, total)
+		for p := 1; p <= total; p++ {
+			out = append(out, strconv.Itoa(p))
+		}
+		return out
+	}
+	out := []string{"1"}
+	if current > 3 {
+		out = append(out, "…")
+	}
+	start := current - 1
+	if start < 2 {
+		start = 2
+	}
+	end := current + 1
+	if end > total-1 {
+		end = total - 1
+	}
+	for p := start; p <= end; p++ {
+		out = append(out, strconv.Itoa(p))
+	}
+	if current < total-2 {
+		out = append(out, "…")
+	}
+	out = append(out, strconv.Itoa(total))
+	return out
 }
 
 type libraryBookAction struct {
@@ -898,6 +1231,7 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 		"BookFiles":     files,
 		"BookFileCount": len(files),
 		"BookAction":    buildLibraryBookActions([]database.Book{*book}, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false))[book.ID],
+		"BookDestinationStatuses": s.bookDestinationStatuses(ctx, book.ID),
 	}
 
 	if c.Query("view") == "modal" || c.GetHeader("HX-Request") == "true" {
@@ -1050,7 +1384,13 @@ func humanFileSize(sizeBytes int64) string {
 	return fmt.Sprintf("%.1f %s", size, units[unitIdx])
 }
 
-// handleDownloads renders the download queue page.
+// handleDownloads renders the pipeline page (Active / Waiting / Failed
+// / Completed tabs over the worker-pool view).
+//
+// The Completed tab is windowed because completed history grows
+// unbounded on a busy install — the UI is much more useful when scoped
+// to "what just finished". Default window is 24h; supported values are
+// 24h, 7d, 30d, all. Selected via ?completed_window=…
 func (s *Server) handleDownloads(c *gin.Context) {
 	ctx := c.Request.Context()
 	_, _ = s.clearStaleFailedDownloads(ctx)
@@ -1060,29 +1400,109 @@ func (s *Server) handleDownloads(c *gin.Context) {
 	pendingStatus := database.DownloadStatusPending
 	pending, _ := s.db.ListDownloads(ctx, &pendingStatus)
 	completeStatus := database.DownloadStatusComplete
-	complete, _ := s.db.ListDownloads(ctx, &completeStatus)
+	completeAll, _ := s.db.ListDownloads(ctx, &completeStatus)
 	failedStatus := database.DownloadStatusFailed
 	allFailed, _ := s.db.ListDownloads(ctx, &failedStatus)
 	recentErrors := deduplicateFailedByASIN(allFailed)
 	queueState := s.downloads.QueueState()
 
-	rowsForTitles := make([]database.DownloadQueue, 0, len(active)+len(pending)+len(complete)+len(allFailed))
+	window := parseCompletedWindow(c.Query("completed_window"))
+	complete := filterCompletedByWindow(completeAll, window)
+
+	rowsForTitles := make([]database.DownloadQueue, 0, len(active)+len(pending)+len(completeAll)+len(allFailed))
 	rowsForTitles = append(rowsForTitles, active...)
 	rowsForTitles = append(rowsForTitles, pending...)
-	rowsForTitles = append(rowsForTitles, complete...)
+	rowsForTitles = append(rowsForTitles, completeAll...)
 	rowsForTitles = append(rowsForTitles, allFailed...)
 
-	c.HTML(http.StatusOK, "downloads.html", gin.H{
-		"Active":           active,
-		"Pending":          pending,
-		"Complete":         complete,
-		"RecentErrors":     recentErrors,
-		"DownloadTitles":   s.getDownloadTitles(ctx, rowsForTitles),
-		"QueuePaused":      queueState.Paused,
-		"QueuePauseReason": queueState.Reason,
-		"QueuePausedAt":    queueState.PausedAt,
-		"Page":             "pipeline",
-	})
+	// Tab default is "active" — most common landing intent. Tab=completed
+	// shows the windowed slice; the other tabs ignore the window param.
+	tab := strings.ToLower(strings.TrimSpace(c.Query("tab")))
+	switch tab {
+	case "active", "waiting", "failed", "completed":
+	default:
+		tab = "active"
+	}
+
+	c.HTML(http.StatusOK, "downloads.html", s.withSidebar(ctx, gin.H{
+		"Active":              active,
+		"Pending":             pending,
+		"Complete":            complete,
+		"CompleteTotal":       len(completeAll),
+		"RecentErrors":        recentErrors,
+		"DownloadTitles":      s.getDownloadTitles(ctx, rowsForTitles),
+		"QueuePaused":         queueState.Paused,
+		"QueuePauseReason":    queueState.Reason,
+		"QueuePausedAt":       queueState.PausedAt,
+		"Page":                "pipeline",
+		"ActiveTab":           tab,
+		"CompletedWindow":     window,
+		"CompletedWindowOpts": completedWindowOptions(),
+	}))
+}
+
+// completedWindowOption is a single option in the Completed tab's
+// time-window selector.
+type completedWindowOption struct {
+	Value string
+	Label string
+}
+
+func completedWindowOptions() []completedWindowOption {
+	return []completedWindowOption{
+		{Value: "24h", Label: "Last 24 hours"},
+		{Value: "7d", Label: "Last 7 days"},
+		{Value: "30d", Label: "Last 30 days"},
+		{Value: "all", Label: "All time"},
+	}
+}
+
+// parseCompletedWindow normalizes the ?completed_window= value. Anything
+// unrecognized falls back to "24h" so the Completed tab never shows the
+// firehose of all-time history on a casual click-through.
+func parseCompletedWindow(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "7d":
+		return "7d"
+	case "30d":
+		return "30d"
+	case "all":
+		return "all"
+	default:
+		return "24h"
+	}
+}
+
+// filterCompletedByWindow returns the subset of completed download rows
+// whose CompletedAt timestamp falls within the chosen window. "all"
+// returns the input as-is. Rows with a nil CompletedAt fall back to
+// UpdatedAt so legacy rows that never recorded a completion stamp still
+// show up under wider windows.
+func filterCompletedByWindow(rows []database.DownloadQueue, window string) []database.DownloadQueue {
+	if window == "all" {
+		return rows
+	}
+	var cutoff time.Duration
+	switch window {
+	case "7d":
+		cutoff = 7 * 24 * time.Hour
+	case "30d":
+		cutoff = 30 * 24 * time.Hour
+	default:
+		cutoff = 24 * time.Hour
+	}
+	threshold := time.Now().Add(-cutoff)
+	out := make([]database.DownloadQueue, 0, len(rows))
+	for _, r := range rows {
+		ts := r.UpdatedAt
+		if r.CompletedAt != nil {
+			ts = *r.CompletedAt
+		}
+		if ts.After(threshold) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // deduplicateFailedByASIN returns at most one entry per ASIN from a slice of
@@ -1146,8 +1566,9 @@ func (s *Server) clearStaleFailedDownloads(ctx context.Context) (int, error) {
 
 // handleSettings renders the settings page.
 func (s *Server) handleSettings(c *gin.Context) {
-	data := s.settingsPageData(c.Request.Context())
-	c.HTML(http.StatusOK, "settings.html", data)
+	ctx := c.Request.Context()
+	data := s.settingsPageData(ctx)
+	c.HTML(http.StatusOK, "settings.html", s.withSidebar(ctx, data))
 }
 
 // handleTagProfileSelect persists the active tag profile. Strict validation
@@ -1260,6 +1681,263 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 	}
 
 	data["Page"] = "settings"
+	return data
+}
+
+// bookDestinationStatusView is one row in the per-destination sync list
+// rendered on the book detail modal. Sync state is mapped to a small
+// vocabulary the template can render as a badge.
+type bookDestinationStatusView struct {
+	ID          string
+	DisplayName string
+	Type        string
+	TypeLabel   string
+	State       string // "synced" | "syncing" | "pending" | "failed" | "orphaned" | "removed" | "not_configured"
+	Label       string // human label for the state badge
+}
+
+// bookDestinationStatuses joins enabled destinations with the per-book
+// sync table. Destinations that haven't been touched for this book yet
+// surface as "Pending" — gives the user a clear picture of where the
+// book has and hasn't landed.
+func (s *Server) bookDestinationStatuses(ctx context.Context, bookID int64) []bookDestinationStatusView {
+	rows, err := s.db.ListLibraryDestinations(ctx)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	syncs, _ := s.db.GetBookDestinations(ctx, bookID)
+	byDestID := make(map[string]database.BookDestination, len(syncs))
+	for _, s := range syncs {
+		byDestID[s.DestinationID] = s
+	}
+
+	out := make([]bookDestinationStatusView, 0, len(rows))
+	for _, r := range rows {
+		if !r.Enabled {
+			continue
+		}
+		v := bookDestinationStatusView{
+			ID:          r.ID,
+			DisplayName: r.DisplayName,
+			Type:        string(r.Type),
+			TypeLabel:   destinationTypeLabel(r.Type),
+		}
+		if sync, ok := byDestID[r.ID]; ok {
+			switch sync.SyncState {
+			case database.BookDestSyncSynced:
+				v.State, v.Label = "synced", "Synced"
+			case database.BookDestSyncSyncing:
+				v.State, v.Label = "syncing", "Syncing"
+			case database.BookDestSyncFailed:
+				v.State, v.Label = "failed", "Failed"
+			case database.BookDestSyncOrphaned:
+				v.State, v.Label = "orphaned", "Orphaned"
+			case database.BookDestSyncRemovedFromDestination:
+				v.State, v.Label = "removed", "Removed"
+			default:
+				v.State, v.Label = "pending", "Pending"
+			}
+		} else {
+			v.State, v.Label = "pending", "Pending"
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// bookPresenceChip is one cell in the Library page's Presence column.
+// One chip per "place this book could live": local disk + each enabled
+// destination. Lit chips indicate the book is present; dimmed chips
+// indicate the book hasn't landed there yet. Failed sync gets a red
+// halo, in-flight sync gets a cyan halo.
+type bookPresenceChip struct {
+	Kind        string // "disk" | "destination"
+	Type        string // "plex" | "emby" | "jellyfin" | "abs" | "" for disk
+	LogoURL     string // empty for disk (template renders an HDD svg)
+	DisplayName string // tooltip
+	State       string // "present" | "synced" | "pending" | "syncing" | "failed"
+	Lit         bool
+}
+
+// computeBookPresence projects the per-book disk + destination state
+// into a slice of chips ready for the template. Returns a map keyed by
+// book ID. Issues one GetBookDestinations per book — fine at page sizes
+// in the tens; if libraries get larger we can add a bulk DB call later.
+func (s *Server) computeBookPresence(ctx context.Context, books []database.Book) map[int64][]bookPresenceChip {
+	out := make(map[int64][]bookPresenceChip, len(books))
+	if len(books) == 0 {
+		return out
+	}
+	dests, err := s.db.ListLibraryDestinations(ctx)
+	if err != nil {
+		dests = nil
+	}
+	// Pre-filter to enabled destinations; build a stable ordering so the
+	// chips don't shuffle between renders.
+	enabled := make([]database.LibraryDestination, 0, len(dests))
+	for _, d := range dests {
+		if d.Enabled {
+			enabled = append(enabled, d)
+		}
+	}
+
+	for i := range books {
+		b := &books[i]
+		chips := make([]bookPresenceChip, 0, 1+len(enabled))
+		hasDisk := strings.TrimSpace(b.FilePath) != ""
+		diskState := "pending"
+		if hasDisk {
+			diskState = "present"
+		}
+		chips = append(chips, bookPresenceChip{
+			Kind:        "disk",
+			DisplayName: "Local audiobooks directory",
+			State:       diskState,
+			Lit:         hasDisk,
+		})
+
+		if len(enabled) > 0 {
+			syncs, _ := s.db.GetBookDestinations(ctx, b.ID)
+			byDestID := make(map[string]database.BookDestination, len(syncs))
+			for _, ss := range syncs {
+				byDestID[ss.DestinationID] = ss
+			}
+			for _, d := range enabled {
+				chip := bookPresenceChip{
+					Kind:        "destination",
+					Type:        string(d.Type),
+					LogoURL:     destinationLogoPath(string(d.Type)),
+					DisplayName: d.DisplayName,
+					State:       "pending",
+				}
+				if sync, ok := byDestID[d.ID]; ok {
+					switch sync.SyncState {
+					case database.BookDestSyncSynced:
+						chip.State, chip.Lit = "synced", true
+					case database.BookDestSyncSyncing:
+						chip.State = "syncing"
+					case database.BookDestSyncFailed:
+						chip.State = "failed"
+					case database.BookDestSyncOrphaned:
+						chip.State = "orphaned"
+					case database.BookDestSyncRemovedFromDestination:
+						chip.State = "removed"
+					}
+				}
+				chips = append(chips, chip)
+			}
+		}
+		out[b.ID] = chips
+	}
+	return out
+}
+
+// destinationLogoPath mirrors the destLogo template func so the Go-side
+// presence builder can reuse the same URL mapping without going through
+// the template layer.
+func destinationLogoPath(t string) string {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "plex":
+		return "/static/plex.png"
+	case "emby":
+		return "/static/emby.png"
+	case "jellyfin":
+		return "/static/jellyfin.png"
+	case "abs", "audiobookshelf":
+		return "/static/audiobookshelf.png"
+	}
+	return ""
+}
+
+// sidebarData is the per-render snapshot used by the sidebar in base.html:
+// the badge counts, version, and uptime string. Computed cheaply per full-
+// page render (a handful of LIMIT 1 / len() queries) — for HTMX fragment
+// responses the value is omitted since base.html isn't part of the swap.
+type sidebarData struct {
+	NewBooks       int
+	ActiveDL       int
+	FailedDestAlert int
+	Version        string
+	Uptime         string
+	Healthy        bool // true when no failed destinations and Audible auth is good
+}
+
+// computeSidebar gathers the fields the sidebar template renders. Cheap
+// enough to call per full-page request (a few LIMIT-1 counts), but the
+// numbers are stale across the lifetime of the page; the dashboard and
+// pipeline pages refresh them on their HTMX polls anyway.
+func (s *Server) computeSidebar(ctx context.Context) sidebarData {
+	out := sidebarData{
+		Version: serverVersion(),
+		Uptime:  formatUptime(time.Since(s.startedAt)),
+	}
+
+	newStatus := database.BookStatusNew
+	_, newCount, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &newStatus, Limit: 1})
+	out.NewBooks = newCount
+
+	activeStatus := database.DownloadStatusActive
+	activeDL, _ := s.db.ListDownloads(ctx, &activeStatus)
+	out.ActiveDL = len(activeDL)
+
+	// Failed-destination alert count drives the danger-styled badge on the
+	// Destinations nav link. We look at the saved health column rather
+	// than re-probing remotes — the dashboard's destination summaries do
+	// the live probing on their own poll.
+	if rows, err := s.db.ListLibraryDestinations(ctx); err == nil {
+		for _, r := range rows {
+			if !r.Enabled {
+				continue
+			}
+			if r.LastHealthCheckOK != nil && !*r.LastHealthCheckOK {
+				out.FailedDestAlert++
+			}
+		}
+	}
+
+	out.Healthy = out.FailedDestAlert == 0 && s.audible.IsAuthenticated()
+	return out
+}
+
+// serverVersion returns a printable version string. Pulled from the Go
+// build info — in a release build this is the module version tag; in
+// "go run" / dev builds it's "(devel)". Trimmed to something compact.
+func serverVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		v := info.Main.Version
+		if v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "dev"
+}
+
+// formatUptime returns a compact "6d 14h" / "3h 12m" / "47s" string.
+func formatUptime(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		h := int(d / time.Hour)
+		m := int(d/time.Minute) - h*60
+		return fmt.Sprintf("%dh %dm", h, m)
+	}
+	days := int(d / (24 * time.Hour))
+	h := int(d/time.Hour) - days*24
+	return fmt.Sprintf("%dd %dh", days, h)
+}
+
+// withSidebar merges the sidebar snapshot into the page data map. Use on
+// every full-page render so base.html can render the nav badges + footer.
+// Safe to call with a nil/empty map.
+func (s *Server) withSidebar(ctx context.Context, data gin.H) gin.H {
+	if data == nil {
+		data = gin.H{}
+	}
+	data["Sidebar"] = s.computeSidebar(ctx)
 	return data
 }
 
@@ -1443,6 +2121,17 @@ func (s *Server) triggerSync(c *gin.Context, mode library.SyncMode) {
 }
 
 // syncStatusData converts a SyncProgress into template data.
+//
+// When no sync is running, we also surface the last completed sync's
+// summary (when it ran, how many books were found / added, status,
+// error) so the panel doesn't look empty between runs. The data
+// source has two layers:
+//   - in-memory: SyncService keeps the last completed progress in
+//     s.progress between runs, so as long as the process hasn't
+//     restarted we can read it for free.
+//   - DB fallback: on cold start the in-memory progress is zero-valued,
+//     so we hit sync_history.GetLastSync to recover the most recent
+//     row. Cheap (single indexed lookup) and only runs when needed.
 func (s *Server) syncStatusData(progress library.SyncProgress) gin.H {
 	phases := progress.Phases
 	if len(phases) == 0 {
@@ -1464,6 +2153,80 @@ func (s *Server) syncStatusData(progress library.SyncProgress) gin.H {
 		"Phases":       phases,
 		"CurrentPhase": string(progress.CurrentPhase),
 	}
+
+	// "Idle" panel: surface last-run summary so the user sees what
+	// happened on the previous sync. We treat the panel as idle when
+	// the service isn't currently running.
+	if !progress.Running {
+		var (
+			lastCompletedAt time.Time
+			lastBooksFound  int
+			lastBooksAdded  int
+			lastStatus      string
+			lastError       string
+		)
+
+		if !progress.CompletedAt.IsZero() {
+			// In-memory state from the most recent run in this process.
+			lastCompletedAt = progress.CompletedAt
+			lastBooksFound = progress.BooksFound
+			lastBooksAdded = progress.BooksAdded
+			lastStatus = progress.Status
+			lastError = progress.Error
+		} else if row, err := s.db.GetLastSync(context.Background()); err == nil && row != nil {
+			// Cold-start fallback — read the most recent sync_history row.
+			if row.CompletedAt != nil {
+				lastCompletedAt = *row.CompletedAt
+			} else {
+				lastCompletedAt = row.StartedAt
+			}
+			lastBooksFound = row.BooksFound
+			lastBooksAdded = row.BooksAdded
+			lastStatus = row.Status
+			lastError = row.Error
+		}
+
+		data["LastCompletedAt"] = lastCompletedAt
+		data["LastBooksFound"] = lastBooksFound
+		data["LastBooksAdded"] = lastBooksAdded
+		data["LastStatus"] = lastStatus
+		data["LastError"] = lastError
+		data["HasLastSync"] = !lastCompletedAt.IsZero()
+
+		// Next auto-run: read the same cron string + enabled flag the
+		// scheduler is configured from, parse it here, and project the
+		// next fire time. Done in the web layer (rather than asking the
+		// scheduler) so the panel reflects the persisted intent rather
+		// than the in-process state — if the scheduler crashed and the
+		// app is showing the panel, we still tell the user when their
+		// library *should* refresh.
+		dbCtx := context.Background()
+		schedule, _ := s.db.GetSetting(dbCtx, "sync_schedule")
+		schedule = strings.TrimSpace(schedule)
+		enabledRaw, _ := s.db.GetSetting(dbCtx, "sync_enabled")
+		// sync_enabled defaults to true when unset, matching the rest
+		// of the app (s.settingBool's default is true at the readers).
+		enabled := true
+		if enabledRaw != "" {
+			enabled = enabledRaw == "true"
+		}
+
+		data["SyncEnabled"] = enabled
+		data["SyncSchedule"] = schedule
+
+		if enabled && schedule != "" {
+			if parsed, err := cron.ParseStandard(schedule); err == nil {
+				next := parsed.Next(time.Now())
+				if !next.IsZero() {
+					data["NextSyncAt"] = next
+					data["HasNextSync"] = true
+				}
+			} else {
+				data["ScheduleInvalid"] = true
+			}
+		}
+	}
+
 	return data
 }
 
@@ -2141,12 +2904,19 @@ func (s *Server) handleFactoryReset(c *gin.Context) {
 	s.downloads.Start(context.Background())
 	webLog.Info().Msg("factory reset complete — database wiped, downloads cleared, credentials removed, pipeline restarted")
 
+	// db.Reset() truncated the persisted onboarded flag along with
+	// every other setting. The in-memory mirror needs to follow so the
+	// firstRunGate sees first-run state on the next request.
+	s.onboarded.Store(false)
+
+	// firstRunGate will already redirect to /setup on the next page hit.
+	// Send the user there explicitly so the flow is obvious.
 	if c.GetHeader("HX-Request") == "true" {
-		c.Header("HX-Redirect", "/settings")
-		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": "Factory reset complete. Redirecting…"})
+		c.Header("HX-Redirect", "/setup")
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": "Factory reset complete. Redirecting to setup…"})
 		return
 	}
-	c.Redirect(http.StatusSeeOther, "/settings")
+	c.Redirect(http.StatusSeeOther, "/setup")
 }
 
 // purgeDirectory removes all files and subdirectories inside dir, but keeps dir itself.
@@ -2217,13 +2987,14 @@ func (s *Server) authBaseData(ctx context.Context) gin.H {
 }
 
 func (s *Server) renderAuthPage(c *gin.Context, status int, extra gin.H) {
-	data := s.settingsPageData(c.Request.Context())
+	ctx := c.Request.Context()
+	data := s.settingsPageData(ctx)
 	data["FocusSection"] = "auth"
 	for k, v := range extra {
 		data[k] = v
 	}
 	data["Page"] = "settings"
-	c.HTML(status, "settings.html", data)
+	c.HTML(status, "settings.html", s.withSidebar(ctx, data))
 }
 
 // handleAudibleMarketplaceSelect updates the preferred Audible marketplace.
@@ -2343,6 +3114,15 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 	}
 
 	webLog.Info().Msg("authentication successful")
+
+	// If the user is still in onboarding, bounce back into the wizard at
+	// the Storage step rather than dropping them on Settings — the wizard
+	// is what kicked them out to Amazon in the first place.
+	if s.isFirstRun(ctx) {
+		c.Redirect(http.StatusSeeOther, "/setup?step=2")
+		return
+	}
+
 	s.renderAuthPage(c, http.StatusOK, gin.H{
 		"Authenticated": true,
 		"Success":       "Successfully authenticated with Audible!",
@@ -2398,6 +3178,82 @@ func (s *Server) handleRedownload(c *gin.Context) {
 	})
 }
 
+// handleResyncMetadata re-fetches book metadata from audnexus and updates the
+// DB row in place. Cover URL, description, narrator, publisher, series, etc.
+// get refreshed without touching the local file. Status is unchanged.
+func (s *Server) handleResyncMetadata(c *gin.Context) {
+	ctx := c.Request.Context()
+	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid book id"})
+		return
+	}
+
+	book, err := s.db.GetBook(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "book not found: " + err.Error()})
+		return
+	}
+
+	enriched, err := s.audnexus.EnrichMetadata(ctx, book)
+	if err != nil {
+		webLog.Warn().Err(err).Str("asin", book.ASIN).Msg("resync metadata: audnexus enrichment failed")
+		if c.GetHeader("HX-Request") == "true" {
+			c.HTML(http.StatusBadGateway, "settings_saved.html", gin.H{
+				"Message": "Could not refresh metadata: " + err.Error(),
+			})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	if v := enriched.Title(); v != "" {
+		book.Title = v
+	}
+	if v := enriched.Author(); v != "" {
+		book.Author = v
+	}
+	if v := enriched.Narrator(); v != "" {
+		book.Narrator = v
+	}
+	if v := enriched.Publisher(); v != "" {
+		book.Publisher = v
+	}
+	if v := enriched.Description(); v != "" {
+		book.Description = v
+	}
+	if v := enriched.CoverURL(); v != "" {
+		book.CoverURL = v
+	}
+	if v := enriched.Series(); v != "" {
+		book.Series = v
+	}
+	if v := enriched.SeriesPosition(); v != "" {
+		book.SeriesPosition = v
+	}
+	if v := enriched.Language(); v != "" {
+		book.Language = v
+	}
+
+	if err := s.db.UpsertBook(ctx, book); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save book: " + err.Error()})
+		return
+	}
+	webLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Msg("book metadata resynced")
+
+	if c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{
+			"Message": fmt.Sprintf("Metadata refreshed for '%s'", book.Title),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": fmt.Sprintf("Metadata refreshed for '%s'", book.Title),
+	})
+}
+
 // handleDeleteBookMedia deletes a book's local media and resets it to "new"
 // without deleting the book metadata row.
 func (s *Server) handleDeleteBookMedia(c *gin.Context) {
@@ -2441,9 +3297,11 @@ func (s *Server) handleDeleteBookMedia(c *gin.Context) {
 		msg += "; redownload queued immediately"
 	}
 	if c.Query("view") == "row" {
+		presence := s.computeBookPresence(ctx, []database.Book{*book})
 		c.HTML(http.StatusOK, "library_row.html", gin.H{
 			"Book":       book,
 			"BookAction": buildLibraryBookActions([]database.Book{*book}, autoQueueNew)[book.ID],
+			"Presence":   presence[book.ID],
 		})
 		return
 	}

@@ -1,423 +1,478 @@
 {{define "content"}}
-<h1>Settings</h1>
-
-<div class="settings-container">
-    <!-- Authentication & Integrations -->
-    <div class="settings-section" id="auth-settings">
-        <h2>Authentication & Integrations</h2>
-
-        {{if .Error}}
-        <div class="info-box" style="border-color: var(--error); margin-bottom: 1.5rem;">
-            <strong>Error:</strong> {{.Error}}
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1>Settings</h1>
+            <div class="sub">Server configuration. Changes save inline; some apply only after restart.</div>
         </div>
-        {{end}}
+    </div>
 
-        {{if .Success}}
-        <div class="info-box" style="border-color: var(--success); margin-bottom: 1.5rem;">
-            <strong>{{.Success}}</strong>
-        </div>
-        {{end}}
+    <div class="settings-layout">
+        <nav class="settings-nav" aria-label="Settings sections">
+            <div class="settings-nav-label">On this page</div>
+            <a href="#section-audible" data-section="section-audible" class="settings-nav-link active"><span class="settings-nav-dot"></span>Audible Account</a>
+            <a href="#section-library" data-section="section-library" class="settings-nav-link"><span class="settings-nav-dot"></span>Library</a>
+            <a href="#section-sync" data-section="section-sync" class="settings-nav-link"><span class="settings-nav-dot"></span>Sync</a>
+            <a href="#section-performance" data-section="section-performance" class="settings-nav-link"><span class="settings-nav-dot"></span>Performance</a>
+            <a href="#section-system" data-section="section-system" class="settings-nav-link"><span class="settings-nav-dot"></span>System Information</a>
+            {{if .Devices}}<a href="#section-devices" data-section="section-devices" class="settings-nav-link"><span class="settings-nav-dot"></span>Registered Devices</a>{{end}}
+            <a href="#section-danger" data-section="section-danger" class="settings-nav-link"><span class="settings-nav-dot"></span>Danger Zone</a>
+        </nav>
 
-        <div class="auth-grid">
-            <section class="auth-panel">
-                <h3>Amazon / Audible</h3>
+        <div class="settings-content settings-container">
+    {{if .Error}}
+    <div class="alert err" role="alert" style="margin-bottom:1rem"><span class="ico">!</span><div>{{.Error}}</div></div>
+    {{end}}
+    {{if .Success}}
+    <div class="alert ok" role="status" style="margin-bottom:1rem"><span class="ico">✓</span><div>{{.Success}}</div></div>
+    {{end}}
 
-                <form method="POST" action="/auth/marketplace" class="settings-form" style="margin-bottom: 1rem;">
-                    <div class="form-group" style="margin-bottom: 0.75rem;">
-                        <label for="marketplace">Audible Region / Marketplace</label>
-                        <select id="marketplace" name="marketplace" class="form-control">
-                            {{range .Marketplaces}}
-                            <option value="{{.CountryCode}}"{{if eq .CountryCode $.CurrentMarketplace}} selected{{end}}>{{.Name}} ({{.CountryCode}})</option>
-                            {{end}}
-                        </select>
-                        <small class="muted">This can be changed anytime. Use this if your Audible account region changed.</small>
-                    </div>
-                    <button type="submit" class="btn btn-secondary">Save Audible Region</button>
-                </form>
+    {{/* ── Audible Account ──────────────────────────────────────────
+         Amazon/Audible region + sign-in flow. Tag Profile moved into
+         the Library card since it controls metadata atoms written into
+         downloaded files. */}}
+    <section class="settings-section" id="section-audible" data-section="section-audible">
+        <div class="card">
+            <div class="card-head"><h3>Audible Account</h3></div>
 
-                {{if .Authenticated}}
-                <div class="info-box" style="border-color: var(--success); margin-bottom: 1.5rem;">
-                    <strong>&#10003; Authenticated</strong> &mdash; You are connected to Audible.
+            <form method="POST" action="/auth/marketplace">
+                <div class="form-row">
+                    <label for="marketplace">Audible region</label>
+                    <select id="marketplace" name="marketplace" class="select">
+                        {{range .Marketplaces}}
+                        <option value="{{.CountryCode}}"{{if eq .CountryCode $.CurrentMarketplace}} selected{{end}}>{{.Name}} ({{.CountryCode}})</option>
+                        {{end}}
+                    </select>
+                    <div class="hint">Change anytime if your Audible account region moves.</div>
                 </div>
-                {{else if .AuthURL}}
-                <div class="auth-flow">
-                    <ol class="auth-steps">
+                <button type="submit" class="btn btn-secondary">Save region</button>
+            </form>
+
+            <div style="margin-top:1rem">
+            {{if .Authenticated}}
+            <div class="alert ok" role="status">
+                <span class="ico">✓</span>
+                <div><strong>Authenticated</strong> — connected to Audible.</div>
+            </div>
+            {{else if .AuthURL}}
+            <div class="alert" role="status" style="margin-bottom:1rem">
+                <div>
+                    <strong>Sign in with Amazon</strong>
+                    <ol style="margin:.5rem 0 .25rem 1.1rem;font-size:.85rem;line-height:1.6">
                         <li>Open Amazon login in a new tab.</li>
                         <li>Sign in and finish any prompts.</li>
                         <li>Copy the <strong>entire</strong> URL from that tab.</li>
                         <li>Paste it below and submit.</li>
                     </ol>
-
-                    <p style="margin-bottom: 1rem;">
-                        <a href="{{.AuthURL}}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">Open Amazon Login</a>
-                    </p>
-
-                    <div class="info-box" style="margin-bottom: 1.5rem;">
-                        <strong>Step 2:</strong> After signing in you'll land on a page that says <em>"Looking for Something?"</em> or shows a blank page.
-                        That's normal. <strong>Copy the entire URL</strong> from that tab's address bar and paste it below.
-                    </div>
-
-                    <details class="auth-help">
-                        <summary>Show example of what to copy</summary>
-                        <img src="/static/amazon-redirect-help.svg" alt="Example showing the Amazon redirect URL to copy" class="auth-help-image">
-                    </details>
-
-                    <form method="POST" action="/auth/callback" class="settings-form">
-                        <input type="hidden" name="code_verifier" value="{{.CodeVerifier}}">
-                        <input type="hidden" name="device_serial" value="{{.DeviceSerial}}">
-                        <div class="form-group">
-                            <label for="redirect_url">Redirect URL</label>
-                            <input type="text" id="redirect_url" name="redirect_url"
-                                placeholder="https://www.amazon.com/ap/maplanding?openid.oa2.authorization_code=..."
-                                autofocus required>
-                            <small id="redirect_url_help">Paste the full URL including <code>openid.oa2.authorization_code=...</code></small>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Complete Authentication</button>
-                    </form>
                 </div>
-                {{else}}
-                <div class="auth-flow">
-                    <p>You need to authenticate with your Amazon/Audible account to sync and download your library.</p>
-                    <p>This flow generates a login URL. After signing in, paste the redirect URL back here to complete authentication.</p>
-                    <form method="POST" action="/auth/start">
-                        <input type="hidden" name="marketplace" value="{{.CurrentMarketplace}}">
-                        <button type="submit" class="btn btn-primary">Generate Amazon Login Link</button>
-                    </form>
+            </div>
+
+            <p style="margin-bottom:1rem">
+                <a href="{{.AuthURL}}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">Open Amazon login →</a>
+            </p>
+
+            <div class="alert" role="status" style="margin-bottom:1rem;font-size:.85rem">
+                <div>
+                    <strong>Step 2:</strong> After signing in you'll land on a page that says <em>"Looking for Something?"</em> or shows a blank page.
+                    That's normal. <strong>Copy the entire URL</strong> from that tab's address bar and paste it below.
                 </div>
-                {{end}}
-            </section>
-
-            <section class="auth-panel">
-                <h3>Tag Profile</h3>
-                <form method="POST" action="/settings/tag-profile" class="settings-form">
-                    <div class="form-group">
-                        <label for="tag_profile">Embedded metadata profile</label>
-                        <select id="tag_profile" name="tag_profile" aria-describedby="tag_profile_help">
-                            {{range .TagProfiles}}
-                            <option value="{{.Value}}"{{if eq .Value $.TagProfile}} selected{{end}}>{{.Label}}</option>
-                            {{end}}
-                        </select>
-                        <small id="tag_profile_help" class="muted">Controls which metadata atoms get written into each m4b on download. <strong>Basic</strong> matches Audplexus's historical behavior. <strong>Audiobook-rich</strong> adds <code>series</code>, <code>series-part</code>, and <code>asin</code> freeform atoms — read by Audiobookshelf for series auto-grouping. Applies to subsequent downloads only; already-organized books are unchanged.</small>
-                    </div>
-                    <button type="submit" class="btn btn-primary">Save Tag Profile</button>
-                </form>
-            </section>
-
-
-            <section class="auth-panel" aria-labelledby="library-destinations-heading" id="library-destinations" style="grid-column: 1 / -1;">
-                <h3 id="library-destinations-heading">Library Destinations</h3>
-                <p class="muted" style="margin-top:.25rem;margin-bottom:.75rem">Where Audplexus pushes scans, item-matching, and series-collection work after each download. Multiple destinations of the same type are allowed (e.g. household + parents' Plex).</p>
-
-                {{if .Destinations}}
-                <ul role="list" class="destinations-list" style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.75rem">
-                    {{range .Destinations}}
-                    <li class="destination-card" aria-labelledby="dest-{{.ID}}-name" style="padding:.75rem;border:1px solid var(--border, #2a2f3a);border-radius:6px;">
-                        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem">
-                            <div>
-                                <h4 id="dest-{{.ID}}-name" style="margin:0 0 .25rem 0;font-size:1rem">{{.DisplayName}}</h4>
-                                <p style="margin:0;font-size:.85rem">
-                                    <span class="badge badge-type">{{.TypeLabel}}</span>
-                                    <span aria-hidden="true" class="muted">&middot;</span>
-                                    <span class="visually-hidden">Status: </span>
-                                    {{if eq .Health "healthy"}}<span class="badge badge-success">Healthy</span>
-                                    {{else if eq .Health "failed"}}<span class="badge badge-error">Failed</span>
-                                    {{else if eq .Health "never"}}<span class="badge badge-inactive">Never checked</span>
-                                    {{else}}<span class="badge badge-warning">Not configured</span>{{end}}
-                                    <span aria-hidden="true" class="muted">&middot;</span>
-                                    <span class="muted">Enabled: {{if .Enabled}}yes{{else}}no{{end}}</span>
-                                    {{if .URL}}<span aria-hidden="true" class="muted">&middot;</span> <span class="muted">{{.URL}}</span>{{end}}
-                                </p>
-                                {{if and (eq .Health "failed") .LastError}}
-                                <p style="margin:.25rem 0 0 0;font-size:.85rem"><small id="dest-{{.ID}}-err" class="muted">{{.LastError}}</small></p>
-                                {{end}}
-                            </div>
-                            <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-                                <a href="/destinations/{{.ID}}/edit" class="btn btn-outline btn-sm"
-                                   {{if and (eq .Health "failed") .LastError}}aria-describedby="dest-{{.ID}}-err"{{end}}>
-                                    Edit<span class="visually-hidden"> {{.DisplayName}}</span>
-                                </a>
-                                <form method="POST" action="/destinations/{{.ID}}/toggle" style="margin:0">
-                                    <button type="submit" class="btn btn-outline btn-sm">
-                                        {{if .Enabled}}Disable{{else}}Enable{{end}}<span class="visually-hidden"> {{.DisplayName}}</span>
-                                    </button>
-                                </form>
-                                <form method="POST" action="/destinations/{{.ID}}/delete" style="margin:0">
-                                    <button type="submit" class="btn btn-danger btn-sm">
-                                        Delete<span class="visually-hidden"> {{.DisplayName}}</span>
-                                    </button>
-                                </form>
-                            </div>
-                        </div>
-                    </li>
-                    {{end}}
-                </ul>
-                {{else}}
-                <p class="muted">No destinations configured yet. Add one to start fanning out scans, or set <code>MEDIA_SERVER</code> + per-type env vars and restart for first-boot synthesis.</p>
-                {{end}}
-
-                <p style="margin:1rem 0 0 0">
-                    <a href="/destinations/new" class="btn btn-primary">Add destination</a>
-                </p>
-            </section>
-        </div>
-    </div>
-
-    <!-- System Information -->
-    <div class="settings-section">
-        <h2>System Information</h2>
-
-        <h3 class="path-group-title">Audiobooks</h3>
-        <div class="info-grid">
-            <div class="info-item">
-                <label>Container Path</label>
-                <div class="info-value">{{.AudiobooksPath}}</div>
             </div>
-            <div class="info-item">
-                <label>Host Filesystem Path</label>
-                <div class="info-value">{{if .NativeAudiobooksPath}}{{.NativeAudiobooksPath}}{{else}}<span class="muted">Not configured</span>{{end}}</div>
+
+            <details class="auth-help" style="margin-bottom:1rem">
+                <summary style="cursor:pointer;font-size:.85rem;color:#78b7ff">Show example of what to copy</summary>
+                <img src="/static/amazon-redirect-help.svg" alt="Example showing the Amazon redirect URL to copy" class="auth-help-image" style="max-width:100%;margin-top:.5rem;border-radius:6px">
+            </details>
+
+            <form method="POST" action="/auth/callback">
+                <input type="hidden" name="code_verifier" value="{{.CodeVerifier}}">
+                <input type="hidden" name="device_serial" value="{{.DeviceSerial}}">
+                <div class="form-row">
+                    <label for="redirect_url">Redirect URL</label>
+                    <input class="input" type="text" id="redirect_url" name="redirect_url"
+                           placeholder="https://www.amazon.com/ap/maplanding?openid.oa2.authorization_code=..."
+                           autofocus required>
+                    <div class="hint" id="redirect_url_help">Paste the full URL including <code>openid.oa2.authorization_code=...</code></div>
+                </div>
+                <button type="submit" class="btn btn-primary">Complete authentication</button>
+            </form>
+            {{else}}
+            <p class="muted" style="font-size:.85rem;margin-bottom:.5rem">
+                You need to authenticate with Amazon/Audible to sync and download your library.
+                This flow generates a login URL; after signing in, paste the redirect URL back here.
+            </p>
+            <form method="POST" action="/auth/start">
+                <input type="hidden" name="marketplace" value="{{.CurrentMarketplace}}">
+                <button type="submit" class="btn btn-primary">Generate Amazon login link</button>
+            </form>
+            {{end}}
             </div>
         </div>
 
-        <h3 class="path-group-title">Other Paths</h3>
-        <div class="info-grid">
-            <div class="info-item">
-                <label>Downloads Path</label>
-                <div class="info-value">{{.DownloadsPath}}</div>
-            </div>
-            <div class="info-item">
-                <label>Config Path</label>
-                <div class="info-value">{{.ConfigPath}}</div>
-            </div>
-        </div>
-    </div>
+    </section>
 
-    <!-- Configuration Settings -->
-    <div class="settings-section">
-        <h2>Configuration</h2>
-        <form hx-post="/api/settings" hx-target="#save-status" hx-swap="innerHTML" class="settings-form settings-form-wide">
+    {{/* The Library / Sync / Performance cards share a single form so a
+         single Save click persists everything. The handler uses _sent
+         sentinels to decide which fields to update — fields without _sent
+         are left untouched. */}}
+    <form hx-post="/api/settings" hx-target="#save-status" hx-swap="innerHTML" id="settings-main-form">
+
+    {{/* ── Library ──────────────────────────────────────────────────
+         File output: format, naming templates, embed/chapter/plexmatch
+         toggles, tag profile (metadata atoms). */}}
+    <section class="settings-section" id="section-library" data-section="section-library">
+        <div class="card">
+            <div class="card-head"><h3>Library</h3></div>
             <div class="settings-form-grid">
-            <div class="form-group">
-                <label for="sync_schedule">Sync Schedule (cron)</label>
-                <input type="text" id="sync_schedule" name="sync_schedule" value="{{.SyncSchedule}}" placeholder="0 */6 * * *">
-                <input type="hidden" name="sync_schedule_sent" value="1">
-                <small>Standard cron expression. Leave empty to disable. Example: <code>0 */6 * * *</code> = every 6 hours</small>
-            </div>
+                <div class="form-row">
+                    <label for="output_format">Output format</label>
+                    <select class="select" id="output_format" name="output_format">
+                        <option value="m4b" {{if eq .OutputFormat "m4b"}}selected{{end}}>M4B (single file)</option>
+                        <option value="mp3" {{if eq .OutputFormat "mp3"}}selected{{end}}>MP3 (chapter split)</option>
+                    </select>
+                    <div class="hint">Choose how to organize your audiobook files.</div>
+                </div>
 
-            <div class="form-group">
-                <label for="sync_enabled">Enable Scheduled Sync</label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="sync_enabled" name="sync_enabled" value="true" {{if .SyncEnabled}}checked{{end}}>
-                    <span class="toggle-slider"></span>
+
+                <div class="form-row" style="grid-column:1 / -1">
+                    <label for="author_dir_template">Author directory template</label>
+                    <input class="input" type="text" id="author_dir_template" name="author_dir_template" value="{{.AuthorDirTemplate}}" placeholder="{author}">
+                    <div class="hint">Tokens: <code>{author}</code>, <code>{author_asin}</code>, <code>{title}</code>, <code>{subtitle}</code>, <code>{series}</code>, <code>{series_position}</code>, <code>{asin}</code>, <code>{region}</code>, <code>{narrator}</code>, <code>{publisher}</code>, <code>{language}</code>, <code>{duration}</code>, <code>{release_date}</code>, <code>{purchase_date}</code>, <code>{drm_type}</code>.</div>
+                </div>
+
+                <div class="form-row" style="grid-column:1 / -1">
+                    <label for="book_dir_template">Book directory template</label>
+                    <input class="input" type="text" id="book_dir_template" name="book_dir_template" value="{{.BookDirTemplate}}" placeholder="{title}{ - series}{ [region]}">
+                    <div class="hint">Use <code>/</code> for nested folders. Conditional segments work Sonarr-style: <code>{ - subtitle}</code>, <code>{ [region]}</code>, <code>{ (narrator)}</code>.</div>
+                </div>
+
+                <div class="form-row" style="grid-column:1 / -1">
+                    <label for="file_name_template">File name template</label>
+                    <input class="input" type="text" id="file_name_template" name="file_name_template" value="{{.FileNameTemplate}}" placeholder="{title}{ - subtitle}{ - series} {series_position} {asin}{ [region]}">
+                    <div class="hint">Extension is added automatically. Keep tokens data-only and place punctuation/spaces inside conditional blocks.</div>
+                </div>
+
+                <label class="form-row inline">
+                    <span class="row-label">
+                        Embed cover art
+                        <div class="hint">Download and embed cover art into audiobook files.</div>
+                    </span>
+                    <span class="toggle">
+                        <input type="checkbox" id="embed_cover" name="embed_cover" value="true" {{if .EmbedCover}}checked{{end}}>
+                        <span class="toggle-slider"></span>
+                    </span>
+                    <input type="hidden" name="embed_cover_sent" value="1">
                 </label>
-                <input type="hidden" name="sync_enabled_sent" value="1">
-                <small>Controls whether cron-based sync runs automatically.</small>
-            </div>
 
-            <div class="form-group">
-                <label for="sync_mode">Scheduled Sync Mode</label>
-                <select id="sync_mode" name="sync_mode">
-                    <option value="full" {{if eq .SyncMode "full"}}selected{{end}}>Full (Audible + filesystem + media server)</option>
-                    <option value="quick" {{if eq .SyncMode "quick"}}selected{{end}}>Quick (Audible-focused)</option>
-                </select>
-                <small>Mode used by scheduled sync runs.</small>
-            </div>
-
-            <div class="form-group">
-                <label for="sync_auto_queue_new">Auto-add New Books To Queue</label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="sync_auto_queue_new" name="sync_auto_queue_new" value="true" {{if .SyncAutoQueueNew}}checked{{end}}>
-                    <span class="toggle-slider"></span>
+                <label class="form-row inline">
+                    <span class="row-label">
+                        Generate chapter files
+                        <div class="hint">Create <code>.chapters.txt</code> files alongside audiobooks (read by Plex, Emby, and most audiobook players).</div>
+                    </span>
+                    <span class="toggle">
+                        <input type="checkbox" id="chapter_file" name="chapter_file" value="true" {{if .ChapterFile}}checked{{end}}>
+                        <span class="toggle-slider"></span>
+                    </span>
+                    <input type="hidden" name="chapter_file_sent" value="1">
                 </label>
-                <input type="hidden" name="sync_auto_queue_new_sent" value="1">
-                <small>When enabled, any book discovered with <code>new</code> status is automatically appended to the download queue after sync.</small>
-            </div>
 
-            <div class="form-group">
-                <label for="output_format">Output Format</label>
-                <select id="output_format" name="output_format">
-                    <option value="m4b" {{if eq .OutputFormat "m4b"}}selected{{end}}>M4B (Single File)</option>
-                    <option value="mp3" {{if eq .OutputFormat "mp3"}}selected{{end}}>MP3 (Chapter Split)</option>
-                </select>
-                <small>Choose how to organize your audiobook files</small>
-            </div>
-
-            <div class="form-group">
-                <label for="author_dir_template">Author Directory Template</label>
-                <input type="text" id="author_dir_template" name="author_dir_template" value="{{.AuthorDirTemplate}}" placeholder="{author}">
-                <small>Supports data tokens: <code>{author}</code>, <code>{author_asin}</code>, <code>{title}</code>, <code>{subtitle}</code>, <code>{series}</code>, <code>{series_position}</code>, <code>{asin}</code>, <code>{region}</code>, <code>{narrator}</code>, <code>{publisher}</code>, <code>{language}</code>, <code>{duration}</code>, <code>{release_date}</code>, <code>{purchase_date}</code>, <code>{drm_type}</code>.</small>
-            </div>
-
-            <div class="form-group">
-                <label for="book_dir_template">Book Directory Template</label>
-                <input type="text" id="book_dir_template" name="book_dir_template" value="{{.BookDirTemplate}}" placeholder="{title}{ - series}{ [region]}">
-                <small>Use <code>/</code> for nested folders. Conditional segments work Sonarr-style: <code>{ - subtitle}</code>, <code>{ [region]}</code>, <code>{ (narrator)}</code>.</small>
-            </div>
-
-            <div class="form-group">
-                <label for="file_name_template">File Name Template</label>
-                <input type="text" id="file_name_template" name="file_name_template" value="{{.FileNameTemplate}}" placeholder="{title}{ - subtitle}{ - series} {series_position} {asin}{ [region]}">
-                <small>Extension is added automatically. Keep tokens data-only and place punctuation/spaces inside conditional blocks.</small>
-            </div>
-
-            <div class="form-group">
-                <label for="embed_cover">Embed Cover Art</label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="embed_cover" name="embed_cover" value="true" {{if .EmbedCover}}checked{{end}}>
-                    <span class="toggle-slider"></span>
+                <label class="form-row inline" style="grid-column:1 / -1">
+                    <span class="row-label">
+                        Generate PlexMatch files
+                        <div class="hint">Write <code>.plexmatch</code> hint files in each book folder so Plex matches metadata by ASIN. Plex-specific; safe to leave on for Emby (file is ignored).</div>
+                    </span>
+                    <span class="toggle">
+                        <input type="checkbox" id="plexmatch_file" name="plexmatch_file" value="true" {{if .PlexMatchFile}}checked{{end}}>
+                        <span class="toggle-slider"></span>
+                    </span>
+                    <input type="hidden" name="plexmatch_file_sent" value="1">
                 </label>
-                <input type="hidden" name="embed_cover_sent" value="1">
-                <small>Download and embed cover art into audiobook files</small>
             </div>
+        </div>
+    </section>
 
-            <div class="form-group">
-                <label for="chapter_file">Generate Chapter Files</label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="chapter_file" name="chapter_file" value="true" {{if .ChapterFile}}checked{{end}}>
-                    <span class="toggle-slider"></span>
+    {{/* ── Sync ─────────────────────────────────────────────────────
+         Schedule + run-mode. Auto-queue-new sits here since it's a
+         sync-side decision (what to do after a discovery). */}}
+    <section class="settings-section" id="section-sync" data-section="section-sync">
+        <div class="card">
+            <div class="card-head"><h3>Sync</h3></div>
+            <div class="settings-form-grid">
+                <div class="form-row">
+                    <label for="sync_schedule">Sync schedule (cron)</label>
+                    <input class="input" type="text" id="sync_schedule" name="sync_schedule" value="{{.SyncSchedule}}" placeholder="0 */6 * * *">
+                    <input type="hidden" name="sync_schedule_sent" value="1">
+                    <div class="hint">Standard cron expression. Leave empty to disable. Example: <code>0 */6 * * *</code> = every 6 hours.</div>
+                </div>
+
+                <div class="form-row">
+                    <label for="sync_mode">Scheduled sync mode</label>
+                    <select class="select" id="sync_mode" name="sync_mode">
+                        <option value="full" {{if eq .SyncMode "full"}}selected{{end}}>Full (Audible + filesystem + media server)</option>
+                        <option value="quick" {{if eq .SyncMode "quick"}}selected{{end}}>Quick (Audible-focused)</option>
+                    </select>
+                    <div class="hint">Mode used by scheduled sync runs.</div>
+                </div>
+
+                <label class="form-row inline">
+                    <span class="row-label">
+                        Enable scheduled sync
+                        <div class="hint">Controls whether cron-based sync runs automatically.</div>
+                    </span>
+                    <span class="toggle">
+                        <input type="checkbox" id="sync_enabled" name="sync_enabled" value="true" {{if .SyncEnabled}}checked{{end}}>
+                        <span class="toggle-slider"></span>
+                    </span>
+                    <input type="hidden" name="sync_enabled_sent" value="1">
                 </label>
-                <input type="hidden" name="chapter_file_sent" value="1">
-                <small>Create <code>.chapters.txt</code> files alongside audiobooks (read by Plex, Emby, and most audiobook players)</small>
-            </div>
 
-            <div class="form-group">
-                <label for="plexmatch_file">Generate PlexMatch Files</label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="plexmatch_file" name="plexmatch_file" value="true" {{if .PlexMatchFile}}checked{{end}}>
-                    <span class="toggle-slider"></span>
+                <label class="form-row inline">
+                    <span class="row-label">
+                        Auto-add new books to queue
+                        <div class="hint">Any book discovered with <code>new</code> status is automatically appended to the download queue after sync.</div>
+                    </span>
+                    <span class="toggle">
+                        <input type="checkbox" id="sync_auto_queue_new" name="sync_auto_queue_new" value="true" {{if .SyncAutoQueueNew}}checked{{end}}>
+                        <span class="toggle-slider"></span>
+                    </span>
+                    <input type="hidden" name="sync_auto_queue_new_sent" value="1">
                 </label>
-                <input type="hidden" name="plexmatch_file_sent" value="1">
-                <small>Write <code>.plexmatch</code> hint files in each book folder so Plex matches metadata by ASIN &mdash; Plex-specific; safe to leave on for Emby (file is ignored).</small>
             </div>
+            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">Sync schedule and auto-queue-new changes apply on next restart.</p>
+        </div>
+    </section>
 
-            <div class="form-group">
-                <label for="log_level">Log Level</label>
-                <select id="log_level" name="log_level">
-                    <option value="trace" {{if eq .LogLevel "trace"}}selected{{end}}>Trace</option>
-                    <option value="debug" {{if eq .LogLevel "debug"}}selected{{end}}>Debug</option>
-                    <option value="info" {{if eq .LogLevel "info"}}selected{{end}}>Info</option>
-                    <option value="warn" {{if eq .LogLevel "warn"}}selected{{end}}>Warn</option>
-                    <option value="error" {{if eq .LogLevel "error"}}selected{{end}}>Error</option>
-                </select>
-                <small>Minimum severity level for log output. Changes take effect immediately.</small>
+    {{/* ── Performance ──────────────────────────────────────────────
+         Worker concurrency for the three pipeline stages, plus log
+         level (verbosity affects perf at trace/debug). */}}
+    <section class="settings-section" id="section-performance" data-section="section-performance">
+        <div class="card">
+            <div class="card-head"><h3>Performance</h3></div>
+            <div class="settings-form-grid">
+                <div class="form-row">
+                    <label for="download_concurrency">Download workers</label>
+                    <input class="input" type="number" id="download_concurrency" name="download_concurrency" value="{{.DownloadConcurrency}}" min="0" max="16">
+                    <div class="hint">0 = auto. Higher values can improve throughput on fast networks.</div>
+                </div>
+
+                <div class="form-row">
+                    <label for="decrypt_concurrency">Decrypt workers</label>
+                    <input class="input" type="number" id="decrypt_concurrency" name="decrypt_concurrency" value="{{.DecryptConcurrency}}" min="0" max="16">
+                    <div class="hint">0 = auto. This stage is CPU-heavy.</div>
+                </div>
+
+                <div class="form-row">
+                    <label for="process_concurrency">Process workers</label>
+                    <input class="input" type="number" id="process_concurrency" name="process_concurrency" value="{{.ProcessConcurrency}}" min="0" max="16">
+                    <div class="hint">0 = auto. Controls metadata/organize stage parallelism.</div>
+                </div>
+
+                <div class="form-row">
+                    <label for="log_level">Log level</label>
+                    <select class="select" id="log_level" name="log_level">
+                        <option value="trace" {{if eq .LogLevel "trace"}}selected{{end}}>Trace</option>
+                        <option value="debug" {{if eq .LogLevel "debug"}}selected{{end}}>Debug</option>
+                        <option value="info" {{if eq .LogLevel "info"}}selected{{end}}>Info</option>
+                        <option value="warn" {{if eq .LogLevel "warn"}}selected{{end}}>Warn</option>
+                        <option value="error" {{if eq .LogLevel "error"}}selected{{end}}>Error</option>
+                    </select>
+                    <div class="hint">Minimum severity for log output. Changes take effect immediately.</div>
+                </div>
             </div>
+            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">Worker concurrency changes apply on next restart.</p>
+        </div>
+    </section>
 
-            <div class="form-group">
-                <label for="download_concurrency">Download Workers</label>
-                <input type="number" id="download_concurrency" name="download_concurrency" value="{{.DownloadConcurrency}}" min="0" max="16">
-                <small>0 = auto. Higher values can improve throughput on fast networks.</small>
-            </div>
-
-            <div class="form-group">
-                <label for="decrypt_concurrency">Decrypt Workers</label>
-                <input type="number" id="decrypt_concurrency" name="decrypt_concurrency" value="{{.DecryptConcurrency}}" min="0" max="16">
-                <small>0 = auto. This stage is CPU-heavy.</small>
-            </div>
-
-            <div class="form-group">
-                <label for="process_concurrency">Process Workers</label>
-                <input type="number" id="process_concurrency" name="process_concurrency" value="{{.ProcessConcurrency}}" min="0" max="16">
-                <small>0 = auto. Controls metadata/organize stage parallelism.</small>
-            </div>
-
-            </div>
-
-            <p class="muted">Note: sync schedule/mode, auto-queue-new, and worker concurrency changes are applied on next restart.</p>
-
-            <button type="submit" class="btn btn-primary">Save Settings</button>
-            <button type="button" class="btn btn-secondary" hx-post="/api/library/reorganize" hx-target="#save-status" hx-swap="innerHTML">Reorganize Library To Current Scheme</button>
-            <span id="save-status"></span>
-        </form>
+    {{/* Single save row for the Library + Sync + Performance form. */}}
+    <div class="settings-save-bar">
+        <button type="submit" class="btn btn-primary">Save settings</button>
+        <button type="button" class="btn btn-secondary" hx-post="/api/library/reorganize" hx-target="#save-status" hx-swap="innerHTML">Reorganize library to current scheme</button>
+        <span id="save-status" class="status-msg"></span>
     </div>
+    </form>
 
-    <!-- Registered Devices -->
+    {{/* ── Tag Profile ──────────────────────────────────────────────
+         Its own form because it persists via /settings/tag-profile,
+         not /api/settings. Sits next to Library since it controls the
+         atoms embedded into downloaded files. */}}
+    <section class="settings-section" id="section-tag-profile" data-section="section-library">
+        <div class="card">
+            <div class="card-head"><h3>Tag Profile</h3></div>
+            <form method="POST" action="/settings/tag-profile">
+                <div class="form-row">
+                    <label for="tag_profile">Embedded metadata profile</label>
+                    <select id="tag_profile" name="tag_profile" class="select" aria-describedby="tag_profile_help">
+                        {{range .TagProfiles}}
+                        <option value="{{.Value}}"{{if eq .Value $.TagProfile}} selected{{end}}>{{.Label}}</option>
+                        {{end}}
+                    </select>
+                    <div class="hint" id="tag_profile_help">
+                        Atoms written into each m4b on download.
+                        <strong>Basic</strong> matches Audplexus's historical behavior.
+                        <strong>Audiobook-rich</strong> adds <code>series</code>, <code>series-part</code>, and <code>asin</code> — read by Audiobookshelf for series auto-grouping.
+                        Applies to subsequent downloads only.
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-secondary">Save Tag Profile</button>
+            </form>
+        </div>
+    </section>
+
+    {{/* ── System Information ───────────────────────────────────────
+         Read-only paths configured at container startup. Rendered as a
+         single .card with a .meta-grid <dl> — same pattern as the book
+         modal so the page reads consistently. */}}
+    <section class="settings-section" id="section-system" data-section="section-system">
+        <div class="card">
+            <div class="card-head"><h3>System Information</h3></div>
+            <dl class="meta-grid" style="display:grid;grid-template-columns:max-content 1fr;gap:.4rem 1.25rem;font-size:.85rem;margin:0">
+                <dt class="muted">Audiobooks (container)</dt>
+                <dd class="cell-mono">{{.AudiobooksPath}}</dd>
+
+                <dt class="muted">Audiobooks (host)</dt>
+                <dd class="cell-mono">{{if .NativeAudiobooksPath}}{{.NativeAudiobooksPath}}{{else}}<span class="muted">Not configured</span>{{end}}</dd>
+
+                <dt class="muted">Downloads</dt>
+                <dd class="cell-mono">{{.DownloadsPath}}</dd>
+
+                <dt class="muted">Config</dt>
+                <dd class="cell-mono">{{.ConfigPath}}</dd>
+            </dl>
+        </div>
+    </section>
+
+    {{/* ── Registered Devices ───────────────────────────────────────
+         Audible device registrations. Rendered as the DS .tbl inside a
+         .table-wrap so it picks up the same row hover + header styling
+         the Library table uses. */}}
     {{if .Devices}}
-    <div class="settings-section">
-        <h2>Registered Devices</h2>
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>Marketplace</th>
-                    <th>Active</th>
-                    <th>Created</th>
-                </tr>
-            </thead>
-            <tbody>
-                {{range .Devices}}
-                <tr>
-                    <td>{{.Name}}</td>
-                    <td>{{.Marketplace}}</td>
-                    <td>{{if .IsActive}}<span class="badge badge-success">✓ Active</span>{{else}}<span class="badge badge-inactive">Inactive</span>{{end}}</td>
-                    <td>{{formatDate .CreatedAt}}</td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
-    </div>
+    <section class="settings-section" id="section-devices" data-section="section-devices">
+        <div class="card" style="padding:0">
+            <div class="card-head" style="padding:1rem 1.1rem 0;margin-bottom:.5rem"><h3>Registered Devices</h3></div>
+            <div class="table-wrap" style="border:0;border-top:1px solid var(--border);border-radius:0 0 10px 10px">
+                <table class="tbl">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Marketplace</th>
+                            <th>Active</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Devices}}
+                        <tr>
+                            <td>{{.Name}}</td>
+                            <td class="cell-mono">{{.Marketplace}}</td>
+                            <td>{{if .IsActive}}<span class="badge badge-success">✓ Active</span>{{else}}<span class="badge badge-inactive">Inactive</span>{{end}}</td>
+                            <td class="cell-mono">{{formatDate .CreatedAt}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
     {{end}}
 
-    <!-- Danger Zone -->
-    <div class="settings-section danger-section">
-        <h2>Danger Zone</h2>
-        <p class="danger-description">These actions are destructive and cannot be undone.</p>
-
-        <div class="danger-actions">
-            <div class="danger-action">
-                <div>
-                    <strong>Download Database Backup</strong>
-                    <p>Download a copy of the SQLite database before making destructive changes.</p>
-                </div>
-                <a href="/api/settings/db-backup" class="btn btn-outline" download>Download Backup</a>
+    {{/* ── Danger Zone ──────────────────────────────────────────────
+         Backup, re-run wizard, factory reset. Each is a .danger-action
+         row inside the danger card. Factory Reset uses the typed-RESET
+         confirmation flow defined below in the existing modal. */}}
+    <section class="settings-section" id="section-danger" data-section="section-danger">
+        <div class="card danger-card">
+            <div class="card-head"><h3>Danger Zone</h3></div>
+            <div class="alert err" style="margin-bottom:1rem">
+                <span class="ico">!</span>
+                <div>These actions are destructive and cannot be undone. Take a database backup first if you're not sure.</div>
             </div>
 
-            <div class="danger-action">
-                <div>
-                    <strong>Factory Reset</strong>
-                    <p>Wipe all books, downloads, sync history, settings, and device registrations. Your audiobook files on disk will NOT be deleted.</p>
+            <div class="danger-actions">
+                <div class="danger-action">
+                    <div>
+                        <strong>Download database backup</strong>
+                        <p>Download a copy of the SQLite database before making destructive changes.</p>
+                    </div>
+                    <a href="/api/settings/db-backup" class="btn btn-outline-ds" download>Download backup</a>
                 </div>
-                <button type="button" class="btn btn-danger" onclick="confirmFactoryReset()">Factory Reset</button>
+
+                <div class="danger-action">
+                    <div>
+                        <strong>Re-run setup wizard</strong>
+                        <p>Clear the "onboarded" flag and walk through the first-run wizard again. Doesn't touch books, downloads, or destinations — useful for testing the wizard or revisiting region/auth steps.</p>
+                    </div>
+                    <form method="POST" action="/setup/restart" style="margin:0">
+                        <button type="submit" class="btn btn-outline-ds">Re-run wizard</button>
+                    </form>
+                </div>
+
+                <div class="danger-action">
+                    <div>
+                        <strong>Factory reset</strong>
+                        <p>Wipe all books, downloads, sync history, settings, and device registrations. Your audiobook files on disk will NOT be deleted. After reset you'll be sent through the setup wizard again.</p>
+                    </div>
+                    <button type="button" class="btn btn-danger" onclick="confirmFactoryReset()">Factory reset</button>
+                </div>
             </div>
+            <span id="reset-status" class="status-msg" style="display:inline-block;margin-top:.5rem"></span>
         </div>
-        <span id="reset-status"></span>
-    </div>
-</div>
+    </section>
+</div>{{/* /.settings-content */}}
+    </div>{{/* /.settings-layout */}}
+</div>{{/* /.page */}}
 
 <!-- Restart confirmation modal -->
-<div id="restart-modal" class="modal-overlay restart-modal" style="display:none">
-    <div class="modal-box">
-        <h3>Restart Required</h3>
-        <p>One or more saved settings only apply after a restart.</p>
-        <p class="modal-warn">The service will be briefly unavailable while it restarts.</p>
-        <div class="modal-buttons">
-            <button class="btn btn-outline" type="button" onclick="closeRestartModal()">Later</button>
-            <button class="btn btn-primary" type="button" id="restart-confirm-btn" onclick="confirmRestart()">Restart Now</button>
+<div id="restart-modal" class="modal-overlay" style="display:none" aria-hidden="true">
+    <div class="modal-backdrop" onclick="closeRestartModal()"></div>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="restart-modal-title">
+        <button type="button" class="modal-close" onclick="closeRestartModal()" aria-label="Close">&times;</button>
+        <div class="modal-body">
+            <h2 id="restart-modal-title" style="margin:0 0 .5rem">Restart Required</h2>
+            <p class="muted" style="margin:0 0 .5rem">One or more saved settings only apply after a restart.</p>
+            <div class="alert warn" style="margin:.5rem 0 1rem">
+                <span class="ico">!</span>
+                <div>The service will be briefly unavailable while it restarts.</div>
+            </div>
+            <div style="display:flex;gap:.5rem;justify-content:flex-end">
+                <button class="btn btn-outline-ds" type="button" onclick="closeRestartModal()">Later</button>
+                <button class="btn btn-primary" type="button" id="restart-confirm-btn" onclick="confirmRestart()">Restart Now</button>
+            </div>
+            <p id="restart-modal-status" class="muted" style="margin:.5rem 0 0;font-size:.78rem"></p>
         </div>
-        <p id="restart-modal-status" class="modal-note"></p>
     </div>
 </div>
 
 <!-- Factory Reset confirmation modal -->
-<div id="reset-modal" class="modal-overlay" style="display:none">
-    <div class="modal-box">
-        <h3>⚠️ Factory Reset</h3>
-        <p>This will <strong>permanently delete</strong> all data from the database:</p>
-        <ul>
-            <li>All synced books &amp; metadata</li>
-            <li>Download queue &amp; history</li>
-            <li>Settings &amp; media server configuration</li>
-            <li>Registered devices</li>
-        </ul>
-        <p>Audiobook files on disk are <strong>not affected</strong>.</p>
-        <p class="modal-warn">Have you downloaded a database backup?</p>
-        <div class="modal-buttons">
-            <button class="btn btn-outline" onclick="closeResetModal()">Cancel</button>
-            <button class="btn btn-danger" onclick="showFinalConfirm()">I understand, continue</button>
-        </div>
-        <div id="final-confirm" style="display:none">
-            <hr style="border-color:rgba(255,255,255,0.1);margin:1rem 0">
-            <p class="modal-warn">Type <code>RESET</code> to confirm:</p>
-            <input type="text" id="reset-confirm-input" class="reset-input" placeholder="Type RESET" autocomplete="off">
-            <button class="btn btn-danger" style="margin-top:0.75rem;width:100%" onclick="executeReset()">Permanently Delete All Data</button>
+<div id="reset-modal" class="modal-overlay" style="display:none" aria-hidden="true">
+    <div class="modal-backdrop" onclick="closeResetModal()"></div>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="reset-modal-title">
+        <button type="button" class="modal-close" onclick="closeResetModal()" aria-label="Close">&times;</button>
+        <div class="modal-body">
+            <h2 id="reset-modal-title" style="margin:0 0 .5rem">⚠️ Factory Reset</h2>
+            <p style="margin:0 0 .5rem">This will <strong>permanently delete</strong> all data from the database:</p>
+            <ul style="margin:.25rem 0 .75rem 1.25rem;font-size:.85rem;line-height:1.6">
+                <li>All synced books &amp; metadata</li>
+                <li>Download queue &amp; history</li>
+                <li>Settings &amp; media server configuration</li>
+                <li>Registered devices</li>
+            </ul>
+            <p style="margin:0 0 .75rem;font-size:.85rem">Audiobook files on disk are <strong>not affected</strong>.</p>
+            <div class="alert warn" style="margin:.5rem 0 1rem">
+                <span class="ico">!</span>
+                <div>Have you downloaded a database backup?</div>
+            </div>
+            <div style="display:flex;gap:.5rem;justify-content:flex-end">
+                <button class="btn btn-outline-ds" onclick="closeResetModal()">Cancel</button>
+                <button class="btn btn-danger" onclick="showFinalConfirm()">I understand, continue</button>
+            </div>
+            <div id="final-confirm" style="display:none;margin-top:1rem">
+                <hr style="border-color:var(--border);margin:0 0 .75rem">
+                <div class="alert err" style="margin:0 0 .75rem">
+                    <span class="ico">!</span>
+                    <div>Type <code>RESET</code> to confirm:</div>
+                </div>
+                <input type="text" id="reset-confirm-input" class="input reset-input" placeholder="Type RESET" autocomplete="off" style="text-align:center;font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace">
+                <button class="btn btn-danger" style="margin-top:.75rem;width:100%" onclick="executeReset()">Permanently Delete All Data</button>
+            </div>
         </div>
     </div>
 </div>
@@ -569,458 +624,105 @@ function confirmRestart() {
 </script>
 
 <style>
-    .settings-container {
+    /* Settings-specific layout — most form/input/modal styling moved
+       to the global stylesheet; what's left below is just the wrapper
+       grids that don't belong anywhere else. */
+
+    /* Each <section class="settings-section"> stacks vertically with
+       breathing room. The .card inside owns the visual chrome now. */
+    .settings-container { display: flex; flex-direction: column; gap: 1.25rem; }
+    .settings-section { background: transparent; padding: 0; border: 0; }
+
+    /* Bottom save bar shared by the Library + Sync + Performance form. */
+    .settings-save-bar {
         display: flex;
-        flex-direction: column;
-        gap: 2rem;
-    }
-
-    .settings-section {
-        background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 8px;
-        padding: 1.5rem;
-    }
-
-    .settings-section h2 {
-        margin-top: 0;
-        margin-bottom: 1.5rem;
-        color: #00d9ff;
-    }
-
-    .auth-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 1.5rem;
-    }
-
-    @media (max-width: 960px) {
-        .auth-grid {
-            grid-template-columns: minmax(0, 1fr);
-        }
-    }
-
-    .auth-panel {
-        background: rgba(0,0,0,0.2);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 6px;
-        padding: 1.25rem;
-    }
-
-    .auth-panel h3 {
-        margin-top: 0;
-        margin-bottom: 1rem;
-    }
-
-    .auth-flow p {
-        margin-bottom: 1rem;
-        color: #b7bcc6;
-    }
-
-    .auth-steps {
-        margin: 0 0 1rem;
-        padding-left: 1.25rem;
-        color: #d6e0f0;
-    }
-
-    .auth-steps li {
-        margin-bottom: 0.35rem;
-    }
-
-    .auth-help {
-        margin: 1rem 0 1.25rem;
-        border: 1px solid rgba(255,255,255,0.12);
-        border-radius: 6px;
-        background: rgba(0,0,0,0.18);
-        padding: 0.6rem 0.8rem;
-    }
-
-    .auth-help summary {
-        cursor: pointer;
-        color: #9ec5ff;
-        font-weight: 600;
-        margin-bottom: 0.75rem;
-    }
-
-    .auth-help-image {
-        display: block;
-        width: 100%;
-        border: 1px solid rgba(255,255,255,0.12);
-        border-radius: 6px;
-        background: #0d1624;
-    }
-
-    .auth-help-success {
-        color: #6bd78c;
-    }
-
-    .auth-help-error {
-        color: #ff9e9e;
-    }
-
-    .auth-input-good {
-        border-color: rgba(107, 215, 140, 0.75) !important;
-        box-shadow: 0 0 0 2px rgba(107, 215, 140, 0.15) !important;
-    }
-
-    .auth-input-bad {
-        border-color: rgba(255, 124, 124, 0.75) !important;
-        box-shadow: 0 0 0 2px rgba(255, 124, 124, 0.15) !important;
-    }
-
-    .info-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-        gap: 1rem;
-    }
-
-    .info-item {
-        background: rgba(0,0,0,0.2);
-        padding: 1rem;
-        border-radius: 4px;
-        border-left: 3px solid #00d9ff;
-    }
-
-    .path-group-title {
-        color: #ccc;
-        font-size: 0.95rem;
-        margin: 1rem 0 0.5rem;
-        font-weight: 500;
-    }
-
-    .path-group-title:first-of-type {
-        margin-top: 0;
-    }
-
-    .info-item label {
-        display: block;
-        font-size: 0.85rem;
-        color: #aaa;
-        margin-bottom: 0.5rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-
-    .muted {
-        color: #666;
-        font-style: italic;
-    }
-
-    .info-value {
-        font-family: monospace;
-        font-size: 0.9rem;
-        color: #fff;
-        word-break: break-all;
-    }
-
-    .settings-form {
-        display: flex;
-        flex-direction: column;
-        gap: 1.5rem;
-        max-width: 500px;
-    }
-
-    .settings-form-wide {
-        max-width: 100%;
-    }
-
-    .settings-form-wide .settings-form-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 1.25rem 2rem;
-    }
-
-    @media (max-width: 960px) {
-        .settings-form-wide .settings-form-grid {
-            grid-template-columns: minmax(0, 1fr);
-        }
-    }
-
-    .form-group {
-        display: flex;
-        flex-direction: column;
-    }
-
-    .form-group label {
-        font-weight: 500;
-        margin-bottom: 0.5rem;
-        color: #ddd;
-    }
-
-    .form-group input,
-    .form-group select {
-        padding: 0.75rem;
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 4px;
-        background: rgba(255,255,255,0.05);
-        color: #fff;
-        font-family: inherit;
-    }
-
-    .form-group input:focus,
-    .form-group select:focus {
-        outline: none;
-        border-color: #00d9ff;
-        box-shadow: 0 0 0 2px rgba(0,217,255,0.1);
-    }
-
-    .form-group small {
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        align-items: center;
         margin-top: 0.25rem;
-        color: #888;
-        font-size: 0.85rem;
     }
 
-    .form-group code {
-        background: rgba(0,0,0,0.3);
-        padding: 0.2rem 0.4rem;
-        border-radius: 3px;
-        font-family: monospace;
-        color: #00d9ff;
+    /* Configuration form — two-column grid of .form-rows so we fit a
+       lot of compact toggles + selects without scrolling forever. */
+    .settings-form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem 1.5rem;
     }
+    @media (max-width: 960px) { .settings-form-grid { grid-template-columns: minmax(0, 1fr); } }
 
-    .btn {
-        padding: 0.75rem 1.5rem;
-        border: none;
-        border-radius: 4px;
-        font-size: 1rem;
-        cursor: pointer;
-        transition: all 0.2s;
-    }
-
-    .btn-primary {
-        background: #00d9ff;
-        color: #000;
-        font-weight: 600;
-    }
-
-    .btn-primary:hover {
-        background: #00b8cc;
-    }
-
-    .badge {
-        display: inline-block;
-        padding: 0.25rem 0.75rem;
-        border-radius: 12px;
-        font-size: 0.85rem;
-        font-weight: 500;
-    }
-
-    .badge-success {
-        background: rgba(76, 175, 80, 0.2);
-        color: #4cb549;
-    }
-
-    .badge-inactive {
-        background: rgba(158, 158, 158, 0.2);
-        color: #999;
-    }
-
-    .data-table {
-        width: 100%;
-        border-collapse: collapse;
-    }
-
-    .data-table th {
-        background: rgba(0,217,255,0.05);
-        padding: 0.75rem;
-        text-align: left;
-        font-weight: 600;
-        color: #00d9ff;
-        border-bottom: 2px solid rgba(0,217,255,0.2);
-    }
-
-    .data-table td {
-        padding: 0.75rem;
-        border-bottom: 1px solid rgba(255,255,255,0.05);
-    }
-
-    .data-table tbody tr:hover {
-        background: rgba(0,217,255,0.05);
-    }
-
-    .toggle-switch {
-        position: relative;
-        display: inline-block;
-        width: 50px;
-        height: 26px;
-        margin: 0;
-    }
-
-    .toggle-switch input {
-        opacity: 0;
-        width: 0;
-        height: 0;
-    }
-
-    .toggle-slider {
-        position: absolute;
-        cursor: pointer;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(255,255,255,0.15);
-        border-radius: 26px;
-        transition: 0.3s;
-    }
-
-    .toggle-slider::before {
-        content: "";
-        position: absolute;
-        height: 20px;
-        width: 20px;
-        left: 3px;
-        bottom: 3px;
-        background: #fff;
-        border-radius: 50%;
-        transition: 0.3s;
-    }
-
-    .toggle-switch input:checked + .toggle-slider {
-        background: #00d9ff;
-    }
-
-    .toggle-switch input:checked + .toggle-slider::before {
-        transform: translateX(24px);
-    }
-
-    /* Danger Zone */
-    .danger-section {
-        border-color: rgba(255, 68, 68, 0.3);
-    }
-
-    .danger-section h2 {
-        color: #ff4444;
-    }
-
-    .danger-description {
-        color: #999;
-        margin-bottom: 1.5rem;
-    }
-
-    .danger-actions {
-        display: flex;
-        flex-direction: column;
-        gap: 1rem;
-    }
-
+    /* Danger zone — stacked rows, each with a description on the left
+       and an action button on the right. */
+    .danger-card { border-color: rgba(244, 67, 54, 0.35); }
+    .danger-actions { display: flex; flex-direction: column; gap: 0.75rem; }
     .danger-action {
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 1rem;
-        padding: 1rem;
-        background: rgba(0,0,0,0.2);
-        border-radius: 4px;
-        border-left: 3px solid rgba(255, 68, 68, 0.4);
+        padding: 0.85rem 1rem;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-left: 3px solid rgba(244, 67, 54, 0.55);
+        border-radius: 6px;
     }
-
     .danger-action p {
         margin: 0.25rem 0 0;
         font-size: 0.85rem;
-        color: #999;
+        color: var(--text-muted);
     }
 
-    .btn-outline {
-        background: transparent;
-        border: 1px solid rgba(255,255,255,0.3);
-        color: #ddd;
-        white-space: nowrap;
-    }
+    /* Auth flow help image — only used inside the Amazon sign-in card. */
+    .auth-help-image { display: block; width: 100%; }
 
-    .btn-outline:hover {
-        border-color: #00d9ff;
-        color: #00d9ff;
-    }
-
-    .btn-danger {
-        background: #cc0000;
-        color: #fff;
-        font-weight: 600;
-        white-space: nowrap;
-    }
-
-    .btn-danger:hover {
-        background: #ff4444;
-    }
-
-    /* Modal */
-    .modal-overlay {
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,0.7);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 1000;
-    }
-
-    .modal-box {
-        background: #1a1e2e;
-        border: 1px solid rgba(255, 68, 68, 0.4);
-        border-radius: 8px;
-        padding: 2rem;
-        max-width: 500px;
-        width: 90%;
-    }
-
-    .modal-box h3 {
-        margin-top: 0;
-        color: #ff4444;
-    }
-
-    .modal-box ul {
-        color: #ccc;
-        padding-left: 1.5rem;
-    }
-
-    .modal-warn {
-        color: #ffaa00;
-        font-weight: 500;
-    }
-
-    .modal-buttons {
-        display: flex;
-        gap: 1rem;
-        margin-top: 1rem;
-    }
-
-    .restart-modal .modal-box {
-        border-color: rgba(0, 217, 255, 0.4);
-    }
-
-    .restart-modal .modal-box h3 {
-        color: #00d9ff;
-    }
-
-    .modal-note {
-        min-height: 1.25rem;
-        margin-top: 0.75rem;
-        color: #b7bcc6;
-    }
-
-    .btn-inline {
-        margin-left: 0.75rem;
-        padding: 0.45rem 0.85rem;
-        font-size: 0.9rem;
-    }
-
-    .reset-input {
-        width: 100%;
-        padding: 0.75rem;
-        border: 1px solid rgba(255,255,255,0.2);
-        border-radius: 4px;
-        background: rgba(255,255,255,0.05);
-        color: #fff;
-        font-family: monospace;
-        font-size: 1rem;
-        text-align: center;
-    }
-
-    .reset-input:focus {
-        outline: none;
-        border-color: #ff4444;
-    }
+    /* Used by settings_saved.html when a setting that requires restart
+       gets saved — small inline button next to the saved-status text. */
+    .btn-inline { margin-left: 0.75rem; padding: 0.4rem 0.75rem; font-size: 0.85rem; }
 </style>
+
+<script>
+// Settings TOC scroll-spy — highlights the left-rail link whose section
+// is closest to the top of the viewport. Pure JS, no deps.
+(function() {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.settings-nav-link[data-section]'));
+    if (!links.length) return;
+    var sections = links
+        .map(function(a) { return document.getElementById(a.getAttribute('data-section')); })
+        .filter(Boolean);
+    if (!sections.length) return;
+
+    function setActive(id) {
+        links.forEach(function(a) {
+            if (a.getAttribute('data-section') === id) a.classList.add('active');
+            else a.classList.remove('active');
+        });
+    }
+
+    var obs = new IntersectionObserver(function(entries) {
+        // Pick the visible section nearest the top.
+        var visible = entries
+            .filter(function(e) { return e.isIntersecting; })
+            .sort(function(a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
+        if (visible[0]) setActive(visible[0].target.id);
+    }, { rootMargin: '-100px 0px -55% 0px', threshold: [0, 0.1, 0.5] });
+    sections.forEach(function(s) { obs.observe(s); });
+
+    // Smooth-scroll on link click (browsers do this for #anchor, but we
+    // also want to set active immediately so the highlight doesn't lag
+    // the scroll animation).
+    links.forEach(function(a) {
+        a.addEventListener('click', function(ev) {
+            var id = a.getAttribute('data-section');
+            var el = document.getElementById(id);
+            if (!el) return;
+            ev.preventDefault();
+            setActive(id);
+            var y = el.getBoundingClientRect().top + window.scrollY - 72;
+            window.scrollTo({ top: y, behavior: 'smooth' });
+            history.replaceState(null, '', '#' + id);
+        });
+    });
+})();
+</script>
 
 {{end}}

@@ -47,6 +47,9 @@ func TestStubDB_AllNoopMethods(t *testing.T) {
 	if rows, total, err := s.ListBooks(ctx, BookFilter{}); err != nil || rows != nil || total != 0 {
 		t.Fatalf("ListBooks expected (nil,0,nil), got (%v,%d,%v)", rows, total, err)
 	}
+	if counts, err := s.CountBooksByStatus(ctx); err != nil || counts != nil {
+		t.Fatalf("CountBooksByStatus expected (nil,nil), got (%v,%v)", counts, err)
+	}
 	if err := s.UpsertBook(ctx, &Book{ASIN: "B000000001"}); err != nil {
 		t.Fatalf("UpsertBook error: %v", err)
 	}

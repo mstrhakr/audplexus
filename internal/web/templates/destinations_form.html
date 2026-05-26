@@ -1,429 +1,608 @@
-{{define "content"}}
+{{define "destination_form_body"}}
+{{if .ModalSuccess}}
+<div class="alert ok" style="margin:0">
+    <span class="ico">✓</span>
+    <div>
+        <strong>{{.DestTypeLabel}} destination {{if .ModalSuccessVerb}}{{.ModalSuccessVerb}}{{else}}saved{{end}}.</strong>
+        <div class="muted" style="font-size:.85rem;margin-top:.25rem">Refreshing…</div>
+    </div>
+</div>
+{{else}}
+{{/*
+  Destination create/edit form — rendered inside the global modal in
+  base.html. $isEdit (.Dest set) flips the form action between create
+  and update. Layout follows the DS aesthetic: typed identity header
+  with the brand logo, sectioned body with eyebrow dividers, sticky
+  action bar pinned to the bottom of the modal.
+*/}}
 {{$isEdit := .Dest}}
 {{$dt := .DestType}}
-<div class="settings-page">
-    <header class="settings-header">
-        <h1>{{if $isEdit}}Edit {{.DestTypeLabel}} Destination{{else}}Add {{.DestTypeLabel}} Destination{{end}}</h1>
-        <p>
-            {{if $isEdit}}Update the connection details below. Leave the API key / token blank to keep the existing value.
-            {{else}}Fill in the connection details. Audplexus will fan out post-download work to this destination.{{end}}
-        </p>
-    </header>
+{{$logo := destLogo $dt}}
 
-    {{if .FormError}}
-    <div class="info-box" role="alert" style="border-color:var(--error);margin-bottom:1rem" id="form-error-summary" tabindex="-1">
-        <strong>Could not save:</strong> {{.FormError}}
+<header class="dest-form-head">
+    <div class="dest-form-head-mark">
+        {{if $logo}}<img src="{{$logo}}" alt="">{{else}}<span>{{firstTwo .DestTypeLabel}}</span>{{end}}
     </div>
-    {{end}}
+    <div class="dest-form-head-text">
+        <div class="dest-form-eyebrow">{{.DestTypeLabel}}</div>
+        <h2 id="form-heading">{{if $isEdit}}Edit destination{{else}}Add destination{{end}}</h2>
+        <p>
+            {{if $isEdit}}Update the connection details below. Leave the credential field blank to keep the existing value.
+            {{else}}Audplexus will fan out post-download work to this server once it's configured.{{end}}
+        </p>
+    </div>
+</header>
 
-    <section class="auth-grid">
-        <section class="auth-panel" aria-labelledby="form-heading">
-            <h2 id="form-heading">Connection</h2>
-            <form method="POST"
-                  action="{{if $isEdit}}/destinations/{{.Dest.ID}}{{else}}/destinations/create{{end}}"
-                  class="settings-form">
-                {{if not $isEdit}}<input type="hidden" name="type" value="{{$dt}}">{{end}}
+{{if .FormError}}
+<div class="alert err" role="alert" id="form-error-summary" tabindex="-1" style="margin-bottom:1rem">
+    <span class="ico">!</span>
+    <div><strong>Could not save.</strong> {{.FormError}}</div>
+</div>
+{{end}}
 
-                <div class="form-group">
-                    <label for="display_name">Display name <span class="muted" style="font-weight:normal">(optional)</span></label>
-                    <input id="display_name" name="display_name" type="text" maxlength="128"
-                           value="{{if $isEdit}}{{.Dest.DisplayName}}{{end}}"
-                           placeholder="{{.DestTypeLabel}}"
-                           aria-describedby="display_name_help">
-                    <small id="display_name_help" class="muted">Shown in the Settings list and per-destination logs. Defaults to <code>{{.DestTypeLabel}}</code>; set this only if you run multiple destinations of the same type (e.g. "Living room Plex" + "Bedroom Plex").</small>
-                </div>
+<form hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}{{else}}/destinations/create{{end}}"
+      hx-target="#dest-modal-content"
+      hx-swap="innerHTML"
+      hx-headers='{"X-Dest-Modal":"1"}'
+      class="dest-form">
+    {{if not $isEdit}}<input type="hidden" name="type" value="{{$dt}}">{{end}}
 
-                {{if ne $dt "plex"}}
-                <div class="form-group">
-                    <label for="url">{{.DestTypeLabel}} URL</label>
-                    <input id="url" name="url" type="url" required
-                           value="{{if $isEdit}}{{.Dest.URL}}{{end}}"
-                           placeholder="http://server.lan:8096"
-                           aria-describedby="url_help">
-                    <small id="url_help" class="muted">Internal URL Audplexus uses to reach the server. Use the LAN address; no public proxy required.</small>
-                </div>
-                {{end}}
+    {{/* ── Section 1: Identity & Connection ──────────────────────── */}}
+    <section class="dest-form-section">
+        <header class="dest-form-section-head">
+            <span class="dest-form-eyebrow">Connection</span>
+            <span class="dest-form-section-rule" aria-hidden="true"></span>
+        </header>
 
-                {{if eq $dt "plex"}}
-                {{$guidedStart := not $isEdit}}
-                <section id="plex-setup-flow">
-                {{/*
-                  Sign in with Plex — kicks off the plex.tv PIN flow.
-                  Posts to /destinations/plex/pin/start which returns a
-                  fragment containing an "Open plex.tv sign-in" button
-                  (target=_blank) plus a hidden HTMX poller that re-fires
-                  every 2s until plex.tv returns an authToken. On success
-                  the poll response is a tiny <script> that writes the
-                  token into #plex_token and clicks the Discover servers
-                  button to chain into URL discovery.
-                */}}
-                <div class="form-group">
-                    <label>Sign in with Plex</label>
-                    <div>
+        <div class="form-group">
+            <label for="display_name">Display name <span class="form-label-aside">optional</span></label>
+            <input id="display_name" name="display_name" type="text" maxlength="128"
+                   value="{{if $isEdit}}{{.Dest.DisplayName}}{{end}}"
+                   placeholder="{{.DestTypeLabel}}"
+                   aria-describedby="display_name_help">
+            <small id="display_name_help">Defaults to <code>{{.DestTypeLabel}}</code>. Override only when you run multiple destinations of the same type (e.g. <em>"Living room Plex"</em>).</small>
+        </div>
+
+        {{if eq $dt "plex"}}
+        {{$guidedStart := not $isEdit}}
+        {{/* On edit, seed step states from the saved row.
+             Step 3 only counts as DONE when the most recent test was
+             affirmatively OK — a "never checked" state must not flip
+             green because the saved section might no longer exist on
+             the server (we'll re-verify after discovery). */}}
+        {{$step1Done := and $isEdit .HasStoredCredential}}
+        {{$step2Done := and $isEdit .HasStoredURL}}
+        {{$step3Done := and $isEdit .HasStoredSection .LastHealthOK}}
+        {{$step3Error := and $isEdit .HasStoredSection .LastHealthFailed}}
+        <section id="plex-setup-flow" class="dest-guided">
+            {{/* Plex sign-in step — kicks off the plex.tv PIN flow.
+                 Posts to /destinations/plex/pin/start which returns a
+                 fragment containing an "Open plex.tv sign-in" button
+                 plus a hidden HTMX poller. */}}
+            <div class="dest-guided-step{{if $step1Done}} is-done{{end}}" id="plex-guided-step-1">
+                <span class="dest-guided-num" aria-hidden="true">1</span>
+                <div class="dest-guided-body">
+                    <div class="dest-guided-row">
+                        <div class="dest-guided-text">
+                            <div class="dest-guided-title">Sign in with Plex</div>
+                            <div class="dest-guided-desc">
+                                {{if $step1Done}}Token on file — re-sign in only if it has been revoked.{{else}}Approve in plex.tv and we fill the token automatically.{{end}}
+                            </div>
+                        </div>
                         <button id="plex-signin-btn" type="button" class="btn btn-secondary"
                                 hx-post="/destinations/plex/pin/start"
                                 hx-target="#plex-pin-result"
                                 hx-swap="innerHTML"
                                 hx-disabled-elt="this"
-                                hx-on::before-request="document.getElementById('plex-pin-result').setAttribute('aria-busy', 'true'); document.getElementById('plex-pin-result').textContent = 'Starting plex.tv sign-in…';"
-                                hx-on::after-request="document.getElementById('plex-pin-result').setAttribute('aria-busy', 'false');">
-                            Sign in with Plex
+                                hx-on::before-request="document.getElementById('plex-pin-result').setAttribute('aria-busy','true'); document.getElementById('plex-pin-result').textContent='Starting plex.tv sign-in…';"
+                                hx-on::after-request="document.getElementById('plex-pin-result').setAttribute('aria-busy','false');">
+                            {{if $step1Done}}Re-sign in{{else}}Sign in{{end}}
                         </button>
-                        <div id="plex-pin-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
                     </div>
-                    <small class="muted">Approve in plex.tv and Audplexus fills the token automatically, then loads your servers.</small>
+                    <div id="plex-pin-result" class="dest-guided-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false"></div>
                 </div>
+            </div>
 
-                <div id="plex-step-server" class="{{if $guidedStart}}is-hidden{{end}}">
-                    <div class="form-group">
-                        <label>Select Plex server</label>
-                        <div>
-                            <button id="plex-discover-servers-btn" type="button" class="btn btn-secondary is-hidden"
-                                    hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/plex/discover/servers{{else}}/destinations/plex/discover/servers{{end}}"
-                                    hx-include="closest form"
-                                    hx-target="#plex-server-discover-result"
-                                    hx-swap="innerHTML"
-                                    hx-disabled-elt="this"
-                                    hx-on::before-request="document.getElementById('plex-server-discover-result').setAttribute('aria-busy', 'true'); document.getElementById('plex-server-discover-result').textContent = 'Listing your Plex servers…';"
-                                    hx-on::after-request="document.getElementById('plex-server-discover-result').setAttribute('aria-busy', 'false');">
-                                Discover servers
-                            </button>
-                            <div id="plex-server-discover-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
+            {{/* Discover servers — calls plex.tv /api/v2/resources, lists
+                 the user's Plex servers, fills the URL field on pick. */}}
+            <div class="dest-guided-step{{if $step2Done}} is-done{{else if and $guidedStart (not $step1Done)}} is-dim{{end}}" id="plex-guided-step-2">
+                <span class="dest-guided-num" aria-hidden="true">2</span>
+                <div class="dest-guided-body">
+                    <div class="dest-guided-row">
+                        <div class="dest-guided-text">
+                            <div class="dest-guided-title">Select your Plex server</div>
+                            <div class="dest-guided-desc">
+                                {{if $step2Done}}Currently <code>{{.Dest.URL}}</code> — change with the button.{{else}}Lists every server linked to your account.{{end}}
+                            </div>
                         </div>
-                            <small class="muted">After sign-in, this list auto-loads. Pick one server to continue.</small>
+                        <button id="plex-discover-servers-btn" type="button" class="btn btn-secondary{{if and (not $step1Done) $guidedStart}} is-hidden{{end}}"
+                                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/plex/discover/servers{{else}}/destinations/plex/discover/servers{{end}}"
+                                hx-include="closest form"
+                                hx-target="#plex-server-discover-result"
+                                hx-swap="innerHTML"
+                                hx-disabled-elt="this"
+                                hx-on::before-request="plexStepLoading('plex-guided-step-2', true); document.getElementById('plex-server-discover-result').setAttribute('aria-busy','true'); document.getElementById('plex-server-discover-result').textContent='Listing your Plex servers…';"
+                                hx-on::after-request="plexStepLoading('plex-guided-step-2', false); document.getElementById('plex-server-discover-result').setAttribute('aria-busy','false');">
+                            {{if $step2Done}}Change server{{else}}Discover{{end}}
+                        </button>
                     </div>
+                    <div id="plex-server-discover-result" class="dest-guided-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false"></div>
                 </div>
+            </div>
 
-                {{/*
-                  Discover servers — calls plex.tv /api/v2/resources, lists
-                  the user's Plex servers, fills the URL field on pick.
-                  hx-include posts the form values so the token (just
-                  typed or just minted via PIN) flows through. The id
-                  "plex-discover-servers-btn" is the click target of the
-                  auto-chain from the PIN poll completion script.
-                */}}
-                <div id="plex-step-sections" class="{{if $guidedStart}}is-hidden{{end}}">
-                    <div class="form-group">
-                        <label>Select audiobook section</label>
-                        <div>
-                            <button id="plex-discover-sections-btn" type="button" class="btn btn-secondary is-hidden"
-                                    hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/plex/discover/sections{{else}}/destinations/plex/discover/sections{{end}}"
-                                    hx-include="closest form"
-                                    hx-target="#plex-section-discover-result"
-                                    hx-swap="innerHTML"
-                                    hx-disabled-elt="this"
-                                    hx-on::before-request="document.getElementById('plex-section-discover-result').setAttribute('aria-busy', 'true'); document.getElementById('plex-section-discover-result').textContent = 'Listing library sections…';"
-                                    hx-on::after-request="document.getElementById('plex-section-discover-result').setAttribute('aria-busy', 'false');">
-                                Discover sections
-                            </button>
-                            <div id="plex-section-discover-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
+            {{/* Discover sections — calls the configured Plex server's
+                 /library/sections, lists all sections, fills section_id
+                 on pick. */}}
+            <div class="dest-guided-step{{if $step3Done}} is-done{{else if $step3Error}} is-error{{else if and $guidedStart (not $step2Done)}} is-dim{{end}}" id="plex-guided-step-3">
+                <span class="dest-guided-num" aria-hidden="true">3</span>
+                <div class="dest-guided-body">
+                    <div class="dest-guided-row">
+                        <div class="dest-guided-text">
+                            <div class="dest-guided-title">Pick the audiobook library</div>
+                            <div class="dest-guided-desc">
+                                {{if $step3Error}}<span style="color:#ff9b9b">Saved section <code>{{.Dest.PlexSectionID}}</code> is no longer reachable on this server.</span>
+                                {{else if $step3Done}}Saved section <code>{{.Dest.PlexSectionID}}</code>. Re-discover to change.
+                                {{else}}Choose the Plex section that holds your audiobooks.{{end}}
+                            </div>
                         </div>
-                        <small class="muted">Choose the Plex library section that holds your audiobooks.</small>
+                        <button id="plex-discover-sections-btn" type="button" class="btn btn-secondary{{if and (not $step2Done) $guidedStart}} is-hidden{{end}}"
+                                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/plex/discover/sections{{else}}/destinations/plex/discover/sections{{end}}"
+                                hx-include="closest form"
+                                hx-target="#plex-section-discover-result"
+                                hx-swap="innerHTML"
+                                hx-disabled-elt="this"
+                                hx-on::before-request="plexStepLoading('plex-guided-step-3', true); document.getElementById('plex-section-discover-result').setAttribute('aria-busy','true'); document.getElementById('plex-section-discover-result').textContent='Listing library sections…';"
+                                hx-on::after-request="plexStepLoading('plex-guided-step-3', false); plexStepFromResponse('plex-guided-step-3', event); document.getElementById('plex-section-discover-result').setAttribute('aria-busy','false');">
+                            {{if $step3Error}}Re-discover{{else if $step3Done}}Change library{{else}}Discover{{end}}
+                        </button>
+                    </div>
+                    <div id="plex-section-discover-result" class="dest-guided-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false">
+                        {{if $step3Error}}<div class="alert err" style="font-size:.78rem;padding:.45rem .6rem;margin:.4rem 0 0"><span class="ico">!</span><div>{{if .LastHealthErr}}{{.LastHealthErr}}{{else}}Last check failed. Re-discover to recover.{{end}}</div></div>{{end}}
                     </div>
                 </div>
-                {{/*
-                  Discover sections — calls the configured Plex server's
-                  /library/sections, lists all sections, fills section_id
-                  on pick. We don't filter to type=artist because some
-                  audiobook libraries are misconfigured as type=movie or
-                  type=show and we don't want to hide them.
-                */}}
-                <details id="plex-manual-entry" style="margin:1rem 0;" {{if $isEdit}}open{{end}}>
-                    <summary>Advanced</summary>
-                    <div class="form-group" style="margin-top:.75rem">
+            </div>
+
+            <details id="plex-manual-entry" class="dest-form-disclosure" {{if $isEdit}}open{{end}}>
+                <summary>
+                    <span class="dest-form-disclosure-label">Manual configuration</span>
+                    <span class="dest-form-disclosure-hint">Skip the guided flow and paste values directly.</span>
+                </summary>
+                <div class="dest-form-disclosure-body">
+                    <div class="form-group">
                         <label for="url">Plex URL</label>
                         <input id="url" name="url" type="url" required
                                value="{{if $isEdit}}{{.Dest.URL}}{{end}}"
                                placeholder="http://server.lan:32400"
                                aria-describedby="url_help">
-                        <small id="url_help" class="muted">Manual override. Usually filled by server selection above.</small>
+                        <small id="url_help">Usually filled by server selection above.</small>
                     </div>
-                    <div class="form-group" style="margin-top:.75rem">
+
+                    <div class="form-group">
                         <label for="plex_token">Plex token</label>
                         <input id="plex_token" name="plex_token" type="password" autocomplete="off"
                                {{if not $isEdit}}required{{end}}
                                aria-describedby="plex_token_help">
-                        <small id="plex_token_help" class="muted">{{if $isEdit}}Leave blank to keep the current token. {{end}}Long-lived authentication string for your Plex account. Sign in above to fill this automatically.</small>
-                        <details style="margin-top:.4rem">
-                            <summary>Manual: how to find your Plex token</summary>
-                            <ol style="margin:.5rem 0 0 1.25rem;padding:0">
-                                <li>Sign in to Plex web UI at <code>http://&lt;your-plex&gt;:32400/web</code>.</li>
-                                <li>Play any audiobook (or open its detail page).</li>
-                                <li>Click the &hellip; menu &rarr; <strong>Get Info</strong> &rarr; <strong>View XML</strong>.</li>
-                                <li>The new tab's URL contains <code>?X-Plex-Token=&lt;token&gt;</code> &mdash; copy that value.</li>
-                                <li>Alternative: Plex web &rarr; Account picture &rarr; Account &rarr; Authorized Devices, or see <a href="https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/" target="_blank" rel="noopener noreferrer">Plex&apos;s official guide</a>.</li>
-                            </ol>
-                        </details>
+                        <small id="plex_token_help">{{if $isEdit}}Leave blank to keep the current token. {{end}}Long-lived auth string for your Plex account. Sign-in above fills this automatically.</small>
                     </div>
 
                     <div class="form-group">
                         <label for="plex_section_id">Plex section ID</label>
                         <input id="plex_section_id" name="plex_section_id" type="text" required
                                value="{{if $isEdit}}{{.Dest.PlexSectionID}}{{end}}"
+                               placeholder="3"
                                aria-describedby="plex_section_id_help">
-                        <small id="plex_section_id_help" class="muted">Numeric ID of your audiobook library/section. Discover sections above fills this automatically.</small>
-                        <details style="margin-top:.4rem">
-                            <summary>Manual: how to find your section ID</summary>
-                            <ol style="margin:.5rem 0 0 1.25rem;padding:0">
-                                <li>In Plex web, click your audiobook library in the sidebar.</li>
-                                <li>The URL bar shows <code>/source/&lt;sectionId&gt;</code> &mdash; that number is your section ID.</li>
-                                <li>API alternative: <code>curl 'http://&lt;plex&gt;:32400/library/sections?X-Plex-Token=&lt;token&gt;'</code> &mdash; pick the <code>&lt;Directory key="..."&gt;</code> with <code>type="artist"</code>.</li>
-                            </ol>
-                        </details>
+                        <small id="plex_section_id_help">Numeric ID. Discover above fills this automatically.</small>
                     </div>
-                </details>
-                <script>
-                (function () {
-                    var tokenInput = document.getElementById('plex_token');
-                    var urlInput = document.getElementById('url');
-                    var stepServer = document.getElementById('plex-step-server');
-                    var stepSections = document.getElementById('plex-step-sections');
-                    var manualDetails = document.getElementById('plex-manual-entry');
-                    if (!tokenInput || !urlInput || !stepServer || !stepSections || !manualDetails) {
-                        return;
-                    }
-
-                    function revealForProgress() {
-                        if (manualDetails.open || tokenInput.value.trim() !== '') {
-                            stepServer.classList.remove('is-hidden');
-                        }
-                        if (manualDetails.open || urlInput.value.trim() !== '') {
-                            stepSections.classList.remove('is-hidden');
-                        }
-                    }
-
-                    function autoLoadServers() {
-                        var discoverServersBtn = document.getElementById('plex-discover-servers-btn');
-                        var serverResult = document.getElementById('plex-server-discover-result');
-                        if (!discoverServersBtn || !serverResult) {
-                            return;
-                        }
-                        if (tokenInput.value.trim() === '') {
-                            return;
-                        }
-                        if (serverResult.innerHTML.trim() === '') {
-                            discoverServersBtn.click();
-                        }
-                    }
-
-                    function autoLoadSections() {
-                        var discoverSectionsBtn = document.getElementById('plex-discover-sections-btn');
-                        var sectionResult = document.getElementById('plex-section-discover-result');
-                        if (!discoverSectionsBtn || !sectionResult) {
-                            return;
-                        }
-                        if (urlInput.value.trim() === '') {
-                            return;
-                        }
-                        if (sectionResult.innerHTML.trim() === '') {
-                            discoverSectionsBtn.click();
-                        }
-                    }
-
-                    function syncFlow() {
-                        revealForProgress();
-                        autoLoadServers();
-                        autoLoadSections();
-                    }
-
-                    tokenInput.addEventListener('input', syncFlow);
-                    tokenInput.addEventListener('change', syncFlow);
-                    urlInput.addEventListener('input', syncFlow);
-                    urlInput.addEventListener('change', syncFlow);
-                    manualDetails.addEventListener('toggle', syncFlow);
-                    document.body.addEventListener('htmx:afterSwap', syncFlow);
-                    syncFlow();
-                })();
-                </script>
-                </section>
-                {{else}}
-                <div class="form-group">
-                    <label for="api_key">API key</label>
-                    <input id="api_key" name="api_key" type="password" autocomplete="off"
-                           {{if not $isEdit}}required{{end}}
-                           aria-describedby="api_key_help">
-                    <small id="api_key_help" class="muted">{{if $isEdit}}Leave blank to keep the current API key. {{end}}{{if eq $dt "abs"}}Admin-scope API key for the Audiobookshelf server.{{else}}{{.DestTypeLabel}} server API key.{{end}}</small>
-                    <details style="margin-top:.4rem">
-                        <summary>How to generate this API key</summary>
-                        {{if eq $dt "emby"}}
-                        <ol style="margin:.5rem 0 0 1.25rem;padding:0">
-                            <li>Open Emby's web UI as an administrator.</li>
-                            <li>Go to <strong>Settings</strong> (gear icon) &rarr; <strong>Server</strong> &rarr; <strong>Advanced</strong> &rarr; <strong>API Keys</strong>.</li>
-                            <li>Click <strong>+ New API Key</strong>. Give it a name like &quot;Audplexus&quot;.</li>
-                            <li>Copy the generated key. Emby may show it only once depending on version.</li>
-                        </ol>
-                        {{else if eq $dt "jellyfin"}}
-                        <ol style="margin:.5rem 0 0 1.25rem;padding:0">
-                            <li>Open Jellyfin's web UI as an administrator.</li>
-                            <li>Go to <strong>Dashboard</strong> &rarr; <strong>API Keys</strong> (under Advanced).</li>
-                            <li>Click <strong>+</strong>. Give it an app name like &quot;Audplexus&quot;.</li>
-                            <li>Copy the generated key. Jellyfin shows it once at creation.</li>
-                        </ol>
-                        {{else if eq $dt "abs"}}
-                        <ol style="margin:.5rem 0 0 1.25rem;padding:0">
-                            <li>Open Audiobookshelf as an administrator.</li>
-                            <li>Go to <strong>Settings</strong> (gear icon) &rarr; <strong>Users</strong>.</li>
-                            <li>Click your admin user.</li>
-                            <li>Scroll to <strong>API Keys</strong> &rarr; <strong>Generate API Key</strong>. Required scope: admin.</li>
-                            <li>The token is shown <em>once</em> at generation. Copy it immediately and paste here.</li>
-                        </ol>
-                        {{end}}
-                    </details>
                 </div>
-                {{if eq $dt "abs"}}
-                {{/*
-                  Audiobookshelf can list its own libraries via
-                  GET /api/libraries. The Discover button posts the
-                  URL + token to the server, which renders an HTML
-                  fragment containing a <select> — picking one fills
-                  the library_id input below via the option's inline
-                  onchange. Saves the user from copy-pasting a UUID
-                  out of a curl response or a URL bar.
-                */}}
+            </details>
+
+            <script>
+            // Toggle a loading spinner on a guided step's number plate.
+            // Exposed globally so the inline hx-on attributes can call it.
+            window.plexStepLoading = function(stepId, on) {
+                var el = document.getElementById(stepId);
+                if (!el) return;
+                el.classList.toggle('is-loading', !!on);
+                // While loading, clear the done/error halo so the spinner
+                // doesn't render under a green check or red ring. The
+                // post-request state machine restores done/error.
+                if (on) {
+                    el.classList.remove('is-done');
+                    el.classList.remove('is-error');
+                }
+            };
+            // After a discover request completes, peek at the XHR status
+            // and surface failures by painting the step red. Success cases
+            // fall through to refreshState() which sets is-done from
+            // input values.
+            window.plexStepFromResponse = function(stepId, ev) {
+                var el = document.getElementById(stepId);
+                if (!el) return;
+                var ok = ev && ev.detail && ev.detail.successful;
+                if (!ok) {
+                    el.classList.add('is-error');
+                    el.classList.remove('is-done');
+                } else {
+                    el.classList.remove('is-error');
+                }
+            };
+
+            (function () {
+                var tokenInput = document.getElementById('plex_token');
+                var urlInput = document.getElementById('url');
+                var sectionInput = document.getElementById('plex_section_id');
+                var step1 = document.getElementById('plex-guided-step-1');
+                var step2 = document.getElementById('plex-guided-step-2');
+                var step3 = document.getElementById('plex-guided-step-3');
+                var manualDetails = document.getElementById('plex-manual-entry');
+                if (!tokenInput || !urlInput || !step1 || !step2 || !step3 || !manualDetails) {
+                    return;
+                }
+
+                // Seeded server-side flags so we don't clobber an edit
+                // that opens with steps already complete. These read off
+                // the initial className the template assigned.
+                var seededStep1Done = step1.classList.contains('is-done');
+                var seededStep2Done = step2.classList.contains('is-done');
+                var seededStep3Done = step3.classList.contains('is-done');
+                var seededStep3Err  = step3.classList.contains('is-error');
+                // Step 3 only earns "done" via affirmative evidence:
+                //   - server says LastHealthOK (seededStep3Done = true), OR
+                //   - the user just picked from the dropdown, OR
+                //   - verifySavedSection() found the stored ID in the picker.
+                // A bare value in #plex_section_id is no longer enough.
+                var step3SelectionVerified = seededStep3Done;
+
+                function dim(el, isDim) {
+                    if (!el) return;
+                    el.classList.toggle('is-dim', !!isDim);
+                }
+                function done(el, isDone) {
+                    if (!el) return;
+                    el.classList.toggle('is-done', !!isDone);
+                }
+
+                function refreshState() {
+                    var hasTokenInForm = tokenInput.value.trim() !== '';
+                    var hasURL = urlInput.value.trim() !== '';
+                    var hasSectionInForm = sectionInput ? sectionInput.value.trim() !== '' : false;
+                    var manualOpen = manualDetails.open;
+
+                    // Step 1: either a token is stored server-side OR the
+                    // user is typing one in. Don't un-set done from the
+                    // seeded value just because the password field is
+                    // empty (it always is on edit).
+                    done(step1, seededStep1Done || hasTokenInForm);
+
+                    // Step 2: dimmed only when nothing upstream has put us
+                    // in a state to discover servers.
+                    var step1IsDone = step1.classList.contains('is-done');
+                    dim(step2, !step1IsDone && !manualOpen);
+                    done(step2, seededStep2Done || hasURL);
+
+                    // Step 3: as above; respect the seeded error state.
+                    // Done only when the picker has affirmed the value —
+                    // either via the server's last-health-OK seed, a
+                    // post-discovery membership check, or a fresh user pick.
+                    var step2IsDone = step2.classList.contains('is-done');
+                    dim(step3, !step2IsDone && !manualOpen);
+                    if (!step3.classList.contains('is-error')) {
+                        done(step3, step3SelectionVerified && hasSectionInForm);
+                    }
+
+                    // Auto-trigger discovery only when we have credentials
+                    // in the form AND no prior result. Don't re-fire on
+                    // edit-mode page open — we already know the answers.
+                    if (manualOpen || hasTokenInForm) {
+                        var serversBtn = document.getElementById('plex-discover-servers-btn');
+                        var rs = document.getElementById('plex-server-discover-result');
+                        if (serversBtn && rs && rs.innerHTML.trim() === '' && hasTokenInForm) serversBtn.click();
+                    }
+                    if (manualOpen || hasURL) {
+                        var sectionsBtn = document.getElementById('plex-discover-sections-btn');
+                        var rs2 = document.getElementById('plex-section-discover-result');
+                        if (sectionsBtn && rs2 && rs2.innerHTML.trim() === '' && hasURL && !seededStep3Done && !seededStep3Err) {
+                            sectionsBtn.click();
+                        }
+                    }
+                }
+
+                tokenInput.addEventListener('input', refreshState);
+                tokenInput.addEventListener('change', refreshState);
+                urlInput.addEventListener('input', refreshState);
+                urlInput.addEventListener('change', refreshState);
+                if (sectionInput) {
+                    sectionInput.addEventListener('input', refreshState);
+                    sectionInput.addEventListener('change', refreshState);
+                }
+                manualDetails.addEventListener('toggle', refreshState);
+                // When the discover-sections fragment lands, verify the
+                // saved section ID actually appears in the picker. The
+                // Plex section we stored (e.g. id=5) may have been deleted
+                // on the server since — we don't want to confirm step 3
+                // green for a section that no longer exists.
+                function verifySavedSection() {
+                    var picker = document.getElementById('plex_section_picker');
+                    if (!picker || !sectionInput) return;
+                    var savedID = sectionInput.value.trim();
+                    if (savedID === '') return;
+                    var found = false;
+                    for (var i = 0; i < picker.options.length; i++) {
+                        if (picker.options[i].value === savedID) { found = true; break; }
+                    }
+                    if (found) {
+                        // Discovery confirms the saved ID is real. Now
+                        // we can trust step 3 as done.
+                        step3SelectionVerified = true;
+                        step3.classList.remove('is-error');
+                    } else {
+                        // Saved ID is stale. Clear the stored value so
+                        // step 3 reverts to "needs a pick", paint it red,
+                        // and surface a one-line explanation above the
+                        // picker.
+                        sectionInput.value = '';
+                        seededStep3Done = false;
+                        step3SelectionVerified = false;
+                        step3.classList.add('is-error');
+                        var rs = document.getElementById('plex-section-discover-result');
+                        if (rs && !rs.querySelector('[data-stale-section]')) {
+                            var note = document.createElement('div');
+                            note.className = 'alert err';
+                            note.setAttribute('data-stale-section', '1');
+                            note.style.cssText = 'font-size:.78rem;padding:.45rem .6rem;margin:0 0 .4rem';
+                            note.innerHTML = '<span class="ico">!</span><div>Saved section <code>' +
+                                savedID + '</code> no longer exists on this Plex server. Pick a new library below.</div>';
+                            rs.insertBefore(note, rs.firstChild);
+                        }
+                    }
+                }
+
+                // When discovery returns and HTMX swaps the result in,
+                // refreshState reads the new input values and lights up
+                // subsequent steps. The XHR-status branching for failures
+                // is owned by plexStepFromResponse.
+                document.body.addEventListener('htmx:afterSwap', function(ev) {
+                    if (ev.target && ev.target.id === 'plex-section-discover-result') {
+                        // The new fragment may or may not contain the
+                        // picker (errors render an alert instead). Verify
+                        // before assuming success.
+                        verifySavedSection();
+                        // A user-driven pick clears any stale error.
+                        if (sectionInput && sectionInput.value.trim() !== '' &&
+                            step3.classList.contains('is-error') === false) {
+                            seededStep3Err = false;
+                        }
+                    }
+                    refreshState();
+                });
+
+                // The picker fires `change` on #plex_section_id when the
+                // user makes a selection. Use that as the affirmative
+                // signal to clear the error halo and refresh state.
+                if (sectionInput) {
+                    sectionInput.addEventListener('change', function() {
+                        if (sectionInput.value.trim() !== '') {
+                            // User picked from the dropdown (or typed a
+                            // valid value into the manual field). Either
+                            // way, treat it as affirmative selection.
+                            step3SelectionVerified = true;
+                            seededStep3Err = false;
+                            step3.classList.remove('is-error');
+                            var rs = document.getElementById('plex-section-discover-result');
+                            if (rs) {
+                                var stale = rs.querySelector('[data-stale-section]');
+                                if (stale) stale.remove();
+                            }
+                        } else {
+                            step3SelectionVerified = false;
+                        }
+                    });
+                }
+
+                refreshState();
+            })();
+            </script>
+        </section>
+
+        {{else}}
+        {{/* ── Emby / Jellyfin / Audiobookshelf ────────────────── */}}
+        <div class="form-group">
+            <label for="url">Server URL</label>
+            <input id="url" name="url" type="url" required
+                   value="{{if $isEdit}}{{.Dest.URL}}{{end}}"
+                   placeholder="http://server.lan:8096"
+                   aria-describedby="url_help">
+            <small id="url_help">Internal address Audplexus uses to reach the server. Use the LAN URL; no public proxy required.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="api_key">API key {{if $isEdit}}<span class="form-label-aside">leave blank to keep</span>{{end}}</label>
+            <input id="api_key" name="api_key" type="password" autocomplete="off"
+                   {{if not $isEdit}}required{{end}}
+                   placeholder="{{if $isEdit}}•••••••••••••••••••••{{else}}Admin-scope key from {{.DestTypeLabel}}{{end}}"
+                   aria-describedby="api_key_help">
+            <small id="api_key_help">{{if eq $dt "abs"}}Admin-scope API key for the Audiobookshelf server.{{else}}{{.DestTypeLabel}} server API key.{{end}}</small>
+        </div>
+        {{end}}
+    </section>
+
+    {{/* ── Section 2: Library (non-Plex) ─────────────────────────── */}}
+    {{if ne $dt "plex"}}
+    <section class="dest-form-section">
+        <header class="dest-form-section-head">
+            <span class="dest-form-eyebrow">Library</span>
+            <span class="dest-form-section-rule" aria-hidden="true"></span>
+        </header>
+
+        {{$discoverPath := ""}}
+        {{if eq $dt "abs"}}{{$discoverPath = "abs"}}{{end}}
+        {{if eq $dt "emby"}}{{$discoverPath = "emby"}}{{end}}
+        {{if eq $dt "jellyfin"}}{{$discoverPath = "jellyfin"}}{{end}}
+
+        <div class="dest-guided-row dest-guided-row--standalone">
+            <div class="dest-guided-text">
+                <div class="dest-guided-title">Discover libraries</div>
+                <div class="dest-guided-desc">Asks {{.DestTypeLabel}} which libraries this key can see and fills the field below.</div>
+            </div>
+            <button type="button" class="btn btn-secondary"
+                    hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/discover/{{$discoverPath}}{{else}}/destinations/discover/{{$discoverPath}}{{end}}"
+                    hx-include="closest form"
+                    hx-target="#{{$discoverPath}}-discover-result"
+                    hx-swap="innerHTML"
+                    hx-disabled-elt="this"
+                    hx-on::before-request="document.getElementById('{{$discoverPath}}-discover-result').setAttribute('aria-busy','true'); document.getElementById('{{$discoverPath}}-discover-result').textContent='Listing libraries…';"
+                    hx-on::after-request="document.getElementById('{{$discoverPath}}-discover-result').setAttribute('aria-busy','false');">
+                Discover
+            </button>
+        </div>
+        <div id="{{$discoverPath}}-discover-result" class="dest-guided-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false"></div>
+
+        <div class="form-group">
+            <label for="library_id">Library ID</label>
+            <input id="library_id" name="library_id" type="text" required
+                   value="{{if $isEdit}}{{.Dest.LibraryID}}{{end}}"
+                   placeholder="{{if eq $dt "abs"}}00d44f08-df07-…{{else}}ItemId{{end}}"
+                   aria-describedby="library_id_help">
+            <small id="library_id_help">{{if eq $dt "abs"}}UUID of the audiobook library on the ABS server.{{else}}{{.DestTypeLabel}} ItemId of the audiobook library on the server.{{end}}</small>
+        </div>
+    </section>
+    {{end}}
+
+    {{/* ── Section 3: Path translation (advanced) ───────────────── */}}
+    <section class="dest-form-section">
+        <details class="dest-form-disclosure">
+            <summary>
+                <span class="dest-form-disclosure-label">Path translation</span>
+                <span class="dest-form-disclosure-hint">Override per-destination paths when Audplexus and {{.DestTypeLabel}} mount the same files at different locations.</span>
+            </summary>
+            <div class="dest-form-disclosure-body">
                 <div class="form-group">
-                    <label>Discover libraries</label>
-                    <div>
-                        <button type="button" class="btn btn-secondary"
-                                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/discover/abs{{else}}/destinations/discover/abs{{end}}"
-                                hx-include="closest form"
-                                hx-target="#abs-discover-result"
-                                hx-swap="innerHTML"
-                                hx-disabled-elt="this"
-                                hx-on::before-request="document.getElementById('abs-discover-result').setAttribute('aria-busy', 'true'); document.getElementById('abs-discover-result').textContent = 'Listing libraries…';"
-                                hx-on::after-request="document.getElementById('abs-discover-result').setAttribute('aria-busy', 'false');">
-                            Discover libraries
-                        </button>
-                        <div id="abs-discover-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
-                    </div>
-                    <small class="muted">Asks Audiobookshelf which libraries this token can see and fills the Library ID below. Or paste the UUID manually if you already have it.</small>
+                    <label for="audiobook_path">Audplexus-side path</label>
+                    <input id="audiobook_path" name="audiobook_path" type="text"
+                           value="{{if $isEdit}}{{.Dest.AudiobookPath}}{{end}}"
+                           placeholder="/audiobooks"
+                           aria-describedby="audiobook_path_help">
+                    <small id="audiobook_path_help">Path Audplexus writes to. Leave blank to use the global Audiobooks path.</small>
+                </div>
+                <div class="form-group">
+                    <label for="destination_path">{{.DestTypeLabel}}-side path</label>
+                    <input id="destination_path" name="destination_path" type="text"
+                           value="{{if $isEdit}}{{.Dest.DestinationPath}}{{end}}"
+                           placeholder="/data/audiobooks"
+                           aria-describedby="destination_path_help">
+                    <small id="destination_path_help">Path {{.DestTypeLabel}} sees the same files at. Used to translate scan triggers.</small>
+                </div>
+            </div>
+        </details>
+    </section>
+
+    {{/* ── Section 4: Setup help (consolidated per-type guidance) ─ */}}
+    <section class="dest-form-section">
+        <details class="dest-form-disclosure dest-form-help">
+            <summary>
+                <span class="dest-form-disclosure-label">Setup help</span>
+                <span class="dest-form-disclosure-hint">Where to find tokens, API keys, and library IDs in {{.DestTypeLabel}}.</span>
+            </summary>
+            <div class="dest-form-disclosure-body">
+                {{if eq $dt "plex"}}
+                <div class="dest-help-block">
+                    <div class="dest-help-eyebrow">Plex token</div>
+                    <ol>
+                        <li>Sign in to Plex web at <code>http://&lt;your-plex&gt;:32400/web</code>.</li>
+                        <li>Play any audiobook (or open its detail page).</li>
+                        <li>Click the <strong>⋯</strong> menu → <strong>Get Info</strong> → <strong>View XML</strong>.</li>
+                        <li>The new tab's URL contains <code>?X-Plex-Token=…</code> — copy that value.</li>
+                        <li>Or see <a href="https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/" target="_blank" rel="noopener noreferrer">Plex's official guide</a>.</li>
+                    </ol>
+                </div>
+                <div class="dest-help-block">
+                    <div class="dest-help-eyebrow">Section ID</div>
+                    <ol>
+                        <li>In Plex web, click your audiobook library in the sidebar.</li>
+                        <li>The URL bar shows <code>/source/&lt;sectionId&gt;</code> — that number is your section ID.</li>
+                        <li>API alternative: <code>curl 'http://&lt;plex&gt;:32400/library/sections?X-Plex-Token=…'</code>.</li>
+                    </ol>
                 </div>
                 {{else if eq $dt "emby"}}
-                {{/*
-                  Emby exposes its libraries via /emby/Library/MediaFolders
-                  which returns Items with Id, Name, CollectionType. The
-                  picker filters to CollectionType="audiobooks", falling
-                  back to showing all libraries when none match so the
-                  user can still pick a misconfigured-but-real library.
-                */}}
-                <div class="form-group">
-                    <label>Discover libraries</label>
-                    <div>
-                        <button type="button" class="btn btn-secondary"
-                                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/discover/emby{{else}}/destinations/discover/emby{{end}}"
-                                hx-include="closest form"
-                                hx-target="#emby-discover-result"
-                                hx-swap="innerHTML"
-                                hx-disabled-elt="this"
-                                hx-on::before-request="document.getElementById('emby-discover-result').setAttribute('aria-busy', 'true'); document.getElementById('emby-discover-result').textContent = 'Listing libraries…';"
-                                hx-on::after-request="document.getElementById('emby-discover-result').setAttribute('aria-busy', 'false');">
-                            Discover libraries
-                        </button>
-                        <div id="emby-discover-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
-                    </div>
-                    <small class="muted">Asks Emby which libraries this key can see and fills the Library ID below. Or paste the ItemId manually if you already have it.</small>
+                <div class="dest-help-block">
+                    <div class="dest-help-eyebrow">API key</div>
+                    <ol>
+                        <li>Open Emby's web UI as an administrator.</li>
+                        <li>Settings (gear) → <strong>Server</strong> → <strong>Advanced</strong> → <strong>API Keys</strong>.</li>
+                        <li>Click <strong>+ New API Key</strong>. Name it <em>"Audplexus"</em>.</li>
+                        <li>Copy the generated key — Emby may show it only once.</li>
+                    </ol>
+                </div>
+                <div class="dest-help-block">
+                    <div class="dest-help-eyebrow">Library ID</div>
+                    <ol>
+                        <li><code>curl 'http://&lt;emby&gt;:8096/emby/Library/MediaFolders?api_key=…' | jq</code></li>
+                        <li>Find the entry where <code>CollectionType</code> is <code>audiobooks</code>.</li>
+                        <li>Copy its <code>ItemId</code>.</li>
+                    </ol>
                 </div>
                 {{else if eq $dt "jellyfin"}}
-                {{/*
-                  Jellyfin exposes its libraries via /Library/VirtualFolders
-                  with Authorization: MediaBrowser Token=... — the picker
-                  filters to CollectionType="books".
-                */}}
-                <div class="form-group">
-                    <label>Discover libraries</label>
-                    <div>
-                        <button type="button" class="btn btn-secondary"
-                                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/discover/jellyfin{{else}}/destinations/discover/jellyfin{{end}}"
-                                hx-include="closest form"
-                                hx-target="#jellyfin-discover-result"
-                                hx-swap="innerHTML"
-                                hx-disabled-elt="this"
-                                hx-on::before-request="document.getElementById('jellyfin-discover-result').setAttribute('aria-busy', 'true'); document.getElementById('jellyfin-discover-result').textContent = 'Listing libraries…';"
-                                hx-on::after-request="document.getElementById('jellyfin-discover-result').setAttribute('aria-busy', 'false');">
-                            Discover libraries
-                        </button>
-                        <div id="jellyfin-discover-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.5rem"></div>
-                    </div>
-                    <small class="muted">Asks Jellyfin which libraries this key can see and fills the Library ID below. Or paste the ItemId manually if you already have it.</small>
+                <div class="dest-help-block">
+                    <div class="dest-help-eyebrow">API key</div>
+                    <ol>
+                        <li>Open Jellyfin's web UI as an administrator.</li>
+                        <li>Dashboard → <strong>API Keys</strong> (under Advanced).</li>
+                        <li>Click <strong>+</strong>. App name <em>"Audplexus"</em>.</li>
+                        <li>Copy the generated key — Jellyfin shows it once at creation.</li>
+                    </ol>
+                </div>
+                <div class="dest-help-block">
+                    <div class="dest-help-eyebrow">Library ID</div>
+                    <ol>
+                        <li><code>curl -H 'Authorization: MediaBrowser Token="…"' 'http://&lt;jellyfin&gt;:8096/Library/VirtualFolders' | jq</code></li>
+                        <li>Find <code>"CollectionType": "books"</code> with an audiobook path.</li>
+                        <li>Copy its <code>ItemId</code>.</li>
+                    </ol>
+                </div>
+                {{else if eq $dt "abs"}}
+                <div class="dest-help-block">
+                    <div class="dest-help-eyebrow">API key</div>
+                    <ol>
+                        <li>Open Audiobookshelf as an administrator.</li>
+                        <li>Settings (gear) → <strong>Users</strong> → click your admin user.</li>
+                        <li>Scroll to <strong>API Keys</strong> → <strong>Generate API Key</strong>. Required scope: <code>admin</code>.</li>
+                        <li>Token is shown once — copy it immediately.</li>
+                    </ol>
+                </div>
+                <div class="dest-help-block">
+                    <div class="dest-help-eyebrow">Library ID</div>
+                    <ol>
+                        <li><code>curl -H 'Authorization: Bearer …' 'http://&lt;abs&gt;/api/libraries' | jq '.libraries[] | {id,name,mediaType}'</code></li>
+                        <li>Find <code>mediaType</code> = <code>book</code>.</li>
+                        <li>Copy its <code>id</code> (UUID).</li>
+                        <li>Or: open ABS web → click your audiobook library → URL <code>/library/&lt;id&gt;</code>.</li>
+                    </ol>
                 </div>
                 {{end}}
-                <div class="form-group">
-                    <label for="library_id">Library ID</label>
-                    <input id="library_id" name="library_id" type="text" required
-                           value="{{if $isEdit}}{{.Dest.LibraryID}}{{end}}"
-                           aria-describedby="library_id_help">
-                    <small id="library_id_help" class="muted">{{if eq $dt "abs"}}UUID of the audiobook library on the ABS server.{{else}}{{.DestTypeLabel}} ItemId of the audiobook library on the server.{{end}}</small>
-                    <details style="margin-top:.4rem">
-                        <summary>How to find your library ID</summary>
-                        {{if eq $dt "emby"}}
-                        <ol style="margin:.5rem 0 0 1.25rem;padding:0">
-                            <li>In a terminal, run: <code>curl 'http://&lt;emby&gt;:8096/emby/Library/MediaFolders?api_key=&lt;your_key&gt;' | jq</code></li>
-                            <li>Find the entry where <code>CollectionType</code> is <code>audiobooks</code>.</li>
-                            <li>Copy its <code>ItemId</code> field. That&apos;s your library ID.</li>
-                        </ol>
-                        {{else if eq $dt "jellyfin"}}
-                        <ol style="margin:.5rem 0 0 1.25rem;padding:0">
-                            <li>In a terminal, run: <code>curl -H 'Authorization: MediaBrowser Token="&lt;your_key&gt;"' 'http://&lt;jellyfin&gt;:8096/Library/VirtualFolders' | jq</code></li>
-                            <li>Find the entry with <code>"CollectionType": "books"</code> and an audiobook path.</li>
-                            <li>Copy its <code>ItemId</code> field. That&apos;s your library ID.</li>
-                            <li>The legacy <code>X-Emby-Token</code> header still works on Jellyfin 10.x but is removed in 12.0 — use the <code>Authorization: MediaBrowser</code> scheme above.</li>
-                        </ol>
-                        {{else if eq $dt "abs"}}
-                        <ol style="margin:.5rem 0 0 1.25rem;padding:0">
-                            <li>In a terminal, run: <code>curl -H 'Authorization: Bearer &lt;your_key&gt;' 'http://&lt;abs&gt;:80/api/libraries' | jq '.libraries[] | {id,name,mediaType}'</code></li>
-                            <li>Find the entry where <code>mediaType</code> is <code>book</code> (your audiobook library).</li>
-                            <li>Copy its <code>id</code> field (a UUID like <code>00d44f08-df07-...</code>). That&apos;s your library ID.</li>
-                            <li>UI alternative: open Audiobookshelf web &rarr; click your audiobook library &rarr; the URL <code>/library/&lt;id&gt;</code> contains it.</li>
-                        </ol>
-                        {{end}}
-                    </details>
-                </div>
-                {{end}}
-
-                <details style="margin:1rem 0;">
-                    <summary>Advanced: per-destination path translation</summary>
-                    <div class="form-group" style="margin-top:.75rem">
-                        <label for="audiobook_path">Audplexus-side audiobook path</label>
-                        <input id="audiobook_path" name="audiobook_path" type="text"
-                               value="{{if $isEdit}}{{.Dest.AudiobookPath}}{{end}}"
-                               placeholder="/audiobooks"
-                               aria-describedby="audiobook_path_help">
-                        <small id="audiobook_path_help" class="muted">Path Audplexus writes to. Leave blank to use the global Audiobooks path.</small>
-                    </div>
-                    <div class="form-group">
-                        <label for="destination_path">{{.DestTypeLabel}}-side audiobook path</label>
-                        <input id="destination_path" name="destination_path" type="text"
-                               value="{{if $isEdit}}{{.Dest.DestinationPath}}{{end}}"
-                               placeholder="/data/audiobooks"
-                               aria-describedby="destination_path_help">
-                        <small id="destination_path_help" class="muted">Path {{.DestTypeLabel}} sees the same files at. Used to translate scan triggers.</small>
-                    </div>
-                </details>
-
-                {{/*
-                  Test result container (must exist before HTMX swap so the
-                  live region announcement fires reliably). role="status"
-                  + aria-live="polite" announces the outcome to SR users
-                  without interrupting them. aria-atomic="true" ensures
-                  the full result is read on update, not just diffs.
-                */}}
-                <div id="test-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" style="margin-top:.75rem"></div>
-
-                <div style="display:flex;gap:.75rem;margin-top:1rem;flex-wrap:wrap">
-                    <a href="/settings#library-destinations" class="btn btn-outline">Cancel</a>
-                    <button type="button" class="btn btn-secondary"
-                            hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/test{{else}}/destinations/test{{end}}"
-                            hx-include="closest form"
-                            hx-target="#test-result"
-                            hx-swap="innerHTML"
-                            hx-disabled-elt="this"
-                            hx-on::before-request="document.getElementById('test-result').setAttribute('aria-busy', 'true'); document.getElementById('test-result').textContent = 'Testing connection…';"
-                            hx-on::after-request="document.getElementById('test-result').setAttribute('aria-busy', 'false');">
-                        Test Connection
-                    </button>
-                    <button type="submit" class="btn btn-primary">{{if $isEdit}}Save Destination{{else}}Create Destination{{end}}</button>
-                </div>
-            </form>
-        </section>
+            </div>
+        </details>
     </section>
-</div>
+
+    {{/* Test result lives just above the sticky bar so its outcome is
+         visible when the user looks at the actions. */}}
+    <div id="test-result" class="dest-form-test-result" role="status" aria-live="polite" aria-atomic="true" aria-busy="false"></div>
+
+    <div class="dest-form-actions">
+        <button type="button" class="btn btn-outline-ds" onclick="window.AudplexusDestModal && window.AudplexusDestModal.close()">Cancel</button>
+        <span class="spacer" aria-hidden="true"></span>
+        <button type="button" class="btn btn-secondary" data-test-button
+                hx-post="{{if $isEdit}}/destinations/{{.Dest.ID}}/test{{else}}/destinations/test{{end}}"
+                hx-include="closest form"
+                hx-target="#test-result"
+                hx-swap="innerHTML"
+                hx-on::before-request="document.getElementById('test-result').setAttribute('aria-busy','true'); document.getElementById('test-result').textContent='Testing connection…';"
+                hx-on::after-request="document.getElementById('test-result').setAttribute('aria-busy','false');">
+            Test connection
+        </button>
+        <button type="submit" class="btn btn-primary">
+            {{if $isEdit}}Save changes{{else}}Create destination{{end}}
+        </button>
+    </div>
+</form>
+{{end}}
 {{end}}

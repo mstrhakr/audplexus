@@ -1,0 +1,130 @@
+{{define "destination_card_body"}}
+{{/*
+  One destination card. Rendered by:
+    - destinations.html (full-width stacked list; rich details visible)
+    - dashboard_summary.html (compact grid; .dest-details hidden via CSS)
+    - handleDestinationToggle (HTMX swap; returns just this card after
+      flipping Enabled so the page doesn't have to reload)
+
+  The data shape matches destinationSummaryView so the same partial
+  handles every caller. .Dest is the single row; on the destinations
+  page that's $dest inside a range.
+*/}}
+{{with .Dest}}
+<div class="dest-card {{.Type}}{{if not .Enabled}} dest-card-disabled{{end}}" id="dest-card-{{.ID}}" aria-labelledby="dest-{{.ID}}-name">
+    <span class="dest-ribbon"></span>
+
+    <div class="dest-head">
+        <span class="type-icon">{{$logo := destLogo .Type}}{{if $logo}}<img src="{{$logo}}" alt="{{.TypeLabel}}">{{else}}{{firstTwo .TypeLabel}}{{end}}</span>
+        <div class="dest-head-text">
+            <div class="dest-name" id="dest-{{.ID}}-name">{{.DisplayName}}</div>
+            <div class="dest-url">{{if .URL}}{{.URL}}{{else}}{{.TypeLabel}}{{end}}</div>
+        </div>
+        <div class="dest-head-status">
+            {{if not .Enabled}}<span class="badge badge-inactive" role="status">Disabled</span>
+            {{else if eq .Health "healthy"}}<span class="badge badge-success" role="status">Healthy</span>
+            {{else if eq .Health "failed"}}<span class="badge badge-error" role="status">Failed</span>
+            {{else if eq .Health "never"}}<span class="badge badge-inactive" role="status">Never checked</span>
+            {{else}}<span class="badge badge-warning" role="status">Not configured</span>{{end}}
+        </div>
+    </div>
+
+    {{if .ItemCountSet}}
+    <div class="dest-row">
+        <span><b>{{.ItemCount}}</b> items on server</span>
+        {{if .CoverageSet}}
+        <span class="coverage-meter" aria-label="Coverage {{.Coverage}}%">
+            <span class="fill{{if lt .Coverage 50}} bad{{else if lt .Coverage 90}} warn{{end}}" style="display:block;width:{{.Coverage}}%;height:100%"></span>
+        </span>
+        <b style="font-size:.76rem">{{.Coverage}}%</b>
+        <span class="dest-row-help">of your library is present on this server</span>
+        {{end}}
+    </div>
+    {{end}}
+
+    {{if and (eq .Health "failed") .LastError}}
+    <div class="alert err" style="font-size:.75rem;padding:.45rem .6rem" id="dest-{{.ID}}-err">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;min-width:0">{{.LastError}}</span>
+    </div>
+    {{else if .HealthDetail}}
+    <div class="dest-row" style="color:#ff9b9b;font-size:.72rem">{{.HealthDetail}}</div>
+    {{end}}
+
+    {{/* Extended details — full-width destinations page only. The
+         dashboard's .destination-summary-list ancestor hides this via
+         CSS so its compact card stays compact. */}}
+    <dl class="dest-details">
+        <dt>Type</dt><dd>{{.TypeLabel}}</dd>
+        <dt>Server URL</dt><dd class="cell-mono">{{if .URL}}{{.URL}}{{else}}<span class="muted">—</span>{{end}}</dd>
+        {{if eq .Type "plex"}}
+        <dt>Plex token</dt><dd>{{if .HasCredential}}<span class="badge badge-success">Set</span>{{else}}<span class="badge badge-warning">Missing</span>{{end}}</dd>
+        <dt>Section ID</dt><dd class="cell-mono">{{if .PlexSectionID}}{{.PlexSectionID}}{{else}}<span class="muted">—</span>{{end}}</dd>
+        {{else}}
+        <dt>API key</dt><dd>{{if .HasCredential}}<span class="badge badge-success">Set</span>{{else}}<span class="badge badge-warning">Missing</span>{{end}}</dd>
+        <dt>Library ID</dt><dd class="cell-mono">{{if .LibraryID}}{{.LibraryID}}{{else}}<span class="muted">—</span>{{end}}</dd>
+        {{end}}
+        {{if or .AudiobookPath .DestinationPath}}
+        <dt>Path translation</dt>
+        <dd class="cell-mono dest-path-translation">
+            {{if .AudiobookPath}}{{.AudiobookPath}}{{else}}<span class="muted">(audiobooks)</span>{{end}}
+            <span class="dest-path-arrow">→</span>
+            {{if .DestinationPath}}{{.DestinationPath}}{{else}}<span class="muted">(same)</span>{{end}}
+        </dd>
+        {{end}}
+        <dt>Last checked</dt>
+        <dd>
+            {{if .LastCheckedAt}}
+            <time datetime="{{(.LastCheckedAt).Format "2006-01-02T15:04:05Z07:00"}}">{{formatDate (.LastCheckedAt | deref)}}</time>
+            {{else}}<span class="muted">Never</span>{{end}}
+        </dd>
+        <dt>Added</dt><dd><time datetime="{{.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{formatDate .CreatedAt}}</time></dd>
+    </dl>
+
+    <div class="dest-actions">
+        <span class="dest-checked">
+            {{if .LastCheckedAt}}
+            Last checked <time datetime="{{(.LastCheckedAt).Format "2006-01-02T15:04:05Z07:00"}}">{{formatDate (.LastCheckedAt | deref)}}</time>
+            {{else}}
+            Never checked
+            {{end}}
+        </span>
+        <span class="dest-actions-buttons">
+            <button type="button" class="btn btn-ghost btn-small" data-test-button data-test-reload
+                hx-post="/destinations/{{.ID}}/test"
+                hx-swap="none"
+                {{if and (eq .Health "failed") .LastError}}aria-describedby="dest-{{.ID}}-err"{{end}}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                Test
+            </button>
+            <button type="button" class="btn btn-outline-ds btn-small"
+                hx-get="/destinations/{{.ID}}/edit"
+                hx-target="#dest-modal-content"
+                hx-swap="innerHTML"
+                {{if and (eq .Health "failed") .LastError}}aria-describedby="dest-{{.ID}}-err"{{end}}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                Edit<span class="visually-hidden"> {{.DisplayName}}</span>
+            </button>
+            <button type="button" class="btn btn-outline-ds btn-small"
+                hx-post="/destinations/{{.ID}}/toggle"
+                hx-target="#dest-card-{{.ID}}"
+                hx-swap="outerHTML">
+                {{if .Enabled}}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+                Disable
+                {{else}}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                Enable
+                {{end}}<span class="visually-hidden"> {{.DisplayName}}</span>
+            </button>
+            <button type="button" class="btn btn-danger btn-small"
+                hx-get="/destinations/{{.ID}}/delete"
+                hx-target="#dest-modal-content"
+                hx-swap="innerHTML">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+                Delete<span class="visually-hidden"> {{.DisplayName}}</span>
+            </button>
+        </span>
+    </div>
+</div>
+{{end}}
+{{end}}

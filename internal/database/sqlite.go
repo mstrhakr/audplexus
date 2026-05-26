@@ -75,7 +75,7 @@ func (s *SQLiteDB) GetBook(ctx context.Context, id int64) (*Book, error) {
 	return s.scanBook(s.db.QueryRowContext(ctx,
 		`SELECT id, asin, title, author, author_asin, narrator, publisher, description,
 		        duration, series, series_position, cover_url, purchase_date, release_date,
-		        drm_type, status, file_path, file_size,
+		        drm_type, status, unavailable_reason, file_path, file_size,
 		        created_at, updated_at
 		 FROM books WHERE id = ?`, id))
 }
@@ -84,7 +84,7 @@ func (s *SQLiteDB) GetBookByASIN(ctx context.Context, asin string) (*Book, error
 	return s.scanBook(s.db.QueryRowContext(ctx,
 		`SELECT id, asin, title, author, author_asin, narrator, publisher, description,
 		        duration, series, series_position, cover_url, purchase_date, release_date,
-		        drm_type, status, file_path, file_size,
+		        drm_type, status, unavailable_reason, file_path, file_size,
 		        created_at, updated_at
 		 FROM books WHERE asin = ?`, asin))
 }
@@ -121,7 +121,7 @@ func (s *SQLiteDB) ListBooks(ctx context.Context, filter BookFilter) ([]Book, in
 
 	query := `SELECT id, asin, title, author, author_asin, narrator, publisher, description,
 	                 duration, series, series_position, cover_url, purchase_date, release_date,
-	                 drm_type, status, file_path, file_size,
+	                 drm_type, status, unavailable_reason, file_path, file_size,
 	                 created_at, updated_at
 	          FROM books` + where + orderBy + limit + offset
 
@@ -142,6 +142,27 @@ func (s *SQLiteDB) ListBooks(ctx context.Context, filter BookFilter) ([]Book, in
 	return books, total, rows.Err()
 }
 
+// CountBooksByStatus runs a single GROUP BY to return every status
+// bucket's row count. The library page's filter tabs used to make 7
+// independent LIMIT-1 counts which was 7x what we actually needed.
+func (s *SQLiteDB) CountBooksByStatus(ctx context.Context) (map[BookStatus]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM books GROUP BY status`)
+	if err != nil {
+		return nil, fmt.Errorf("count books by status: %w", err)
+	}
+	defer rows.Close()
+	out := map[BookStatus]int{}
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, fmt.Errorf("scan status count: %w", err)
+		}
+		out[BookStatus(status)] = n
+	}
+	return out, rows.Err()
+}
+
 func (s *SQLiteDB) UpsertBook(ctx context.Context, book *Book) error {
 	now := time.Now()
 	book.UpdatedAt = now
@@ -152,19 +173,19 @@ func (s *SQLiteDB) UpsertBook(ctx context.Context, book *Book) error {
 	result, err := s.db.ExecContext(ctx,
 		`INSERT INTO books (asin, title, author, author_asin, narrator, publisher, description,
 		                    duration, series, series_position, cover_url, purchase_date, release_date,
-		                    drm_type, status, file_path, file_size, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                    drm_type, status, unavailable_reason, file_path, file_size, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(asin) DO UPDATE SET
 		    title=excluded.title, author=excluded.author, author_asin=excluded.author_asin,
 		    narrator=excluded.narrator, publisher=excluded.publisher, description=excluded.description,
 		    duration=excluded.duration, series=excluded.series, series_position=excluded.series_position,
 		    cover_url=excluded.cover_url, purchase_date=excluded.purchase_date, release_date=excluded.release_date,
-		    drm_type=excluded.drm_type, status=excluded.status, file_path=excluded.file_path,
-		    file_size=excluded.file_size, updated_at=excluded.updated_at`,
+		    drm_type=excluded.drm_type, status=excluded.status, unavailable_reason=excluded.unavailable_reason,
+		    file_path=excluded.file_path, file_size=excluded.file_size, updated_at=excluded.updated_at`,
 		book.ASIN, book.Title, book.Author, book.AuthorASIN, book.Narrator, book.Publisher,
 		book.Description, book.Duration, book.Series, book.SeriesPosition, book.CoverURL,
-		book.PurchaseDate, book.ReleaseDate, book.DRMType, book.Status, book.FilePath,
-		book.FileSize, book.CreatedAt, book.UpdatedAt)
+		book.PurchaseDate, book.ReleaseDate, book.DRMType, book.Status, book.UnavailableReason,
+		book.FilePath, book.FileSize, book.CreatedAt, book.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert book: %w", err)
 	}
@@ -551,7 +572,7 @@ func (s *SQLiteDB) scanBook(row *sql.Row) (*Book, error) {
 	err := row.Scan(&b.ID, &b.ASIN, &b.Title, &b.Author, &b.AuthorASIN, &b.Narrator,
 		&b.Publisher, &b.Description, &b.Duration, &b.Series, &b.SeriesPosition,
 		&b.CoverURL, &b.PurchaseDate, &b.ReleaseDate, &b.DRMType, &b.Status,
-		&b.FilePath, &b.FileSize,
+		&b.UnavailableReason, &b.FilePath, &b.FileSize,
 		&b.CreatedAt, &b.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -567,7 +588,7 @@ func (s *SQLiteDB) scanBookRow(rows *sql.Rows) (*Book, error) {
 	err := rows.Scan(&b.ID, &b.ASIN, &b.Title, &b.Author, &b.AuthorASIN, &b.Narrator,
 		&b.Publisher, &b.Description, &b.Duration, &b.Series, &b.SeriesPosition,
 		&b.CoverURL, &b.PurchaseDate, &b.ReleaseDate, &b.DRMType, &b.Status,
-		&b.FilePath, &b.FileSize,
+		&b.UnavailableReason, &b.FilePath, &b.FileSize,
 		&b.CreatedAt, &b.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("scan book row: %w", err)

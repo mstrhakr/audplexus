@@ -1,0 +1,39 @@
+{{define "content"}}
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1>Destinations</h1>
+            <div class="sub">
+                Media servers Audplexus pushes processed audiobooks into.
+                {{if gt .TotalCount 0}}{{.HealthyCount}} of {{.TotalCount}} healthy.{{end}}
+            </div>
+        </div>
+        <div class="actions">
+            <button type="button" class="btn btn-primary"
+                    hx-get="/destinations/modal"
+                    hx-target="#dest-modal-content"
+                    hx-swap="innerHTML">Add destination</button>
+        </div>
+    </div>
+
+    {{if .Destinations}}
+    <div class="dest-grid">
+        {{range .Destinations}}
+        {{template "destination_card_body" (dict "Dest" .)}}
+        {{end}}
+    </div>
+    {{else}}
+    <button type="button" class="empty-card"
+            hx-get="/destinations/modal"
+            hx-target="#dest-modal-content"
+            hx-swap="innerHTML"
+            style="display:block;width:100%;background:var(--surface);border:1px dashed var(--border);color:inherit;cursor:pointer;text-align:left;padding:2.5rem 2rem;font:inherit">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:.6rem;color:var(--text-muted)">
+            <div style="width:48px;height:48px;border-radius:999px;background:var(--surface-2);display:flex;align-items:center;justify-content:center;color:var(--text);font-size:1.6rem">+</div>
+            <span style="font-weight:600;color:var(--text);font-size:1rem">Add your first destination</span>
+            <span style="font-size:.85rem">Plex · Emby · Jellyfin · Audiobookshelf</span>
+        </div>
+    </button>
+    {{end}}
+</div>
+{{end}}

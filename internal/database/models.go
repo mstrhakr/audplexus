@@ -23,9 +23,10 @@ type Book struct {
 	PurchaseDate   time.Time  `json:"purchase_date"`
 	ReleaseDate    time.Time  `json:"release_date"`
 	DRMType        string     `json:"drm_type"` // "Adrm" or "Mpeg"
-	Status         BookStatus `json:"status"`
-	FilePath       string     `json:"file_path"`
-	FileSize       int64      `json:"file_size"`
+	Status             BookStatus `json:"status"`
+	UnavailableReason  string     `json:"unavailable_reason,omitempty"`
+	FilePath           string     `json:"file_path"`
+	FileSize           int64      `json:"file_size"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
@@ -42,6 +43,12 @@ const (
 	BookStatusComplete    BookStatus = "complete"
 	BookStatusFailed      BookStatus = "failed"
 	BookStatusSkipped     BookStatus = "skipped"
+	// BookStatusUnavailable marks a book that is in the user's Audible
+	// library but not actually downloadable (e.g. license denied because it
+	// was once a Plus-catalog title that's no longer included). We keep the
+	// row so the UI can surface why it's missing instead of silently
+	// dropping it during sync.
+	BookStatusUnavailable BookStatus = "unavailable"
 )
 
 // DownloadQueue represents a queued download job.

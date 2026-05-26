@@ -1,243 +1,92 @@
 {{define "content"}}
-<h1>Library</h1>
-
-<div class="actions-bar">
-    <div class="btn-group">
-        <button hx-post="/api/sync/quick" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-secondary" title="Update Audible library only — fast check for new books">
-            Quick Sync
-        </button>
-        <button hx-post="/api/sync/full" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-primary" title="Full sync: Audible + filesystem scan + media server library check">
-            Full Sync
-        </button>
-    </div>
-    <button hx-post="/api/downloads/queue-all" hx-swap="none" class="btn btn-secondary">
-        Queue All New
-    </button>
-    <button hx-post="/api/downloads/retry-all" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-danger">
-        Retry All Failed
-    </button>
-    <button hx-post="/api/library/reorganize" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-secondary">
-        Reorganize Library
-    </button>
-</div>
-
-<div class="sync-status-row">
-    <span id="sync-status" class="sync-status-wrap" hx-get="/api/sync/status" hx-trigger="load" hx-swap="innerHTML"></span>
-</div>
-
-<div class="search-bar">
-    <input type="text" name="search" placeholder="Search books..."
-           hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
-           hx-trigger="keyup changed delay:300ms" hx-include="[name='status'],[name='sort'],[name='dir']"
-           value="{{.Filter.Search}}">
-    <select name="status" aria-label="Filter books by status"
-            hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
-            hx-trigger="change" hx-include="[name='search'],[name='sort'],[name='dir']">
-        <option value="">All Statuses</option>
-        <option value="new">New</option>
-        <option value="queued">Queued</option>
-        <option value="downloading">Downloading</option>
-        <option value="complete">Complete</option>
-        <option value="failed">Failed</option>
-    </select>
-</div>
-
-<div class="table-container" id="book-table">
-    {{template "library_table.html" .}}
-</div>
-
-<div id="book-detail-modal" class="library-modal" aria-hidden="true" style="display:none;">
-    <div class="library-modal-backdrop" data-close-book-modal></div>
-    <div class="library-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="book-detail-modal-title">
-        <button type="button" class="library-modal-close" data-close-book-modal aria-label="Close details">&times;</button>
-        <div id="book-detail-modal-content" class="library-modal-content">
-            <p class="muted">Loading book details...</p>
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1>Library</h1>
+            <div class="sub">{{.Total}} items synced from Audible.</div>
+        </div>
+        <div class="actions">
+            <div class="btn-group">
+                <button hx-post="/api/sync/quick" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-secondary" title="Update Audible library only — fast check for new books">Quick Sync</button>
+                <button hx-post="/api/sync/full" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-primary" title="Full sync: Audible + filesystem scan + media server library check">Full Sync</button>
+            </div>
+            <button hx-post="/api/downloads/queue-all" hx-swap="none" class="btn btn-primary">Queue New ({{index .StatusCounts "new"}})</button>
+            <button hx-post="/api/downloads/retry-all" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-danger">Retry Failed</button>
         </div>
     </div>
+
+    <span id="sync-status" class="sync-status-wrap" hx-get="/api/sync/status" hx-trigger="load" hx-swap="innerHTML"></span>
+
+    {{$active := .ActiveStatus}}
+    {{$search := .Filter.Search}}
+    <div class="tabs" role="tablist" aria-label="Filter library by status">
+        <a href="/library{{if $search}}?search={{$search}}{{end}}" class="{{if eq $active ""}}active{{end}}" role="tab">All <span class="count">{{index .StatusCounts "all"}}</span></a>
+        <a href="/library?status=new{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "new"}}active{{end}}" role="tab">New <span class="count">{{index .StatusCounts "new"}}</span></a>
+        <a href="/library?status=downloading{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "downloading"}}active{{end}}" role="tab">In Progress <span class="count">{{index .StatusCounts "in_progress"}}</span></a>
+        <a href="/library?status=queued{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "queued"}}active{{end}}" role="tab">Waiting <span class="count">{{index .StatusCounts "waiting"}}</span></a>
+        <a href="/library?status=complete{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "complete"}}active{{end}}" role="tab">Complete <span class="count">{{index .StatusCounts "complete"}}</span></a>
+        <a href="/library?status=failed{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "failed"}}active{{end}}" role="tab">Failed <span class="count">{{index .StatusCounts "failed"}}</span></a>
+        <a href="/library?status=unavailable{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "unavailable"}}active{{end}}" role="tab" title="In your Audible library but not downloadable (e.g. removed from Plus)">Unavailable <span class="count">{{index .StatusCounts "unavailable"}}</span></a>
+    </div>
+
+    <div class="filter-bar">
+        <div class="search-input">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" name="search" placeholder="Search title, author, narrator, ASIN…"
+                   hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
+                   hx-trigger="keyup changed delay:300ms"
+                   hx-include="[name='status'],[name='sort'],[name='dir']"
+                   value="{{$search}}">
+        </div>
+        <select name="status" aria-label="Filter books by status"
+                hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
+                hx-trigger="change"
+                hx-include="[name='search'],[name='sort'],[name='dir']">
+            <option value="" {{if eq $active ""}}selected{{end}}>All statuses</option>
+            <option value="new" {{if eq $active "new"}}selected{{end}}>New</option>
+            <option value="queued" {{if eq $active "queued"}}selected{{end}}>Queued</option>
+            <option value="downloading" {{if eq $active "downloading"}}selected{{end}}>Downloading</option>
+            <option value="complete" {{if eq $active "complete"}}selected{{end}}>Complete</option>
+            <option value="failed" {{if eq $active "failed"}}selected{{end}}>Failed</option>
+            <option value="unavailable" {{if eq $active "unavailable"}}selected{{end}}>Unavailable</option>
+        </select>
+        <select name="sort" aria-label="Sort by"
+                hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
+                hx-trigger="change"
+                hx-include="[name='search'],[name='status'],[name='dir']">
+            <option value="purchase_date" {{if eq .Filter.SortBy "purchase_date"}}selected{{end}}>Purchased</option>
+            <option value="title" {{if eq .Filter.SortBy "title"}}selected{{end}}>Title</option>
+            <option value="author" {{if eq .Filter.SortBy "author"}}selected{{end}}>Author</option>
+            <option value="status" {{if eq .Filter.SortBy "status"}}selected{{end}}>Status</option>
+        </select>
+        <select name="dir" aria-label="Sort direction"
+                hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
+                hx-trigger="change"
+                hx-include="[name='search'],[name='status'],[name='sort']">
+            <option value="desc" {{if eq .Filter.SortDir "desc"}}selected{{end}}>Desc</option>
+            <option value="asc" {{if eq .Filter.SortDir "asc"}}selected{{end}}>Asc</option>
+        </select>
+    </div>
+
+    <div id="book-table">
+        {{template "library_table.html" .}}
+    </div>
+
+    {{template "book_detail_modal.html" .}}
 </div>
 
 <script>
-(function() {
-    var modal = document.getElementById('book-detail-modal');
-    var modalContent = document.getElementById('book-detail-modal-content');
-    var previousOverflow = '';
-    var activeBookURL = '';
-    var listURL = new URL(window.location.href);
-    listURL.searchParams.delete('book');
-    listURL.hash = '';
-    var baseListURL = listURL.pathname + (listURL.search ? listURL.search : '');
-
-    if (!modal || !modalContent) {
-        return;
-    }
-
-    function closeBookModal() {
-        modal.style.display = 'none';
-        modal.setAttribute('aria-hidden', 'true');
-        document.body.classList.remove('library-modal-open');
-        document.body.style.overflow = previousOverflow;
-        activeBookURL = '';
-        if (window.location.search.indexOf('book=') !== -1 || window.location.hash === '#book-detail') {
-            history.replaceState({}, '', baseListURL);
-        }
-    }
-
-    function openBookModal() {
-        previousOverflow = document.body.style.overflow || '';
-        modal.style.display = 'block';
-        modal.setAttribute('aria-hidden', 'false');
-        document.body.classList.add('library-modal-open');
-        document.body.style.overflow = 'hidden';
-    }
-
-    function setLoadingState() {
-        modalContent.innerHTML = '<p class="muted">Loading book details...</p>';
-    }
-
-    function setErrorState(message) {
-        modalContent.innerHTML = '<div class="info-box" style="border-color: var(--error);"><strong>Error:</strong> ' + message + '</div>';
-    }
-
-    function loadBookDetails(url, pushHistory) {
-        activeBookURL = url;
-        openBookModal();
-        setLoadingState();
-
-        fetch(url + (url.indexOf('?') === -1 ? '?' : '&') + 'view=modal', {
-            headers: { 'HX-Request': 'true' }
-        })
-            .then(function(resp) {
-                if (!resp.ok) {
-                    throw new Error('Failed to load details.');
-                }
-                return resp.text();
-            })
-            .then(function(html) {
-                if (activeBookURL !== url) {
-                    return;
-                }
-                modalContent.innerHTML = html;
-                var heading = modalContent.querySelector('h2');
-                if (heading) {
-                    heading.id = 'book-detail-modal-title';
-                }
-                if (window.htmx) {
-                    htmx.process(modalContent);
-                }
-                if (pushHistory) {
-                    var id = url.split('/').pop();
-                    var modalURL = new URL(baseListURL, window.location.origin);
-                    modalURL.searchParams.set('book', id);
-                    modalURL.hash = 'book-detail';
-                    history.replaceState({ bookId: id }, '', modalURL.pathname + modalURL.search + modalURL.hash);
-                }
-            })
-            .catch(function(err) {
-                if (activeBookURL !== url) {
-                    return;
-                }
-                setErrorState(err.message || 'Could not load book details.');
-            });
-    }
-
-    document.addEventListener('click', function(e) {
-        var closeTarget = e.target.closest('[data-close-book-modal]');
-        if (closeTarget) {
-            e.preventDefault();
-            closeBookModal();
-            return;
-        }
-
-        var link = e.target.closest('.book-detail-link');
-        if (!link) {
-            return;
-        }
-        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
-            return;
-        }
-        e.preventDefault();
-        var href = link.getAttribute('href');
-        if (!href) {
-            return;
-        }
-        loadBookDetails(href, true);
+// Library-page-only: close any open row-more dropdowns when clicking
+// outside them. The shared modal partial handles its own click delegation
+// for .book-detail-link → modal open.
+document.addEventListener('click', function(e) {
+    var openMenus = document.querySelectorAll('details.row-more-menu[open]');
+    if (!openMenus.length) return;
+    var insideMenu = e.target.closest('details.row-more-menu');
+    var clickedItem = e.target.closest('.row-more-item');
+    openMenus.forEach(function(m) {
+        if (m !== insideMenu || clickedItem) m.removeAttribute('open');
     });
-
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && modal.getAttribute('aria-hidden') === 'false') {
-            closeBookModal();
-        }
-    });
-
-    var params = new URLSearchParams(window.location.search);
-    var bookID = params.get('book');
-    if (bookID) {
-        loadBookDetails('/library/' + encodeURIComponent(bookID), false);
-    }
-})();
+});
 </script>
-
-<style>
-.library-modal {
-    position: fixed;
-    inset: 0;
-    z-index: 1200;
-}
-
-.library-modal-backdrop {
-    position: absolute;
-    inset: 0;
-    background: rgba(7, 10, 18, 0.72);
-    backdrop-filter: blur(1px);
-}
-
-.library-modal-dialog {
-    position: relative;
-    width: min(960px, calc(100vw - 2rem));
-    max-height: calc(100vh - 2rem);
-    margin: 1rem auto;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: 0 22px 48px rgba(0, 0, 0, 0.45);
-    overflow: auto;
-}
-
-.library-modal-close {
-    position: sticky;
-    top: 0.5rem;
-    float: right;
-    margin: 0.5rem;
-    border: 1px solid var(--border);
-    background: var(--surface-2);
-    color: var(--text);
-    width: 2rem;
-    height: 2rem;
-    border-radius: 999px;
-    cursor: pointer;
-    font-size: 1.2rem;
-    line-height: 1;
-    z-index: 1;
-}
-
-.library-modal-content {
-    padding: 1rem 1.5rem 1.5rem;
-}
-
-.library-modal-content .book-detail {
-    margin-top: 0.5rem;
-}
-
-@media (max-width: 860px) {
-    .library-modal-dialog {
-        width: calc(100vw - 1rem);
-        margin: 0.5rem auto;
-        max-height: calc(100vh - 1rem);
-    }
-
-    .library-modal-content {
-        padding: 0.75rem;
-    }
-}
-</style>
 {{end}}

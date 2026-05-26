@@ -38,7 +38,84 @@ var (
 	globalLevel   = zerolog.InfoLevel
 	useJSONOutput = true
 	levelMu       sync.RWMutex
+
+	// ringBuf is a small in-memory tail of recent log lines, exposed via
+	// the web UI's diagnostics tab. Capped to 1024 entries; older lines
+	// drop off the back. Threads through io.MultiWriter so all log output
+	// also still goes to stderr — this is additive, not a replacement.
+	ringBuf = newRingBuffer(1024)
 )
+
+// RingEntry is a single tail-buffer log line as captured by the
+// in-memory ring buffer. Time is the time the line was written.
+type RingEntry struct {
+	Time time.Time `json:"time"`
+	Line string    `json:"line"`
+}
+
+type ringBuffer struct {
+	mu      sync.RWMutex
+	entries []RingEntry
+	head    int
+	cap     int
+	count   int
+}
+
+func newRingBuffer(capacity int) *ringBuffer {
+	return &ringBuffer{entries: make([]RingEntry, capacity), cap: capacity}
+}
+
+// Write implements io.Writer. Splits on newlines so multi-line writes
+// (rare from zerolog, but possible from ConsoleWriter) land as separate
+// entries. Empty trailing tokens are dropped.
+func (rb *ringBuffer) Write(p []byte) (int, error) {
+	now := time.Now()
+	lines := strings.Split(strings.TrimRight(string(p), "\n"), "\n")
+	rb.mu.Lock()
+	for _, l := range lines {
+		if l == "" {
+			continue
+		}
+		rb.entries[rb.head] = RingEntry{Time: now, Line: l}
+		rb.head = (rb.head + 1) % rb.cap
+		if rb.count < rb.cap {
+			rb.count++
+		}
+	}
+	rb.mu.Unlock()
+	return len(p), nil
+}
+
+// Snapshot returns the most recent n entries (oldest first). n=0 returns
+// everything currently in the buffer.
+func (rb *ringBuffer) Snapshot(n int) []RingEntry {
+	rb.mu.RLock()
+	defer rb.mu.RUnlock()
+	if rb.count == 0 {
+		return nil
+	}
+	if n <= 0 || n > rb.count {
+		n = rb.count
+	}
+	out := make([]RingEntry, 0, n)
+	// Oldest valid entry is (head - count) mod cap.
+	start := (rb.head - rb.count + rb.cap) % rb.cap
+	skip := rb.count - n
+	for i := 0; i < rb.count; i++ {
+		if i < skip {
+			continue
+		}
+		out = append(out, rb.entries[(start+i)%rb.cap])
+	}
+	return out
+}
+
+// TailLogs returns the most recent n lines captured by the in-memory
+// ring buffer. n=0 returns everything currently buffered (up to 1024).
+// Safe for concurrent use.
+func TailLogs(n int) []RingEntry {
+	return ringBuf.Snapshot(n)
+}
 
 // Init configures the global logging defaults. Call once at startup.
 func Init(level string, jsonOutput bool) {
@@ -75,13 +152,16 @@ func setGlobalLogger(zl zerolog.Logger) {
 }
 
 func outputWriter() io.Writer {
+	// io.MultiWriter tees every line to the ring buffer in addition to
+	// stderr / ConsoleWriter, so /api/diagnostics/logs/tail can serve a
+	// recent-history snapshot without us having to scrape the docker log.
 	if useJSONOutput {
-		return os.Stderr
+		return io.MultiWriter(os.Stderr, ringBuf)
 	}
-	return zerolog.ConsoleWriter{
+	return io.MultiWriter(zerolog.ConsoleWriter{
 		Out:        os.Stderr,
 		TimeFormat: "15:04:05",
-	}
+	}, ringBuf)
 }
 
 func (l *Logger) build() zerolog.Logger {

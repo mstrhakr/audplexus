@@ -1,45 +1,149 @@
 {{define "library_row.html"}}
 <tr id="book-row-{{.Book.ID}}">
-    <td class="cover-cell">
-        {{if .Book.CoverURL}}<img src="{{.Book.CoverURL}}" alt="" class="cover-thumb">{{end}}
+    <td class="col-cover">
+        <a href="/library/{{.Book.ID}}" class="book-detail-link" data-book-id="{{.Book.ID}}" aria-label="Open details for {{.Book.Title}}">
+            {{if .Book.CoverURL}}
+            <img src="{{.Book.CoverURL}}" alt="" class="cover-thumb">
+            {{else}}
+            <span class="cover-thumb cover-thumb-placeholder" aria-hidden="true"></span>
+            {{end}}
+        </a>
     </td>
     <td>
-        <a href="/library/{{.Book.ID}}" class="book-detail-link" data-book-id="{{.Book.ID}}">{{.Book.Title}}</a>
-        {{if .Book.Series}}<br><small>{{.Book.Series}} #{{.Book.SeriesPosition}}</small>{{end}}
+        <div class="cell-title">
+            <a href="/library/{{.Book.ID}}" class="book-detail-link" data-book-id="{{.Book.ID}}">{{.Book.Title}}</a>
+            {{if eq (printf "%s" .Book.Status) "unavailable"}}
+            <div class="unavailable-inline" role="status" style="display:inline-flex;gap:.35rem;align-items:center;color:#e0a14b;font-size:.78rem;margin-left:.4rem;vertical-align:middle;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:0 0 auto;"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <span>{{if .Book.UnavailableReason}}{{.Book.UnavailableReason}}{{else}}Unavailable on Audible{{end}}</span>
+            </div>
+            {{end}}
+            {{if .Book.Narrator}}<small>narr. {{.Book.Narrator}}</small>{{end}}
+        </div>
     </td>
     <td>{{.Book.Author}}</td>
-    <td>{{formatDuration .Book.Duration}}</td>
-    <td><span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span></td>
     <td>
+        {{if .Book.Series}}<span class="cell-mono" style="color:var(--text)">{{.Book.Series}} #{{.Book.SeriesPosition}}</span>
+        {{else}}<span class="cell-mono">—</span>{{end}}
+    </td>
+    <td class="cell-mono">{{formatDuration .Book.Duration}}</td>
+    <td class="cell-mono">{{formatDate .Book.PurchaseDate}}</td>
+    <td><span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span></td>
+    <td class="col-presence">
+        {{if .Presence}}
+        <div class="presence-cell" role="list" aria-label="Presence">
+            {{range .Presence}}
+            {{if eq .Kind "disk"}}
+            <span class="presence-chip presence-chip--disk{{if .Lit}} is-lit{{end}}"
+                  role="listitem"
+                  title="{{if .Lit}}{{.DisplayName}}{{else}}Not on disk yet{{end}}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 11v6c0 1.66 4 3 9 3s9-1.34 9-3v-6"/></svg>
+            </span>
+            {{else}}
+            <span class="presence-chip presence-chip--dest{{if .Lit}} is-lit{{end}} is-{{.State}}"
+                  role="listitem"
+                  title="{{.DisplayName}} — {{.State}}">
+                {{if .LogoURL}}<img src="{{.LogoURL}}" alt="">{{else}}<span class="presence-chip-fallback">{{firstTwo .Type}}</span>{{end}}
+            </span>
+            {{end}}
+            {{end}}
+        </div>
+        {{else}}
+        <span class="cell-mono">—</span>
+        {{end}}
+    </td>
+    <td class="col-actions">
         <div class="table-actions" id="book-actions-{{.Book.ID}}" data-book-id="{{.Book.ID}}" data-asin="{{.Book.ASIN}}">
             <div class="library-row-default-actions{{if .BookAction.ShowCancel}} is-hidden{{end}}">
-            {{if eq (printf "%s" .Book.Status) "new"}}
-            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" hx-on::after-request="this.remove()" class="btn btn-small btn-primary">Queue</button>
-            {{else if eq (printf "%s" .Book.Status) "failed"}}
-            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" hx-on::after-request="this.remove()" class="btn btn-small btn-primary">Retry</button>
-            {{end}}
+                {{/* Primary actions, always visible. View opens the modal
+                     via the .book-detail-link delegated handler on library.html. */}}
+                <a href="/library/{{.Book.ID}}" class="btn btn-small btn-secondary book-detail-link" data-book-id="{{.Book.ID}}" title="View details">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    View
+                </a>
 
-            {{if .BookAction.ShowConvert}}
-            <button hx-post="/api/books/{{.Book.ID}}/convert?format={{.BookAction.ConvertFormat}}"
-                hx-confirm="{{.BookAction.ConvertConfirm}}"
-                hx-swap="none"
-                class="btn btn-small btn-secondary">{{.BookAction.ConvertLabel}}</button>
-            {{end}}
+                {{if .BookAction.ShowDelete}}
+                <button hx-post="/api/books/{{.Book.ID}}/delete-media?view=row"
+                    hx-confirm="{{.BookAction.DeleteConfirm}}"
+                    hx-target="#book-row-{{.Book.ID}}"
+                    hx-swap="outerHTML"
+                    class="btn btn-small btn-danger"
+                    title="Delete downloaded files">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
+                    Delete
+                </button>
+                {{end}}
 
-            {{if .BookAction.ShowDelete}}
-            <button hx-post="/api/books/{{.Book.ID}}/delete-media?view=row"
-                hx-confirm="{{.BookAction.DeleteConfirm}}"
-                hx-target="#book-row-{{.Book.ID}}"
-                hx-swap="outerHTML"
-                class="btn btn-small btn-danger">Delete Files</button>
-            {{end}}
+                {{/* "More" dropdown — Queue/Retry, Re-download, Re-sync
+                     metadata, Convert. Uses native <details> so no extra
+                     JS is needed; clicking outside closes via a
+                     library-page-level handler. */}}
+                <details class="row-more-menu">
+                    <summary class="btn btn-small btn-ghost row-more-toggle" aria-label="More actions" title="More actions">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>
+                    </summary>
+                    <div class="row-more-panel" role="menu">
+                        {{if eq (printf "%s" .Book.Status) "new"}}
+                        <button type="button" class="row-more-item"
+                            hx-post="/api/downloads/queue/{{.Book.ASIN}}"
+                            hx-swap="none"
+                            role="menuitem">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            Queue Download
+                        </button>
+                        {{else if eq (printf "%s" .Book.Status) "failed"}}
+                        <button type="button" class="row-more-item"
+                            hx-post="/api/downloads/queue/{{.Book.ASIN}}"
+                            hx-swap="none"
+                            role="menuitem">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/></svg>
+                            Retry Download
+                        </button>
+                        {{else if eq (printf "%s" .Book.Status) "complete"}}
+                        <button type="button" class="row-more-item"
+                            hx-post="/api/downloads/redownload/{{.Book.ASIN}}"
+                            hx-confirm="Re-download '{{.Book.Title}}'? This removes the existing file first."
+                            hx-swap="none"
+                            role="menuitem">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
+                            Re-download
+                        </button>
+                        {{end}}
+
+                        <button type="button" class="row-more-item"
+                            hx-post="/api/books/{{.Book.ID}}/resync-metadata"
+                            hx-swap="none"
+                            role="menuitem">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v6h6"/><path d="M20 20v-6h-6"/><path d="M4 10a8 8 0 0 1 14.93-2"/><path d="M20 14a8 8 0 0 1-14.93 2"/></svg>
+                            Re-sync metadata
+                        </button>
+
+                        {{if .BookAction.ShowConvert}}
+                        <button type="button" class="row-more-item"
+                            hx-post="/api/books/{{.Book.ID}}/convert?format={{.BookAction.ConvertFormat}}"
+                            hx-confirm="{{.BookAction.ConvertConfirm}}"
+                            hx-swap="none"
+                            role="menuitem">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                            {{.BookAction.ConvertLabel}}
+                        </button>
+                        {{end}}
+
+                        {{if .Book.ASIN}}
+                        <a class="row-more-item" href="https://www.audible.com/pd/{{.Book.ASIN}}" target="_blank" rel="noopener noreferrer" role="menuitem">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                            Open on Audible
+                        </a>
+                        {{end}}
+                    </div>
+                </details>
             </div>
 
             <div class="library-row-cancel-action{{if not .BookAction.ShowCancel}} is-hidden{{end}}">
-            <button hx-post="/api/downloads/cancel-by-asin/{{.Book.ASIN}}"
-                hx-swap="none"
-                hx-on::before-request="this.disabled=true; this.textContent='Cancelling...'"
-                class="btn btn-small btn-danger">Cancel</button>
+                <button hx-post="/api/downloads/cancel-by-asin/{{.Book.ASIN}}"
+                    hx-swap="none"
+                    hx-on::before-request="this.disabled=true; this.textContent='Cancelling...'"
+                    class="btn btn-small btn-danger">Cancel</button>
             </div>
         </div>
     </td>

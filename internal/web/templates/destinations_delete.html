@@ -1,27 +1,78 @@
-{{define "content"}}
-<div class="settings-page">
-    <header class="settings-header">
-        <h1>Delete Library Destination</h1>
-    </header>
-
-    <section class="auth-grid">
-        <section class="auth-panel" aria-labelledby="del-heading">
-            <h3 id="del-heading">Delete &quot;{{.Dest.DisplayName}}&quot;?</h3>
-            <p>
-                This removes the {{.Dest.TypeLabel}} destination from Audplexus.
-                Your media files and the {{.Dest.TypeLabel}} server itself are not touched.
-                Audplexus will stop fanning out post-download work to this destination.
-            </p>
-            <p><strong>This cannot be undone.</strong> The per-(book, destination) sync history for this destination is also deleted.</p>
-
-            <form method="POST" action="/destinations/{{.Dest.ID}}/delete">
-                <input type="hidden" name="confirm" value="1">
-                <div style="display:flex;gap:.75rem">
-                    <a href="/settings#library-destinations" class="btn btn-outline">Cancel</a>
-                    <button type="submit" class="btn btn-danger">Permanently delete</button>
-                </div>
-            </form>
-        </section>
-    </section>
+{{define "destination_delete_body"}}
+{{if .ModalSuccess}}
+<div class="alert ok" style="margin:0">
+    <span class="ico">✓</span>
+    <div>
+        <strong>Destination deleted.</strong>
+        <div class="muted" style="font-size:.85rem;margin-top:.25rem">Refreshing…</div>
+    </div>
 </div>
+{{else}}
+{{$logo := destLogo .Dest.Type}}
+
+<header class="dest-form-head dest-form-head--danger">
+    <div class="dest-form-head-mark">
+        {{if $logo}}<img src="{{$logo}}" alt="">{{else}}<span>{{firstTwo .Dest.TypeLabel}}</span>{{end}}
+    </div>
+    <div class="dest-form-head-text">
+        <div class="dest-form-eyebrow" style="color:#ff9b9b">Delete destination</div>
+        <h2 id="form-heading">{{.Dest.DisplayName}}</h2>
+        <p>{{.Dest.TypeLabel}}{{if .Dest.URL}} · {{.Dest.URL}}{{end}}</p>
+    </div>
+</header>
+
+<div class="alert err" style="margin-bottom:1rem">
+    <span class="ico">!</span>
+    <div>
+        <strong>This removes the {{.Dest.TypeLabel}} destination from Audplexus.</strong>
+        <div style="font-size:.85rem;margin-top:.35rem;line-height:1.55">
+            Your media files and the {{.Dest.TypeLabel}} server itself are not touched —
+            Audplexus will simply stop fanning out post-download work here. The
+            per-(book, destination) sync history for this destination is also deleted.
+            <strong>This cannot be undone.</strong>
+        </div>
+    </div>
+</div>
+
+<form hx-post="/destinations/{{.Dest.ID}}/delete"
+      hx-target="#dest-modal-content"
+      hx-swap="innerHTML"
+      hx-headers='{"X-Dest-Modal":"1"}'
+      class="dest-form"
+      id="dest-delete-form">
+    <input type="hidden" name="confirm" value="1">
+
+    <div class="form-group">
+        <label for="dest-delete-confirm">
+            Type <code>DELETE</code> to confirm
+        </label>
+        <input id="dest-delete-confirm" type="text" autocomplete="off" spellcheck="false"
+               class="dest-delete-confirm-input" placeholder="DELETE" aria-describedby="dest-delete-confirm-help">
+        <small id="dest-delete-confirm-help">Case-sensitive. Guards against accidental removal of a healthy destination.</small>
+    </div>
+
+    <div class="dest-form-actions">
+        <button type="button" class="btn btn-outline-ds" onclick="window.AudplexusDestModal && window.AudplexusDestModal.close()">Cancel</button>
+        <span class="spacer" aria-hidden="true"></span>
+        <button type="submit" class="btn btn-danger" id="dest-delete-submit" disabled>
+            Permanently delete
+        </button>
+    </div>
+</form>
+
+<script>
+(function() {
+    var input = document.getElementById('dest-delete-confirm');
+    var submit = document.getElementById('dest-delete-submit');
+    if (!input || !submit) return;
+    function check() {
+        var ok = input.value === 'DELETE';
+        submit.disabled = !ok;
+        input.classList.toggle('is-armed', ok);
+    }
+    input.addEventListener('input', check);
+    check();
+})();
+</script>
+{{end}}
 {{end}}

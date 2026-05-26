@@ -1,47 +1,71 @@
 {{define "content"}}
-<h1>Dashboard</h1>
-
-<div class="actions-bar">
-    <div class="btn-group">
-        <button hx-post="/api/sync/quick" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-secondary" title="Update Audible library only — fast check for new books">
-            Quick Sync
-        </button>
-        <button hx-post="/api/sync/full" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-primary" title="Full sync: Audible + filesystem scan + media server library check">
-            Full Sync
-        </button>
+<div class="page">
+    <div class="page-header">
+        <div>
+            <h1>Dashboard</h1>
+            <div class="sub">Live overview of your sync, downloads, and library destinations.</div>
+        </div>
+        <div class="actions">
+            <div class="btn-group">
+                <button hx-post="/api/sync/quick" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-secondary" title="Update Audible library only — fast check for new books">Quick Sync</button>
+                <button hx-post="/api/sync/full" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-primary" title="Full sync: Audible + filesystem scan + media server library check">Full Sync</button>
+            </div>
+            <button hx-post="/api/downloads/queue-all" hx-swap="none" class="btn btn-secondary">Queue All New</button>
+            <button hx-post="/api/downloads/retry-all" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-danger">Retry Failed</button>
+            <button hx-post="/api/library/reorganize" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-secondary">Reorganize</button>
+            <button id="queue-toggle-btn" data-paused="{{if .QueuePaused}}1{{else}}0{{end}}" class="btn {{if .QueuePaused}}btn-primary{{else}}btn-secondary{{end}}">{{if .QueuePaused}}Resume Queue{{else}}Pause Queue{{end}}</button>
+            <span id="dl-status" class="status-msg"></span>
+        </div>
     </div>
-    <button hx-post="/api/downloads/queue-all" hx-swap="none" class="btn btn-secondary">
-        Queue All New
-    </button>
-    <button hx-post="/api/downloads/retry-all" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-danger">
-        Retry All Failed
-    </button>
-    <button hx-post="/api/library/reorganize" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-secondary">
-        Reorganize Library
-    </button>
-    <button id="queue-toggle-btn" data-paused="{{if .QueuePaused}}1{{else}}0{{end}}" class="btn {{if .QueuePaused}}btn-primary{{else}}btn-secondary{{end}}">{{if .QueuePaused}}Resume Queue{{else}}Pause Queue{{end}}</button>
-    <span id="dl-status"></span>
-</div>
 
-<div id="queue-paused-banner" class="queue-paused-banner" {{if not .QueuePaused}}style="display:none"{{end}}>
-    <strong>Queue paused:</strong> <span id="queue-paused-reason">{{.QueuePauseReason}}</span>
-</div>
+    <div id="queue-paused-banner" class="queue-paused-banner" {{if not .QueuePaused}}style="display:none"{{end}}>
+        <strong>Queue paused:</strong> <span id="queue-paused-reason">{{.QueuePauseReason}}</span>
+    </div>
 
-<div class="sync-status-row">
     <span id="sync-status" class="sync-status-wrap" hx-get="/api/sync/status" hx-trigger="load" hx-swap="innerHTML"></span>
+
+    <div id="dashboard-summary" hx-get="/api/dashboard/summary" hx-trigger="load, every 12s queue:last" hx-swap="innerHTML">
+        {{template "dashboard_summary.html" .}}
+    </div>
+
+    <div class="section-h">
+        Active pipeline
+        <span class="right"><a href="/downloads">View full pipeline →</a></span>
+    </div>
+    <div class="dash-pipeline-grid">
+        <div id="pipeline-cards" class="dl-list"></div>
+        <div id="pipeline-pools" class="pool-grid pool-grid-stacked"></div>
+    </div>
+
+    <div id="dashboard-downloads" hx-get="/api/dashboard/downloads" hx-trigger="load, every 12s queue:last" hx-swap="innerHTML">
+        {{template "dashboard_downloads.html" .}}
+    </div>
+
+    {{template "book_detail_modal.html" .}}
 </div>
 
-<div id="dashboard-summary" hx-get="/api/dashboard/summary" hx-trigger="load, every 12s queue:last" hx-swap="innerHTML">
-    {{template "dashboard_summary.html" .}}
-</div>
-
-<h2>Worker Pools</h2>
-<div id="pipeline-pools" class="pool-grid"></div>
-
-<h2>Active Pipeline</h2>
-<div id="pipeline-cards"></div>
-
-<div id="dashboard-downloads" hx-get="/api/dashboard/downloads" hx-trigger="load, every 12s queue:last" hx-swap="innerHTML">
-    {{template "dashboard_downloads.html" .}}
-</div>
+<style>
+.dash-pipeline-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+}
+.dash-pipeline-grid #pipeline-cards:empty::before {
+    content: "No active downloads";
+    display: block;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 2rem;
+    text-align: center;
+    color: var(--text-muted);
+}
+.pool-grid-stacked {
+    grid-template-columns: minmax(0, 1fr);
+}
+@media (max-width: 980px) {
+    .dash-pipeline-grid { grid-template-columns: 1fr; }
+}
+</style>
 {{end}}

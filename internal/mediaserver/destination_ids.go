@@ -3,6 +3,7 @@ package mediaserver
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/mstrhakr/audplexus/internal/database"
 )
@@ -38,5 +39,13 @@ func upsertBookDestinationItem(ctx context.Context, db database.Database, bookID
 	}
 	bd.ServerItemID = strings.TrimSpace(serverItemID)
 	bd.ServerItemTitle = strings.TrimSpace(serverItemTitle)
+	// Reconcile proved the destination has this item. Promote pending→synced
+	// so the UI badge flips from "Pending" to "Synced" without waiting for
+	// a sync attempt. Don't clobber failed/orphaned — those carry signal.
+	if bd.ServerItemID != "" && (bd.SyncState == "" || bd.SyncState == database.BookDestSyncPending) {
+		bd.SyncState = database.BookDestSyncSynced
+		now := time.Now().UTC()
+		bd.LastSucceededAt = &now
+	}
 	return db.UpsertBookDestination(ctx, bd)
 }

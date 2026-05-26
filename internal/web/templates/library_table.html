@@ -1,22 +1,65 @@
 {{define "library_table.html"}}
-<p class="result-count">{{.Total}} books</p>
-<table class="data-table">
-    <thead>
-        <tr>
-            <th>Cover</th>
-            <th>Title</th>
-            <th>Author</th>
-            <th>Duration</th>
-            <th>Status</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {{range .Books}}
-        {{template "library_row.html" (dict "Book" . "BookAction" (index $.BookActions .ID))}}
-        {{else}}
-        <tr><td colspan="6" class="empty">No books found</td></tr>
-        {{end}}
-    </tbody>
-</table>
+{{$search := .Filter.Search}}
+{{$status := .ActiveStatus}}
+{{$sort := .Filter.SortBy}}
+{{$dir := .Filter.SortDir}}
+<div class="table-wrap">
+    <table class="tbl">
+        <thead>
+            <tr>
+                <th class="col-cover">Cover</th>
+                <th class="sortable {{if eq $sort "title"}}sorted{{end}}">
+                    <a href="?sort=title&dir={{if and (eq $sort "title") (eq $dir "asc")}}desc{{else}}asc{{end}}{{if $search}}&search={{$search}}{{end}}{{if $status}}&status={{$status}}{{end}}">Title <span class="sort-ind">{{if eq $sort "title"}}{{if eq $dir "asc"}}↑{{else}}↓{{end}}{{else}}↕{{end}}</span></a>
+                </th>
+                <th class="sortable {{if eq $sort "author"}}sorted{{end}}">
+                    <a href="?sort=author&dir={{if and (eq $sort "author") (eq $dir "asc")}}desc{{else}}asc{{end}}{{if $search}}&search={{$search}}{{end}}{{if $status}}&status={{$status}}{{end}}">Author <span class="sort-ind">{{if eq $sort "author"}}{{if eq $dir "asc"}}↑{{else}}↓{{end}}{{else}}↕{{end}}</span></a>
+                </th>
+                <th>Series</th>
+                <th>Duration</th>
+                <th class="sortable {{if eq $sort "purchase_date"}}sorted{{end}}">
+                    <a href="?sort=purchase_date&dir={{if and (eq $sort "purchase_date") (eq $dir "asc")}}desc{{else}}asc{{end}}{{if $search}}&search={{$search}}{{end}}{{if $status}}&status={{$status}}{{end}}">Purchased <span class="sort-ind">{{if eq $sort "purchase_date"}}{{if eq $dir "asc"}}↑{{else}}↓{{end}}{{else}}↕{{end}}</span></a>
+                </th>
+                <th class="sortable {{if eq $sort "status"}}sorted{{end}}">
+                    <a href="?sort=status&dir={{if and (eq $sort "status") (eq $dir "asc")}}desc{{else}}asc{{end}}{{if $search}}&search={{$search}}{{end}}{{if $status}}&status={{$status}}{{end}}">Status <span class="sort-ind">{{if eq $sort "status"}}{{if eq $dir "asc"}}↑{{else}}↓{{end}}{{else}}↕{{end}}</span></a>
+                </th>
+                <th title="Where this book lives: local disk and each enabled destination">Presence</th>
+                <th class="col-actions">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Books}}
+            {{template "library_row.html" (dict "Book" . "BookAction" (index $.BookActions .ID) "Presence" (index $.BookPresence .ID))}}
+            {{else}}
+            <tr><td colspan="9" class="empty">No books match these filters.</td></tr>
+            {{end}}
+        </tbody>
+    </table>
+    <div class="table-pagination">
+        <span>
+            {{if eq .Total 0}}0{{else}}{{.PageFrom}}–{{.PageTo}}{{end}} of {{.Total}}
+        </span>
+        <div class="pager">
+            {{$base := printf "/library?sort=%s&dir=%s" $sort $dir}}
+            {{if $search}}{{$base = printf "%s&search=%s" $base $search}}{{end}}
+            {{if $status}}{{$base = printf "%s&status=%s" $base $status}}{{end}}
+            {{if le .PageNum 1}}
+            <span class="pg-btn" aria-disabled="true">‹</span>
+            {{else}}
+            <a class="pg-btn" href="{{$base}}&page={{sub .PageNum 1}}">‹</a>
+            {{end}}
+            {{range .PageNums}}
+                {{if eq . "…"}}
+                <span style="color:var(--text-muted);padding:0 .25rem">…</span>
+                {{else}}
+                <a class="pg-btn {{if eq . (printf "%d" $.PageNum)}}active{{end}}" href="{{$base}}&page={{.}}">{{.}}</a>
+                {{end}}
+            {{end}}
+            {{if ge .PageNum .TotalPages}}
+            <span class="pg-btn" aria-disabled="true">›</span>
+            {{else}}
+            <a class="pg-btn" href="{{$base}}&page={{add .PageNum 1}}">›</a>
+            {{end}}
+        </div>
+    </div>
+</div>
 {{end}}

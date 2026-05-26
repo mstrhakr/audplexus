@@ -1,85 +1,115 @@
 {{define "dashboard_summary.html"}}
-<div class="stats-grid">
+<div class="section-h">At a glance</div>
+<div class="stat-grid">
     <div class="stat-card">
-        <div class="stat-value" id="stat-total">{{.TotalBooks}}</div>
-        <div class="stat-label">Total Books</div>
+        <div class="label">Library Items</div>
+        <div class="value" id="stat-total">{{.TotalBooks}}</div>
+        <div class="delta">total synced from Audible</div>
     </div>
     <div class="stat-card">
-        <div class="stat-value" id="stat-complete">{{.CompleteBooks}}</div>
-        <div class="stat-label">Downloaded</div>
+        <div class="label">Downloaded</div>
+        <div class="value" id="stat-complete">{{.CompleteBooks}}</div>
+        <div class="delta {{if gt .TotalBooks 0}}up{{end}}">{{if gt .TotalBooks 0}}{{coveragePct .CompleteBooks .TotalBooks}}% of library{{else}}—{{end}}</div>
     </div>
     <div class="stat-card">
-        <div class="stat-value" id="stat-new">{{.NewBooks}}</div>
-        <div class="stat-label">New</div>
+        <div class="label">New</div>
+        <div class="value" id="stat-new">{{.NewBooks}}</div>
+        <div class="delta">pending action</div>
+    </div>
+    <div class="stat-card accent">
+        <div class="label">In Progress</div>
+        <div class="value" id="stat-active-dl">{{.ActiveDL}}</div>
+        <div class="delta"><span id="stat-pending-dl">{{.PendingDL}}</span> waiting</div>
     </div>
     <div class="stat-card">
-        <div class="stat-value" id="stat-active-dl">{{.ActiveDL}}</div>
-        <div class="stat-label">Active</div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-value" id="stat-pending-dl">{{.PendingDL}}</div>
-        <div class="stat-label">Pending</div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-value" id="stat-failed-dl">{{.FailedDL}}</div>
-        <div class="stat-label">Failed</div>
+        <div class="label">Failed</div>
+        <div class="value" id="stat-failed-dl">{{.FailedDL}}</div>
+        <div class="delta {{if gt .FailedDL 0}}down{{else}}up{{end}}">{{if gt .FailedDL 0}}needs attention{{else}}all clear{{end}}</div>
     </div>
 </div>
 
-<section aria-labelledby="dest-summary-heading" style="margin-top:1.25rem">
-    <h2 id="dest-summary-heading" style="margin:0 0 .5rem 0">Destinations</h2>
+<section aria-labelledby="dest-summary-heading">
+    <div class="section-h" id="dest-summary-heading">
+        Library destinations
+        {{if .DestinationSummaries}}<span class="count">{{len .DestinationSummaries}}</span>{{end}}
+        <span class="right">
+            <button type="button" class="btn btn-outline-ds btn-small" hx-get="/destinations/modal" hx-target="#dest-modal-content" hx-swap="innerHTML">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Add destination
+            </button>
+        </span>
+    </div>
     {{if .DestinationSummaries}}
-    {{/* aria-live=polite + atomic=false → SR users hear destination
-         additions/removals and badge state changes (Healthy → Failed)
-         WITHOUT chatter on every 12s count tick. The numeric <dd>
-         elements have aria-live=off so count fluctuations stay silent. */}}
-    <ul role="list" aria-live="polite" aria-atomic="false" class="destination-summary-list" style="list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.75rem">
+    <ul role="list" aria-live="polite" aria-atomic="false" class="dest-grid destination-summary-list" style="list-style:none;padding:0;margin:0">
         {{range .DestinationSummaries}}
-        <li aria-labelledby="dest-sum-{{.ID}}-name" style="padding:.6rem .75rem;border:1px solid var(--border, #2a2f3a);border-radius:6px">
-            <h3 id="dest-sum-{{.ID}}-name" style="margin:0 0 .25rem 0;font-size:.95rem">
-                {{.DisplayName}}
-            </h3>
-            <p style="margin:0 0 .35rem 0;font-size:.8rem">
-                <span class="badge badge-type">{{.TypeLabel}}</span>
-                <span aria-hidden="true" class="muted">&middot;</span>
-                {{if not .Enabled}}<span class="badge badge-inactive" role="status">Disabled</span>
-                {{else if eq .Health "healthy"}}<span class="badge badge-success" role="status">Healthy</span>
-                {{else if eq .Health "failed"}}<span class="badge badge-error" role="status">Failed</span>
-                {{else if eq .Health "never"}}<span class="badge badge-inactive" role="status">Never checked</span>
-                {{else}}<span class="badge badge-warning" role="status">Not configured</span>{{end}}
-            </p>
+        <li class="dest-card {{.Type}}{{if not .Enabled}} dest-card-disabled{{end}}" id="dest-card-{{.ID}}" aria-labelledby="dest-sum-{{.ID}}-name">
+            <span class="dest-ribbon"></span>
+            <div class="dest-head">
+                <span class="type-icon">{{$logo := destLogo .Type}}{{if $logo}}<img src="{{$logo}}" alt="{{.TypeLabel}}">{{else}}{{firstTwo .TypeLabel}}{{end}}</span>
+                <div class="dest-head-text">
+                    <div class="dest-name" id="dest-sum-{{.ID}}-name">{{.DisplayName}}</div>
+                    <div class="dest-url">{{if .URL}}{{.URL}}{{else}}{{.TypeLabel}}{{end}}</div>
+                </div>
+                <div class="dest-head-status">
+                    {{if not .Enabled}}<span class="badge badge-inactive" role="status">Disabled</span>
+                    {{else if eq .Health "healthy"}}<span class="badge badge-success" role="status">Healthy</span>
+                    {{else if eq .Health "failed"}}<span class="badge badge-error" role="status">Failed</span>
+                    {{else if eq .Health "never"}}<span class="badge badge-inactive" role="status">Never checked</span>
+                    {{else}}<span class="badge badge-warning" role="status">Not configured</span>{{end}}
+                </div>
+            </div>
             {{if .ItemCountSet}}
-            <dl style="margin:0;display:flex;gap:1rem;font-size:.85rem">
-                <div>
-                    <dt class="muted" style="font-weight:normal">Items</dt>
-                    <dd aria-live="off" style="margin:0;font-weight:600">{{.ItemCount}}</dd>
-                </div>
+            <div class="dest-row">
+                <span><b aria-live="off">{{.ItemCount}}</b> items</span>
                 {{if .CoverageSet}}
-                <div>
-                    <dt class="muted" style="font-weight:normal">Coverage</dt>
-                    <dd aria-live="off" style="margin:0;font-weight:600">{{.Coverage}}%</dd>
-                </div>
+                <span class="coverage-meter" aria-label="Coverage {{.Coverage}}%">
+                    <span class="fill{{if lt .Coverage 50}} bad{{else if lt .Coverage 90}} warn{{end}}" style="display:block;width:{{.Coverage}}%;height:100%"></span>
+                </span>
+                <b aria-live="off" style="font-size:.76rem">{{.Coverage}}%</b>
                 {{end}}
-            </dl>
+            </div>
             {{end}}
-            {{if .LastCheckedAt}}
-            <p class="muted" style="margin:.35rem 0 0 0;font-size:.75rem">
-                Last checked: <time datetime="{{(.LastCheckedAt).Format "2006-01-02T15:04:05Z07:00"}}">{{formatDate (.LastCheckedAt | deref)}}</time>
-            </p>
+            {{if .HealthDetail}}
+            <div class="dest-row" style="color:#ff9b9b;font-size:.72rem">{{cleanError .HealthDetail}}</div>
             {{end}}
+            <div class="dest-actions">
+                <span class="dest-checked">
+                    {{if .LastCheckedAt}}
+                    Last check <time datetime="{{(.LastCheckedAt).Format "2006-01-02T15:04:05Z07:00"}}">{{formatDate (.LastCheckedAt | deref)}}</time>
+                    {{else}}Never checked{{end}}
+                </span>
+                <span class="dest-actions-buttons">
+                    <button type="button" class="btn btn-ghost btn-icon" data-test-button data-test-reload
+                        hx-post="/destinations/{{.ID}}/test"
+                        hx-swap="none"
+                        title="Test connection" aria-label="Test {{.DisplayName}}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    </button>
+                    <button type="button" class="btn btn-ghost btn-icon"
+                        hx-get="/destinations/{{.ID}}/edit"
+                        hx-target="#dest-modal-content"
+                        hx-swap="innerHTML"
+                        title="Configure" aria-label="Configure {{.DisplayName}}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    </button>
+                </span>
+            </div>
         </li>
         {{end}}
     </ul>
     {{else}}
-    <p class="muted">No destinations configured. <a href="/destinations/new">Add a library destination</a> to fan out scans after each download.</p>
+    <div class="empty-card">
+        No destinations configured.
+        <button type="button" class="link-btn" hx-get="/destinations/modal" hx-target="#dest-modal-content" hx-swap="innerHTML">Add a library destination</button>
+        to fan out scans after each download.
+    </div>
     {{end}}
 </section>
 
 {{if .LastSync}}
-<div class="info-box" style="margin-top:1rem">
-    <strong>Last Sync:</strong> {{formatDate .LastSync.StartedAt}} &mdash;
-    {{.LastSync.BooksFound}} found, {{.LastSync.BooksAdded}} added
-    ({{.LastSync.Status}})
+<div class="info-box info-box-compact" style="margin-top:1rem">
+    <strong>Last Sync:</strong> {{formatDate .LastSync.StartedAt}} —
+    {{.LastSync.BooksFound}} found, {{.LastSync.BooksAdded}} added ({{.LastSync.Status}})
 </div>
 {{end}}
 {{end}}

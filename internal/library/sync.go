@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/errs"
 	"github.com/mstrhakr/audplexus/internal/logging"
 	audible "github.com/mstrhakr/go-audible"
 )
@@ -211,8 +212,18 @@ func NewSyncService(db database.Database, client *audible.Client, libraryDir str
 
 // subPhaseFnFor returns a SubPhaseFn closure that upserts a named SubPhaseStatus into the named
 // phase and emits a progress event. Safe to call concurrently from multiple goroutines.
+//
+// Sanitizes the incoming message via errs.CleanForDisplay before storing
+// it on the SubPhaseStatus. Destination backends (Plex/Emby/…) wrap raw
+// HTTP response bodies into their error strings — those bodies can
+// contain HTML markup like <h1>404 Not Found</h1>, which when rendered
+// by the SSE client into innerHTML blew out the row height. Cleaning
+// at the chokepoint guarantees every sub-phase message shown in the
+// UI is plain text and matches the wording used by the dashboard
+// destination card for the same underlying failure.
 func (s *SyncService) subPhaseFnFor(phase SyncPhase) SubPhaseFn {
 	return func(id, label, status, message string, current, total int) {
+		cleaned := errs.CleanForDisplay(message)
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for i := range s.progress.Phases {
@@ -222,7 +233,7 @@ func (s *SyncService) subPhaseFnFor(phase SyncPhase) SubPhaseFn {
 					if (*sub)[j].ID == id {
 						(*sub)[j].Label = label
 						(*sub)[j].Status = status
-						(*sub)[j].Message = message
+						(*sub)[j].Message = cleaned
 						(*sub)[j].Current = current
 						(*sub)[j].Total = total
 						if total > 0 {
@@ -240,7 +251,7 @@ func (s *SyncService) subPhaseFnFor(phase SyncPhase) SubPhaseFn {
 					ID:            id,
 					Label:         label,
 					Status:        status,
-					Message:       message,
+					Message:       cleaned,
 					Current:       current,
 					Total:         total,
 					Indeterminate: total == 0 && status == "running",
@@ -732,6 +743,7 @@ func (s *SyncService) buildPhases(mode SyncMode, prev []PhaseStatus) []PhaseStat
 }
 
 func (s *SyncService) setPhase(phase SyncPhase, status, message string) {
+	cleaned := errs.CleanForDisplay(message)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.progress.CurrentPhase = phase
@@ -739,7 +751,7 @@ func (s *SyncService) setPhase(phase SyncPhase, status, message string) {
 		if s.progress.Phases[i].Name == phase {
 			now := time.Now()
 			s.progress.Phases[i].Status = status
-			s.progress.Phases[i].Message = message
+			s.progress.Phases[i].Message = cleaned
 			if status == "running" {
 				s.progress.Phases[i].StartedAt = now
 				s.progress.Phases[i].EndedAt = time.Time{}
@@ -768,7 +780,7 @@ func (s *SyncService) setPhase(phase SyncPhase, status, message string) {
 				s.progress.Phases[i].EndedAt = now
 			}
 			if status == "failed" {
-				s.progress.Phases[i].Error = message
+				s.progress.Phases[i].Error = cleaned
 				s.progress.Phases[i].Indeterminate = false
 				setPhaseProgress(&s.progress.Phases[i], s.progress.Phases[i].Current, s.progress.Phases[i].Total, false, status)
 			}
@@ -788,7 +800,7 @@ func (s *SyncService) setPhase(phase SyncPhase, status, message string) {
 	// Update the top-level message
 	for i := range s.progress.Phases {
 		if s.progress.Phases[i].Name == phase {
-			s.progress.Message = s.progress.Phases[i].Label + ": " + message
+			s.progress.Message = s.progress.Phases[i].Label + ": " + cleaned
 			break
 		}
 	}
@@ -943,11 +955,19 @@ func phaseRunsInMode(mode SyncMode, phase SyncPhase) bool {
 func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.SyncHistory) (int, error) {
 	syncLog.Info().Msg("starting audible library sync")
 
-	books, err := s.client.GetAllLibrary(ctx)
+	// Audible's /library endpoint only returns purchase_date when the
+	// `relationships` response group is requested — it lives on the
+	// user↔asset relationship payload, not the product itself. The SDK's
+	// DefaultResponseGroups omits it, so without this override the
+	// Library page renders Purchased as blank for every row.
+	libraryGroups := append([]string{}, audible.DefaultResponseGroups...)
+	libraryGroups = append(libraryGroups, "relationships")
+	books, err := s.client.GetAllLibrary(ctx, audible.WithResponseGroups(libraryGroups...))
 	if err != nil {
 		syncLog.Error().Err(err).Msg("failed to fetch audible library")
 		return 0, err
 	}
+
 
 	syncRecord.BooksFound = len(books)
 	s.mu.Lock()
@@ -1009,14 +1029,25 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		}
 
 		// For brand-new books only: verify entitlement before adding to the DB.
+		// If denied, still record the book — just flag it as unavailable so the
+		// UI can show it under the "Unavailable" tab with the denial reason
+		// (e.g. once-Plus-catalog titles the user no longer has access to).
 		if existing == nil {
 			canDownload, cdErr := s.client.CanDownload(ctx, item)
 			if cdErr != nil || !canDownload {
-				logMsg := "skipping new item after entitlement check"
+				reason := "Audible entitlement denied"
 				if cdErr != nil {
-					logMsg = fmt.Sprintf("skipping new item after entitlement check: %v", cdErr)
+					reason = errs.CleanEntitlementReason(cdErr.Error())
 				}
-				syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Msg(logMsg)
+				syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Str("reason", reason).Msg("marking new item as unavailable: entitlement denied")
+				book.Status = database.BookStatusUnavailable
+				book.UnavailableReason = reason
+				if err := s.db.UpsertBook(ctx, &book); err != nil {
+					syncLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to upsert unavailable book")
+				} else {
+					keepASIN[book.ASIN] = struct{}{}
+					added++
+				}
 				scanned++
 				s.mu.Lock()
 				s.progress.BooksScanned = scanned
@@ -1031,16 +1062,34 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 				s.mu.Unlock()
 				continue
 			}
+		} else if existing.Status == database.BookStatusUnavailable {
+			// User may have regained access (Plus added title back). Re-check.
+			canDownload, cdErr := s.client.CanDownload(ctx, item)
+			if cdErr == nil && canDownload {
+				syncLog.Info().Str("asin", book.ASIN).Msg("previously-unavailable book is now accessible")
+				book.Status = database.BookStatusNew
+				book.UnavailableReason = ""
+			} else {
+				book.Status = database.BookStatusUnavailable
+				book.UnavailableReason = existing.UnavailableReason
+				if cdErr != nil {
+					book.UnavailableReason = errs.CleanEntitlementReason(cdErr.Error())
+				}
+			}
 		}
 
 		keepASIN[book.ASIN] = struct{}{}
 
-		// Preserve status/file info for existing books
+		// Preserve status/file info for existing books — unless the
+		// unavailable-recheck above already decided a new status for this row.
 		if existing != nil {
-			book.Status = existing.Status
+			if book.Status == "" {
+				book.Status = existing.Status
+				book.UnavailableReason = existing.UnavailableReason
+			}
 			book.FilePath = existing.FilePath
 			book.FileSize = existing.FileSize
-			syncLog.Debug().Str("asin", book.ASIN).Str("status", string(existing.Status)).Msg("book already exists, preserving state")
+			syncLog.Debug().Str("asin", book.ASIN).Str("status", string(book.Status)).Msg("book already exists, preserving state")
 		} else {
 			book.Status = database.BookStatusNew
 			added++
@@ -1149,6 +1198,32 @@ func ucfirst(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
+// audibleDateLayouts is the priority-ordered list of layouts we accept
+// when parsing Audible-supplied timestamps. RFC3339 nano covers the
+// "2026-05-19T07:29:29.505Z" purchase_date shape; RFC3339 covers the
+// no-fractional variant; the date-only layout covers release_date.
+var audibleDateLayouts = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02",
+}
+
+// parseAudibleDate tolerates the multiple shapes Audible returns for
+// purchase_date / release_date. Returns the zero time when the input is
+// empty or in none of the known formats.
+func parseAudibleDate(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}
+	}
+	for _, layout := range audibleDateLayouts {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
 func convertBook(b audible.Book) database.Book {
 	authors := make([]string, len(b.Authors))
 	for i, a := range b.Authors {
@@ -1178,8 +1253,14 @@ func convertBook(b audible.Book) database.Book {
 		coverURL = b.ProductImages.Image500
 	}
 
-	purchaseDate, _ := time.Parse("2006-01-02", b.PurchaseDate)
-	releaseDate, _ := time.Parse("2006-01-02", b.ReleaseDate)
+	// Audible is inconsistent across fields and accounts: purchase_date
+	// comes back as RFC3339 ("2026-05-19T07:29:29.505Z"), release_date
+	// as plain ISO date ("2023-08-23"), and occasionally either field
+	// is just empty. parseAudibleDate tries the formats we've seen in
+	// the wild in order; failures fall through to the zero time, which
+	// the UI already renders as a blank cell.
+	purchaseDate := parseAudibleDate(b.PurchaseDate)
+	releaseDate := parseAudibleDate(b.ReleaseDate)
 
 	drmType := b.ContentDeliveryType
 	if drmType == "" {

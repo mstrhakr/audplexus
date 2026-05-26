@@ -1,26 +1,131 @@
 {{define "book_detail_panel.html"}}
 <div class="book-detail" data-book-detail-root>
     {{if .Message}}
-    <div class="info-box" style="border-color: var(--success); margin-bottom: 1rem;">{{.Message}}</div>
-    {{end}}
-    <div class="book-cover">
-        {{if .Book.CoverURL}}<img src="{{.Book.CoverURL}}" alt="Cover">{{end}}
+    <div class="alert ok" style="grid-column:1 / -1;margin-bottom:1rem">
+        <span class="ico">✓</span>
+        <div>{{.Message}}</div>
     </div>
-    <div class="book-info">
+    {{end}}
+
+    <div class="cover-wrap">
+        {{if .Book.CoverURL}}
+        <img src="{{.Book.CoverURL}}" alt="Cover for {{.Book.Title}}">
+        {{else}}
+        <img src="" alt="" style="aspect-ratio:2/3">
+        {{end}}
+        <div class="cover-actions">
+            {{if eq (printf "%s" .Book.Status) "new"}}
+            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" class="btn btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Queue Download
+            </button>
+            {{else if eq (printf "%s" .Book.Status) "failed"}}
+            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" class="btn btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/></svg>
+                Retry Download
+            </button>
+            {{else if eq (printf "%s" .Book.Status) "complete"}}
+            <button hx-post="/api/downloads/redownload/{{.Book.ASIN}}"
+                    hx-confirm="Re-download '{{.Book.Title}}'? This removes the existing file first."
+                    hx-swap="none"
+                    class="btn btn-secondary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/><path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/></svg>
+                Re-download
+            </button>
+            {{end}}
+
+            {{if .Book.ID}}
+            <button hx-post="/api/books/{{.Book.ID}}/resync-metadata"
+                    hx-swap="none"
+                    hx-on::before-request="this.disabled=true"
+                    hx-on::after-request="setTimeout(function(){location.reload()},600)"
+                    class="btn btn-secondary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v6h6"/><path d="M20 20v-6h-6"/><path d="M4 10a8 8 0 0 1 14.93-2"/><path d="M20 14a8 8 0 0 1-14.93 2"/></svg>
+                Re-sync metadata
+            </button>
+            {{end}}
+
+            {{if .BookAction.ShowConvert}}
+            <button hx-post="/api/books/{{.Book.ID}}/convert?format={{.BookAction.ConvertFormat}}"
+                hx-confirm="{{.BookAction.ConvertConfirm}}"
+                hx-swap="none"
+                class="btn btn-secondary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                {{.BookAction.ConvertLabel}}
+            </button>
+            {{end}}
+
+            {{if .BookAction.ShowDelete}}
+            <button hx-post="/api/books/{{.Book.ID}}/delete-media?view=modal"
+                    hx-confirm="{{.BookAction.DeleteConfirm}}"
+                    hx-target="#book-detail-modal-content"
+                    hx-swap="innerHTML"
+                    class="btn btn-danger">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                Delete Files
+            </button>
+            {{end}}
+
+            {{if .Book.ASIN}}
+            <a href="https://www.audible.com/pd/{{.Book.ASIN}}" target="_blank" rel="noopener noreferrer" class="btn btn-outline-ds">
+                Open on Audible
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </a>
+            {{end}}
+        </div>
+    </div>
+
+    <div>
         <h2>{{.Book.Title}}</h2>
-        {{if .Book.Series}}<p class="series">{{.Book.Series}} #{{.Book.SeriesPosition}}</p>{{end}}
-        <p><strong>Author:</strong> {{.Book.Author}}</p>
-        <p><strong>Narrator:</strong> {{.Book.Narrator}}</p>
-        <p><strong>Publisher:</strong> {{.Book.Publisher}}</p>
-        <p><strong>Duration:</strong> {{formatDuration .Book.Duration}}</p>
-        <p><strong>Purchased:</strong> {{formatDate .Book.PurchaseDate}}</p>
-        <p><strong>Released:</strong> {{formatDate .Book.ReleaseDate}}</p>
-        <p><strong>Status:</strong> <span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span></p>
-        <p><strong>ASIN:</strong> {{.Book.ASIN}}</p>
-        {{if .BookFolderPath}}<p><strong>Folder:</strong> {{.BookFolderPath}}</p>{{end}}
+        {{if .Book.Series}}<div class="series">{{.Book.Series}} · Book {{.Book.SeriesPosition}}</div>{{end}}
+
+        <div class="badge-row">
+            <span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span>
+            {{if .Book.FilePath}}<span class="badge badge-success">On disk</span>{{end}}
+        </div>
+
+        {{if eq (printf "%s" .Book.Status) "unavailable"}}
+        <div class="unavailable-notice" role="status" style="display:flex;gap:.5rem;align-items:flex-start;background:var(--color-warning-bg,#3a2e15);color:var(--color-warning-fg,#ffd479);border:1px solid var(--color-warning-border,#6b5320);padding:.6rem .75rem;border-radius:6px;margin:.75rem 0;font-size:.85rem;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:0 0 auto;margin-top:1px;"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <div><strong>Unavailable.</strong> {{if .Book.UnavailableReason}}{{.Book.UnavailableReason}}{{else}}Audible reports this title cannot be downloaded with your current account.{{end}}</div>
+        </div>
+        {{end}}
+
+        <dl class="meta-grid">
+            <dt>Author</dt><dd>{{.Book.Author}}</dd>
+            <dt>Narrator</dt><dd>{{if .Book.Narrator}}{{.Book.Narrator}}{{else}}—{{end}}</dd>
+            <dt>Duration</dt><dd>{{formatDuration .Book.Duration}}</dd>
+            <dt>Released</dt><dd>{{formatDate .Book.ReleaseDate}}</dd>
+            <dt>Purchased</dt><dd>{{formatDate .Book.PurchaseDate}}</dd>
+            <dt>Publisher</dt><dd>{{if .Book.Publisher}}{{.Book.Publisher}}{{else}}—{{end}}</dd>
+            <dt>ASIN</dt><dd class="cell-mono">{{.Book.ASIN}}</dd>
+            {{if .BookFolderPath}}<dt>Folder</dt><dd class="cell-mono" style="font-size:.75rem;word-break:break-all">{{.BookFolderPath}}</dd>{{end}}
+        </dl>
+
+        {{if .BookDestinationStatuses}}
+        <h3 class="section-label">Destinations</h3>
+        <ul class="dest-status-list">
+            {{range .BookDestinationStatuses}}
+            <li>
+                <span class="dest-chip {{.Type}}">{{$logo := destLogo .Type}}{{if $logo}}<img src="{{$logo}}" alt="{{.TypeLabel}}">{{else}}{{firstTwo .TypeLabel}}{{end}}</span>
+                <span>{{.DisplayName}}</span>
+                <span class="pull-right">
+                    {{if eq .State "synced"}}<span class="badge badge-success">{{.Label}}</span>
+                    {{else if eq .State "syncing"}}<span class="badge badge-warning">{{.Label}}</span>
+                    {{else if eq .State "failed"}}<span class="badge badge-error">{{.Label}}</span>
+                    {{else if eq .State "orphaned"}}<span class="badge badge-warning">{{.Label}}</span>
+                    {{else if eq .State "removed"}}<span class="badge badge-inactive">{{.Label}}</span>
+                    {{else}}<span class="badge badge-neutral">{{.Label}}</span>{{end}}
+                </span>
+            </li>
+            {{end}}
+        </ul>
+        {{end}}
+
         {{if gt .BookFileCount 0}}
+        <h3 class="section-label">Files ({{.BookFileCount}})</h3>
         <details class="book-files-details">
-            <summary>Show files and details ({{.BookFileCount}})</summary>
+            <summary>Show files and details</summary>
             <table class="book-files-table">
                 <thead>
                     <tr>
@@ -44,38 +149,12 @@
             </table>
         </details>
         {{else if .Book.FilePath}}
-        <p><strong>Files:</strong> Unable to list files from disk right now.</p>
+        <p class="muted" style="margin-top:1rem;font-size:.85rem">Unable to list files from disk right now.</p>
         {{end}}
 
-        <div class="book-actions">
-            {{if eq (printf "%s" .Book.Status) "new"}}
-            <button hx-post="/api/downloads/queue/{{.Book.ASIN}}" hx-swap="none" class="btn btn-primary">Queue Download</button>
-            {{end}}
-            {{if and (eq (printf "%s" .Book.Status) "complete") .Book.FilePath}}
-                {{if hasSuffix .Book.FilePath ".m4b"}}
-                <button hx-post="/api/books/{{.Book.ID}}/convert?format=mp3"
-                        hx-confirm="Split this book into per-chapter MP3 files? The original M4B will be removed."
-                        hx-swap="none"
-                        class="btn btn-secondary">Convert to MP3 (chapters)</button>
-                {{else}}
-                <button hx-post="/api/books/{{.Book.ID}}/convert?format=m4b"
-                        hx-confirm="Reassemble chapter MP3s into a single M4B? The chapter files will be removed."
-                        hx-swap="none"
-                        class="btn btn-secondary">Convert to M4B (single file)</button>
-                {{end}}
-            {{end}}
-                {{if .BookAction.ShowDelete}}
-                <button hx-post="/api/books/{{.Book.ID}}/delete-media?view=modal"
-                    hx-confirm="{{.BookAction.DeleteConfirm}}"
-                    hx-target="#book-detail-modal-content"
-                    hx-swap="innerHTML"
-                    class="btn btn-danger">Delete Files</button>
-                {{end}}
-        </div>
-
         {{if .Book.Description}}
-        <div class="description">
-            <h3>Description</h3>
+        <div class="desc">
+            <h3 class="section-label">Description</h3>
             <div class="book-description-html">{{safeHTML .Book.Description}}</div>
         </div>
         {{end}}

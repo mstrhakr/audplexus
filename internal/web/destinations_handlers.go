@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/errs"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
 )
 
@@ -87,6 +88,22 @@ func summarizeHealth(d *database.LibraryDestination) string {
 	return "failed"
 }
 
+// setDestModalTrigger sets the HX-Trigger header to fire `event` on
+// document.body with the given payload. Uses encoding/json so that
+// user-controlled fields (DisplayName especially) can't break out of
+// the JSON envelope or smuggle in sibling events.
+//
+// json.Marshal can't fail for map[string]map[string]string, so we
+// ignore the error — the alternative (skipping the header on error)
+// would silently break the modal's auto-close.
+func setDestModalTrigger(c *gin.Context, event string, payload map[string]string) {
+	if payload == nil {
+		payload = map[string]string{}
+	}
+	encoded, _ := json.Marshal(map[string]map[string]string{event: payload})
+	c.Header("HX-Trigger", string(encoded))
+}
+
 func destinationConfigured(d *database.LibraryDestination) bool {
 	if strings.TrimSpace(d.URL) == "" {
 		return false
@@ -100,28 +117,55 @@ func destinationConfigured(d *database.LibraryDestination) bool {
 	return false
 }
 
-// handleDestinationsNewPicker renders the type-picker page (step 1 of 2
-// in the add flow). Two-page server flow rather than a JS-toggled single
-// form — simpler, validation cleaner, no JS dependency.
-func (s *Server) handleDestinationsNewPicker(c *gin.Context) {
-	data := s.authBaseData(c.Request.Context())
-	data["Page"] = "destinations_new_picker"
-	c.HTML(http.StatusOK, "destinations_new.html", data)
+// handleDestinations renders the standalone Destinations page — split out
+// of Settings so destination management has room for richer per-card detail
+// (item count, coverage, last error) and a clear top-level CTA to add more.
+func (s *Server) handleDestinations(c *gin.Context) {
+	ctx := c.Request.Context()
+	completeStatus := database.BookStatusComplete
+	_, completeBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
+
+	dests := s.destinationSummaries(ctx, completeBooks)
+
+	healthy := 0
+	for _, d := range dests {
+		if d.Health == "healthy" {
+			healthy++
+		}
+	}
+
+	data := s.authBaseData(ctx)
+	data["Page"] = "destinations"
+	data["Destinations"] = dests
+	data["HealthyCount"] = healthy
+	data["TotalCount"] = len(dests)
+	c.HTML(http.StatusOK, "destinations.html", s.withSidebar(ctx, data))
 }
 
-// handleDestinationsNewForm renders the type-specific config form (step 2)
-// when the user submits the type picker.
-func (s *Server) handleDestinationsNewForm(c *gin.Context) {
+// handleDestinationsModalPicker returns the type-picker body that opens
+// inside the global #dest-modal-content slot. There's no full-page
+// equivalent any more — every add flow uses the modal.
+func (s *Server) handleDestinationsModalPicker(c *gin.Context) {
+	c.HTML(http.StatusOK, "destination_picker_body", s.authBaseData(c.Request.Context()))
+}
+
+// handleDestinationsModalForm returns the type-specific form body that
+// swaps in after the user clicks a backend on the picker. Submit lands
+// on /destinations/create with the X-Dest-Modal header set so
+// handleDestinationsCreate emits HX-Trigger dest-created and the modal
+// auto-closes.
+func (s *Server) handleDestinationsModalForm(c *gin.Context) {
 	t := strings.ToLower(strings.TrimSpace(c.PostForm("type")))
 	if !validDestinationType(t) {
-		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": "Pick a destination type."})
+		c.HTML(http.StatusBadRequest, "destination_picker_body", gin.H{
+			"Error": "Pick a destination type.",
+		})
 		return
 	}
 	data := s.authBaseData(c.Request.Context())
-	data["Page"] = "destinations_new_form"
 	data["DestType"] = t
 	data["DestTypeLabel"] = destinationTypeLabel(database.LibraryDestinationType(t))
-	c.HTML(http.StatusOK, "destinations_form.html", data)
+	c.HTML(http.StatusOK, "destination_form_body", data)
 }
 
 // handleDestinationTest performs a live health check against the
@@ -183,7 +227,11 @@ func (s *Server) recordDestinationHealth(ctx context.Context, destID string, ok 
 	now := time.Now().UTC()
 	row.LastHealthCheckAt = &now
 	row.LastHealthCheckOK = &ok
-	row.LastHealthCheckErr = errMsg
+	// Strip embedded HTML / collapse whitespace before persisting so the
+	// dashboard's stored last_health_check_err is fit for direct render.
+	// The original raw err already flowed through the debug log path on
+	// the caller side, so we're not losing forensic detail here.
+	row.LastHealthCheckErr = cleanErrorForDisplay(errMsg)
 	if err := s.db.UpdateLibraryDestination(ctx, row); err != nil {
 		webLog.Debug().Err(err).Str("destination_id", destID).Msg("recordDestinationHealth: update failed")
 	}
@@ -872,12 +920,20 @@ func renderTestResult(c *gin.Context, ok bool, success, fail string) {
 	}
 	c.String(http.StatusOK,
 		`<div class="info-box" style="border-color:var(--error);margin:.5rem 0" tabindex="-1" id="test-result-failure">`+
-			`<strong>Failed.</strong> `+htmlEscape(fail)+`</div>`)
+			`<strong>Failed.</strong> `+htmlEscape(cleanErrorForDisplay(fail))+`</div>`)
 }
 
 func htmlEscape(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;")
 	return r.Replace(s)
+}
+
+// cleanErrorForDisplay is a thin wrapper around errs.CleanForDisplay
+// kept here so existing callers in the web package keep compiling. The
+// underlying helper lives in internal/errs so the library/sync package
+// can share the same sanitization for phase messages.
+func cleanErrorForDisplay(raw string) string {
+	return errs.CleanForDisplay(raw)
 }
 
 // writeSensitiveHTML emits an HTML fragment that may carry secrets
@@ -895,27 +951,68 @@ func writeSensitiveHTML(c *gin.Context, body string) {
 	c.String(http.StatusOK, body)
 }
 
-// handleDestinationsCreate persists a new destination after the form submit.
+// handleDestinationsCreate persists a new destination after the form
+// submit. Invoked from the modal (HTMX, X-Dest-Modal=1 header) on the
+// happy path; non-modal callers (raw POST from curl/scripts) still
+// work and get a plain redirect.
+//
+// On modal success we set the HX-Trigger header so the global modal
+// helper closes the overlay and reloads the parent page. On modal
+// failure we re-render the form body with FormError set so the user
+// can correct and resubmit without losing the in-progress values
+// they've already typed.
 func (s *Server) handleDestinationsCreate(c *gin.Context) {
+	modal := c.GetHeader("X-Dest-Modal") == "1"
+	ctx := c.Request.Context()
+
 	d, err := s.destinationFromForm(c, "")
 	if err != nil {
-		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": err.Error()})
+		if modal {
+			t := c.PostForm("type")
+			c.HTML(http.StatusBadRequest, "destination_form_body", gin.H{
+				"DestType":      t,
+				"DestTypeLabel": destinationTypeLabel(database.LibraryDestinationType(t)),
+				"FormError":     err.Error(),
+			})
+			return
+		}
+		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
 	// Disambiguate display names — turns "Plex" + "Plex" into "Plex" +
 	// "Plex (2)". Only fires when a collision exists, so a single Plex
-	// destination stays plainly named "Plex". The Plex server-picker
-	// onchange autofills display_name from the discovered server name
-	// when present, so the typical Plex flow never hits this fallback.
-	d.DisplayName = s.uniqueDisplayName(c.Request.Context(), d.DisplayName, "")
+	// destination stays plainly named "Plex".
+	d.DisplayName = s.uniqueDisplayName(ctx, d.DisplayName, "")
 	d.ID = uuid.NewString()
 	d.Enabled = true
 	d.CreatedAt = time.Now().UTC()
-	if err := s.db.CreateLibraryDestination(c.Request.Context(), d); err != nil {
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Could not create destination: " + err.Error()})
+	if err := s.db.CreateLibraryDestination(ctx, d); err != nil {
+		if modal {
+			c.HTML(http.StatusInternalServerError, "destination_form_body", gin.H{
+				"DestType":      string(d.Type),
+				"DestTypeLabel": destinationTypeLabel(d.Type),
+				"FormError":     "Could not create destination: " + err.Error(),
+			})
+			return
+		}
+		c.String(http.StatusInternalServerError, "Could not create destination: "+err.Error())
 		return
 	}
-	c.Redirect(http.StatusSeeOther, "/settings#library-destinations")
+
+	if modal {
+		// HX-Trigger fires a "dest-created" event on document.body so the
+		// page that opened the modal can refresh its destinations list /
+		// advance its state. The body is the success confirmation that
+		// replaces the form inside the modal until the page reacts.
+		setDestModalTrigger(c, "dest-created", map[string]string{"id": d.ID, "name": d.DisplayName})
+		c.HTML(http.StatusOK, "destination_form_body", gin.H{
+			"ModalSuccess":  true,
+			"DestTypeLabel": destinationTypeLabel(d.Type),
+			"Dest":          d,
+		})
+		return
+	}
+	c.Redirect(http.StatusSeeOther, "/destinations")
 }
 
 // uniqueDisplayName appends " (2)", " (3)", … to candidate when another
@@ -955,36 +1052,72 @@ func (s *Server) uniqueDisplayName(ctx context.Context, candidate, excludeID str
 	return fmt.Sprintf("%s (%s)", candidate, uuid.NewString()[:8])
 }
 
-// handleDestinationEditForm renders the per-destination edit form. Sensitive
-// values (PlexToken, APIKey) are NOT prefilled into the template — leaving
-// the field blank means "keep existing"; entering a new value rotates.
+// handleDestinationEditForm returns the edit form body that opens inside
+// the global #dest-modal-content slot. Same partial as the create flow
+// — $isEdit inside the template flips action + button labels when .Dest
+// is set. Sensitive values (PlexToken, APIKey) are NOT prefilled into
+// the template; leaving the field blank means "keep existing".
 func (s *Server) handleDestinationEditForm(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
-	row, err := s.db.GetLibraryDestination(c.Request.Context(), id)
+	row, err := s.db.GetLibraryDestination(ctx, id)
 	if err != nil || row == nil {
-		s.renderAuthPage(c, http.StatusNotFound, gin.H{"Error": "Destination not found."})
+		c.HTML(http.StatusNotFound, "destination_form_body", gin.H{
+			"FormError": "Destination not found.",
+		})
 		return
 	}
-	data := s.authBaseData(c.Request.Context())
-	data["Page"] = "destinations_edit"
+	data := s.authBaseData(ctx)
 	data["DestType"] = string(row.Type)
 	data["DestTypeLabel"] = destinationTypeLabel(row.Type)
-	data["Dest"] = row // template uses Dest.DisplayName, .URL, .LibraryID, .PlexSectionID
-	c.HTML(http.StatusOK, "destinations_form.html", data)
+	data["Dest"] = row
+
+	// Seed the guided stepper's initial state for the Plex edit flow.
+	// The template can't easily peek at LastHealthCheckOK (it's *bool),
+	// so we project the booleans the JS state machine wants:
+	//   - HasStoredCredential: token already saved → step 1 done.
+	//   - HasStoredURL:        server picked → step 2 done.
+	//   - HasStoredSection:    library chosen → step 3 done.
+	//   - LastHealthFailed:    most recent test bombed → step 3 red.
+	data["HasStoredCredential"] = strings.TrimSpace(row.PlexToken) != "" || strings.TrimSpace(row.APIKey) != ""
+	data["HasStoredURL"] = strings.TrimSpace(row.URL) != ""
+	data["HasStoredSection"] = strings.TrimSpace(row.PlexSectionID) != "" || strings.TrimSpace(row.LibraryID) != ""
+	// Three-state health: nil = never checked, true = OK, false = failed.
+	// Step 3's "done" badge requires an affirmative healthy result —
+	// "never checked" must NOT count as healthy because the saved
+	// library_id might no longer exist on the server (e.g. user deleted
+	// the Plex section since last save).
+	data["LastHealthOK"] = row.LastHealthCheckOK != nil && *row.LastHealthCheckOK
+	data["LastHealthFailed"] = row.LastHealthCheckOK != nil && !*row.LastHealthCheckOK
+	if row.LastHealthCheckErr != "" {
+		data["LastHealthErr"] = cleanErrorForDisplay(row.LastHealthCheckErr)
+	}
+
+	c.HTML(http.StatusOK, "destination_form_body", data)
 }
 
 // handleDestinationUpdate persists an edit. Sensitive fields (PlexToken,
 // APIKey) are only updated when the form provides a non-empty value.
+// Always invoked from the modal; on success we fire HX-Trigger
+// dest-updated so the page auto-closes the modal and reloads.
 func (s *Server) handleDestinationUpdate(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
-	existing, err := s.db.GetLibraryDestination(c.Request.Context(), id)
+	existing, err := s.db.GetLibraryDestination(ctx, id)
 	if err != nil || existing == nil {
-		s.renderAuthPage(c, http.StatusNotFound, gin.H{"Error": "Destination not found."})
+		c.HTML(http.StatusNotFound, "destination_form_body", gin.H{
+			"FormError": "Destination not found.",
+		})
 		return
 	}
 	updated, err := s.destinationFromForm(c, string(existing.Type))
 	if err != nil {
-		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": err.Error()})
+		c.HTML(http.StatusBadRequest, "destination_form_body", gin.H{
+			"Dest":          existing,
+			"DestType":      string(existing.Type),
+			"DestTypeLabel": destinationTypeLabel(existing.Type),
+			"FormError":     err.Error(),
+		})
 		return
 	}
 
@@ -998,7 +1131,7 @@ func (s *Server) handleDestinationUpdate(c *gin.Context) {
 	// Disambiguate display name on edit too — but exclude the current row
 	// so renaming a destination back to its existing value is a no-op
 	// instead of bumping it to "Plex (2)".
-	updated.DisplayName = s.uniqueDisplayName(c.Request.Context(), updated.DisplayName, existing.ID)
+	updated.DisplayName = s.uniqueDisplayName(ctx, updated.DisplayName, existing.ID)
 	updated.ID = existing.ID
 	updated.Type = existing.Type
 	updated.Enabled = existing.Enabled
@@ -1007,64 +1140,142 @@ func (s *Server) handleDestinationUpdate(c *gin.Context) {
 	updated.LastHealthCheckOK = existing.LastHealthCheckOK
 	updated.LastHealthCheckErr = existing.LastHealthCheckErr
 
-	if err := s.db.UpdateLibraryDestination(c.Request.Context(), updated); err != nil {
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Could not save: " + err.Error()})
+	if err := s.db.UpdateLibraryDestination(ctx, updated); err != nil {
+		c.HTML(http.StatusInternalServerError, "destination_form_body", gin.H{
+			"Dest":          existing,
+			"DestType":      string(existing.Type),
+			"DestTypeLabel": destinationTypeLabel(existing.Type),
+			"FormError":     "Could not save: " + err.Error(),
+		})
 		return
 	}
-	c.Redirect(http.StatusSeeOther, "/settings#library-destinations")
+
+	setDestModalTrigger(c, "dest-updated", map[string]string{"id": updated.ID, "name": updated.DisplayName})
+	c.HTML(http.StatusOK, "destination_form_body", gin.H{
+		"ModalSuccess":     true,
+		"ModalSuccessVerb": "updated",
+		"DestTypeLabel":    destinationTypeLabel(updated.Type),
+		"Dest":             updated,
+	})
 }
 
-// handleDestinationToggle flips the enabled flag.
+// handleDestinationToggle flips the enabled flag. HTMX callers get the
+// rebuilt card body back (outerHTML swap target); plain POSTs (curl,
+// scripts) get a redirect to /destinations.
 func (s *Server) handleDestinationToggle(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
-	d, err := s.db.GetLibraryDestination(c.Request.Context(), id)
+	d, err := s.db.GetLibraryDestination(ctx, id)
 	if err != nil || d == nil {
-		s.renderAuthPage(c, http.StatusNotFound, gin.H{"Error": "Destination not found."})
+		if c.GetHeader("HX-Request") == "true" {
+			c.String(http.StatusNotFound, "Destination not found.")
+			return
+		}
+		c.String(http.StatusNotFound, "Destination not found.")
 		return
 	}
 	d.Enabled = !d.Enabled
-	if err := s.db.UpdateLibraryDestination(c.Request.Context(), d); err != nil {
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Could not toggle: " + err.Error()})
+	if err := s.db.UpdateLibraryDestination(ctx, d); err != nil {
+		if c.GetHeader("HX-Request") == "true" {
+			c.String(http.StatusInternalServerError, "Could not toggle: "+err.Error())
+			return
+		}
+		c.String(http.StatusInternalServerError, "Could not toggle: "+err.Error())
 		return
 	}
-	c.Redirect(http.StatusSeeOther, "/settings#library-destinations")
+
+	if c.GetHeader("HX-Request") == "true" {
+		v := s.singleDestinationSummary(ctx, id)
+		if v == nil {
+			c.String(http.StatusInternalServerError, "Could not reload destination view.")
+			return
+		}
+		c.HTML(http.StatusOK, "destination_card_body", gin.H{"Dest": v})
+		return
+	}
+	c.Redirect(http.StatusSeeOther, "/destinations")
 }
 
-// handleDestinationDelete is the only delete endpoint — POST-only, no
-// safe GET counterpart (destructive actions must not be GETs per RFC 9110
-// and WCAG semantics for destructive controls).
-//
-// Two-state behavior on the same path keeps the URL minimal:
-//   - first POST (no `confirm` field) renders the confirmation page
-//   - second POST (confirm=1, set by the confirmation page's submit) deletes
-func (s *Server) handleDestinationDelete(c *gin.Context) {
+// handleDestinationDeleteModal returns the delete-confirm body that opens
+// inside the global #dest-modal-content slot. GET is safe here because
+// no mutation happens — the actual delete only fires when the user
+// clicks the confirm button, which POSTs to /destinations/:id/delete
+// with confirm=1.
+func (s *Server) handleDestinationDeleteModal(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
-	d, err := s.db.GetLibraryDestination(c.Request.Context(), id)
+	d, err := s.db.GetLibraryDestination(ctx, id)
 	if err != nil || d == nil {
-		s.renderAuthPage(c, http.StatusNotFound, gin.H{"Error": "Destination not found."})
+		c.HTML(http.StatusNotFound, "destination_delete_body", gin.H{
+			"FormError": "Destination not found.",
+		})
 		return
 	}
-
-	if c.PostForm("confirm") != "1" {
-		// First POST: render the confirmation page.
-		data := s.authBaseData(c.Request.Context())
-		data["Page"] = "destinations_delete"
-		data["Dest"] = destinationView{
+	c.HTML(http.StatusOK, "destination_delete_body", gin.H{
+		"Dest": destinationView{
 			ID:          d.ID,
 			DisplayName: d.DisplayName,
 			Type:        string(d.Type),
 			TypeLabel:   destinationTypeLabel(d.Type),
-		}
-		c.HTML(http.StatusOK, "destinations_delete.html", data)
+		},
+	})
+}
+
+// handleDestinationDelete performs the actual delete. POST-only,
+// destructive actions must not be safe GETs (RFC 9110 + WCAG
+// link-purpose semantics for destructive controls). Requires
+// confirm=1 in the form body — the modal's delete button sets it.
+// Always invoked from the modal; fires HX-Trigger dest-deleted so the
+// modal auto-closes and the page reloads.
+func (s *Server) handleDestinationDelete(c *gin.Context) {
+	ctx := c.Request.Context()
+	id := c.Param("id")
+	d, err := s.db.GetLibraryDestination(ctx, id)
+	if err != nil || d == nil {
+		c.HTML(http.StatusNotFound, "destination_delete_body", gin.H{
+			"FormError": "Destination not found.",
+		})
 		return
 	}
 
-	// Second POST with confirm=1: actually delete.
-	if err := s.db.DeleteLibraryDestination(c.Request.Context(), id); err != nil {
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Could not delete: " + err.Error()})
+	if c.PostForm("confirm") != "1" {
+		// Defensive: missing confirm means the request didn't come from
+		// the modal's submit. Surface the prompt rather than acting.
+		c.HTML(http.StatusBadRequest, "destination_delete_body", gin.H{
+			"Dest": destinationView{
+				ID:          d.ID,
+				DisplayName: d.DisplayName,
+				Type:        string(d.Type),
+				TypeLabel:   destinationTypeLabel(d.Type),
+			},
+			"FormError": "Confirmation required.",
+		})
 		return
 	}
-	c.Redirect(http.StatusSeeOther, "/settings#library-destinations")
+
+	if err := s.db.DeleteLibraryDestination(ctx, id); err != nil {
+		c.HTML(http.StatusInternalServerError, "destination_delete_body", gin.H{
+			"Dest": destinationView{
+				ID:          d.ID,
+				DisplayName: d.DisplayName,
+				Type:        string(d.Type),
+				TypeLabel:   destinationTypeLabel(d.Type),
+			},
+			"FormError": "Could not delete: " + err.Error(),
+		})
+		return
+	}
+
+	setDestModalTrigger(c, "dest-deleted", map[string]string{"id": d.ID})
+	c.HTML(http.StatusOK, "destination_delete_body", gin.H{
+		"ModalSuccess": true,
+		"Dest": destinationView{
+			ID:          d.ID,
+			DisplayName: d.DisplayName,
+			Type:        string(d.Type),
+			TypeLabel:   destinationTypeLabel(d.Type),
+		},
+	})
 }
 
 func (s *Server) destinationFromForm(c *gin.Context, existingType string) (*database.LibraryDestination, error) {

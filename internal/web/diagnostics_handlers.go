@@ -10,13 +10,17 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/errs"
 	"github.com/mstrhakr/audplexus/internal/library"
+	"github.com/mstrhakr/audplexus/internal/logging"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
 )
 
@@ -82,14 +86,15 @@ type diagnosticsDestinationInventory struct {
 }
 
 func (s *Server) handleDiagnostics(c *gin.Context) {
+	ctx := c.Request.Context()
 	marketplace := "us"
 	if creds := s.audible.GetCredentials(); creds != nil && creds.Marketplace != "" {
 		marketplace = creds.Marketplace
 	}
-	c.HTML(http.StatusOK, "diagnostics.html", gin.H{
+	c.HTML(http.StatusOK, "diagnostics.html", s.withSidebar(ctx, gin.H{
 		"Page":            "diagnostics",
 		"UserMarketplace": marketplace,
-	})
+	}))
 }
 
 func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
@@ -148,7 +153,11 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 			FetchHealthy: inv.FetchErr == nil,
 		}
 		if inv.FetchErr != nil {
-			card.FetchError = inv.FetchErr.Error()
+			// Strip embedded HTML / map HTTP codes to friendly hints
+			// using the shared cleaner so the Drift Inbox card reads
+			// the same way the destination card and Connection-test
+			// list do for the same underlying failure.
+			card.FetchError = cleanErrorForDisplay(inv.FetchErr.Error())
 		}
 		destCards = append(destCards, card)
 	}
@@ -930,3 +939,96 @@ func normalizeDiagnosticsPathKey(p string) string {
 	return strings.ToLower(strings.Join(parts, "/"))
 }
 
+
+// handleDiagnosticsEnv returns a JSON snapshot of runtime + path
+// info for the DS-style "Logs & Environment" diagnostics tab. Read-only.
+func (s *Server) handleDiagnosticsEnv(c *gin.Context) {
+	ctx := c.Request.Context()
+	marketplace := "us"
+	if stored, _ := s.db.GetSetting(ctx, "audible_marketplace"); strings.TrimSpace(stored) != "" {
+		marketplace = strings.TrimSpace(stored)
+	} else if creds := s.audible.GetCredentials(); creds != nil && creds.Marketplace != "" {
+		marketplace = creds.Marketplace
+	}
+
+	var lastSyncOut gin.H
+	if last, err := s.db.GetLastSync(ctx); err == nil && last != nil {
+		lastSyncOut = gin.H{
+			"started_at":   last.StartedAt,
+			"completed_at": last.CompletedAt,
+			"status":       last.Status,
+			"books_found":  last.BooksFound,
+			"books_added":  last.BooksAdded,
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"go_version":      runtime.Version(),
+		"os_arch":         runtime.GOOS + "/" + runtime.GOARCH,
+		"num_cpu":         runtime.NumCPU(),
+		"audiobooks_path": s.audiobooksPath,
+		"downloads_path":  s.downloadsPath,
+		"config_path":     s.configPath,
+		"log_level":       logging.GetLevel(),
+		"authenticated":   s.audible.IsAuthenticated(),
+		"marketplace":     marketplace,
+		"last_sync":       lastSyncOut,
+		"server_time":     time.Now(),
+	})
+}
+
+// handleDiagnosticsDestinations returns a JSON snapshot of every
+// configured destination's connection state for the Connection-tests
+// list on the Logs & Environment diagnostics tab. Read-only; per-row
+// Test buttons hit the existing /destinations/:id/test endpoint.
+//
+// We reuse destinationSummaries (the same view-model the dashboard
+// reads) so disabled / never-checked / failed states render identically
+// across the app. Sensitive fields (api_key, plex_token) are not in
+// the summary struct, so this can't leak credentials.
+func (s *Server) handleDiagnosticsDestinations(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// Coverage stat needs a books-complete count, but the diagnostics
+	// list doesn't render coverage — pass 0 so the helper skips that
+	// branch and we avoid a per-call books table scan.
+	summaries := s.destinationSummaries(ctx, 0)
+
+	out := make([]gin.H, 0, len(summaries))
+	for _, v := range summaries {
+		// HealthDetail is written live from err.Error() in
+		// buildDestinationSummary, so it can still carry raw HTML
+		// response bodies. LastError gets cleaned at write time in
+		// recordDestinationHealth, but rows persisted before that
+		// fix may still hold raw text — clean both at the JSON
+		// boundary so the Connection-tests list always renders the
+		// same friendly wording as the rest of the app.
+		out = append(out, gin.H{
+			"id":              v.ID,
+			"display_name":    v.DisplayName,
+			"type":            v.Type,
+			"type_label":      v.TypeLabel,
+			"enabled":         v.Enabled,
+			"configured":      v.Configured,
+			"url":             v.URL,
+			"health":          v.Health,
+			"health_detail":   errs.CleanForDisplay(v.HealthDetail),
+			"last_error":      errs.CleanForDisplay(v.LastError),
+			"last_checked_at": v.LastCheckedAt,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"destinations": out})
+}
+
+// handleDiagnosticsLogsTail returns the most recent log lines from the
+// in-memory ring buffer (capped at 1024). Polled by the diagnostics
+// page every 2s while the Logs panel is visible.
+func (s *Server) handleDiagnosticsLogsTail(c *gin.Context) {
+	n := 200
+	if v := c.Query("n"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 1024 {
+			n = parsed
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"entries": logging.TailLogs(n)})
+}

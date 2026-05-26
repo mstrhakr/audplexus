@@ -1,30 +1,36 @@
-{{define "content"}}
-<div class="settings-page">
-    <header class="settings-header">
-        <h1>Add Library Destination</h1>
-        <p>Pick the kind of server Audplexus should push to. The next step asks for the type-specific configuration.</p>
-    </header>
-
-    <section class="auth-grid">
-        <section class="auth-panel" aria-labelledby="dest-type-heading">
-            <h2 id="dest-type-heading">Destination type</h2>
-            <form method="POST" action="/destinations/new" class="settings-form">
-                <fieldset class="form-group destination-type-group" style="border:0;padding:0;margin:0">
-                    <legend class="visually-hidden">Choose a destination type</legend>
-                    <p class="destination-type-help muted" id="destination-type-help">One click to continue to that destination's setup flow.</p>
-                    <div class="destination-type-grid" role="group" aria-describedby="destination-type-help">
-                        <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="plex">Plex</button>
-                        <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="emby">Emby</button>
-                        <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="jellyfin">Jellyfin</button>
-                        <button type="submit" class="btn btn-secondary destination-type-btn" name="type" value="abs">Audiobookshelf</button>
-                    </div>
-                </fieldset>
-                <div style="display:flex;gap:.75rem;margin-top:1rem;align-items:center">
-                    <a href="/settings#library-destinations" class="btn btn-outline">Cancel</a>
-                    <span class="muted" style="font-size:.9rem">Pick a destination type above.</span>
-                </div>
-            </form>
-        </section>
-    </section>
-</div>
+{{define "destination_picker_body"}}
+{{/*
+  Type picker — shown inside the modal opened from the wizard, the
+  Destinations page, etc. There's no full-page entry point any more;
+  picker submits to /destinations/modal/form which returns the type-
+  specific form body that swaps into the same modal slot.
+*/}}
+<header style="margin-bottom:1rem">
+    <h2 style="margin:0">Add destination</h2>
+    <p class="muted" style="margin:.35rem 0 0 0">Pick the kind of server Audplexus should push to. The next step asks for the type-specific configuration.</p>
+</header>
+<form hx-post="/destinations/modal/form" hx-target="#dest-modal-content" hx-swap="innerHTML" class="settings-form">
+    <fieldset class="form-group destination-type-group" style="border:0;padding:0;margin:0">
+        <legend class="visually-hidden">Choose a destination type</legend>
+        <p class="destination-type-help muted" id="destination-type-help">One click to continue to that destination's setup form.</p>
+        <div class="destination-type-grid picker-grid" role="group" aria-describedby="destination-type-help">
+            <button type="submit" class="picker destination-type-btn" name="type" value="plex">
+                <span class="lg"><span class="pill pill-logo"><img src="/static/plex.png" alt=""></span>Plex</span>
+                <span class="desc">Plex Media Server</span>
+            </button>
+            <button type="submit" class="picker destination-type-btn" name="type" value="emby">
+                <span class="lg"><span class="pill pill-logo"><img src="/static/emby.png" alt=""></span>Emby</span>
+                <span class="desc">Emby Media Server</span>
+            </button>
+            <button type="submit" class="picker destination-type-btn" name="type" value="jellyfin">
+                <span class="lg"><span class="pill pill-logo"><img src="/static/jellyfin.png" alt=""></span>Jellyfin</span>
+                <span class="desc">Jellyfin Media Server</span>
+            </button>
+            <button type="submit" class="picker destination-type-btn" name="type" value="abs">
+                <span class="lg"><span class="pill pill-logo"><img src="/static/audiobookshelf.png" alt=""></span>Audiobookshelf</span>
+                <span class="desc">Self-hosted audiobook server</span>
+            </button>
+        </div>
+    </fieldset>
+</form>
 {{end}}

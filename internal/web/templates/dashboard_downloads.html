@@ -1,33 +1,49 @@
 {{define "dashboard_downloads.html"}}
-<h2>Done (<span id="complete-count">{{len .DoneDownloads}}</span>)</h2>
-<table class="data-table" id="complete-table">
-    <thead><tr><th>ASIN</th><th>Title</th><th>Completed</th></tr></thead>
-    <tbody id="complete-body">
-    {{range .DoneDownloads}}
-    <tr>
-        <td>{{.ASIN}}</td>
-        <td>{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</td>
-        <td>{{if .CompletedAt}}{{formatDate (deref .CompletedAt)}}{{end}}</td>
-    </tr>
-    {{else}}
-    <tr id="complete-empty"><td colspan="3" class="empty">No completed downloads yet</td></tr>
-    {{end}}
-    </tbody>
-</table>
+{{if .DoneDownloads}}
+<div class="section-h">
+    Recent completions <span class="count" id="complete-count">{{len .DoneDownloads}}</span>
+</div>
+<div class="table-wrap">
+    <table class="tbl" id="complete-table">
+        <thead><tr><th>Title</th><th>ASIN</th><th>Completed</th></tr></thead>
+        <tbody id="complete-body">
+        {{range .DoneDownloads}}
+        {{$title := index $.DownloadTitles .ASIN}}{{$bookID := index $.DownloadBookIDs .ASIN}}
+        <tr>
+            <td>{{if $bookID}}<a href="/library/{{$bookID}}" class="book-detail-link" data-book-id="{{$bookID}}">{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</a>{{else}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}{{end}}</td>
+            <td class="cell-mono">{{if $bookID}}<a href="/library/{{$bookID}}" class="book-detail-link" data-book-id="{{$bookID}}">{{.ASIN}}</a>{{else}}{{.ASIN}}{{end}}</td>
+            <td class="cell-mono">{{if .CompletedAt}}{{formatDate (deref .CompletedAt)}}{{end}}</td>
+        </tr>
+        {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<div class="section-h">Recent completions <span class="count" id="complete-count">0</span></div>
+<div class="empty-card" id="complete-empty">No completed downloads yet</div>
+{{end}}
 
-<h2>Failed (<span id="failed-count">{{.FailedDL}}</span>)</h2>
-<table class="data-table" id="failed-table">
-    <thead><tr><th>ASIN</th><th>Error</th><th>Title</th></tr></thead>
-    <tbody id="failed-body">
-    {{range .FailedDownloads}}
-    <tr id="failed-{{.ID}}">
-        <td>{{.ASIN}}</td>
-        <td class="error-text">{{.Error}}</td>
-        <td>{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</td>
-    </tr>
-    {{else}}
-    <tr id="failed-empty"><td colspan="3" class="empty">No failed downloads</td></tr>
-    {{end}}
-    </tbody>
-</table>
+<div class="section-h">
+    Recent failures <span class="count" id="failed-count">{{.FailedDL}}</span>
+    <span class="right"><a href="/library?status=failed">See all failed →</a></span>
+</div>
+{{if .FailedDownloads}}
+<div class="table-wrap">
+    <table class="tbl" id="failed-table">
+        <thead><tr><th>Title</th><th>ASIN</th><th>Error</th></tr></thead>
+        <tbody id="failed-body">
+        {{range .FailedDownloads}}
+        {{$title := index $.DownloadTitles .ASIN}}{{$bookID := index $.DownloadBookIDs .ASIN}}
+        <tr id="failed-{{.ID}}">
+            <td>{{if $bookID}}<a href="/library/{{$bookID}}" class="book-detail-link" data-book-id="{{$bookID}}">{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</a>{{else}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}{{end}}</td>
+            <td class="cell-mono">{{if $bookID}}<a href="/library/{{$bookID}}" class="book-detail-link" data-book-id="{{$bookID}}">{{.ASIN}}</a>{{else}}{{.ASIN}}{{end}}</td>
+            <td class="error-text">{{cleanError .Error}}</td>
+        </tr>
+        {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<div class="empty-card" id="failed-empty">No failed downloads</div>
+{{end}}
 {{end}}
