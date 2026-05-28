@@ -24,7 +24,7 @@
 
     <span id="sync-status" class="sync-status-wrap" hx-get="/api/sync/status" hx-trigger="load" hx-swap="innerHTML"></span>
 
-    <div id="dashboard-summary" hx-get="/api/dashboard/summary" hx-trigger="load, every 12s queue:last" hx-swap="innerHTML">
+    <div id="dashboard-summary" hx-get="/api/dashboard/summary" hx-trigger="load, every 12s queue:last, sync:done from:body" hx-swap="innerHTML">
         {{template "dashboard_summary.html" .}}
     </div>
 
@@ -37,7 +37,7 @@
         <div id="pipeline-pools" class="pool-grid pool-grid-stacked"></div>
     </div>
 
-    <div id="dashboard-downloads" hx-get="/api/dashboard/downloads" hx-trigger="load, every 12s queue:last" hx-swap="innerHTML">
+    <div id="dashboard-downloads" hx-get="/api/dashboard/downloads" hx-trigger="load, every 12s queue:last, sync:done from:body" hx-swap="innerHTML">
         {{template "dashboard_downloads.html" .}}
     </div>
 

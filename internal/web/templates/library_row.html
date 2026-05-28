@@ -9,7 +9,7 @@
             {{end}}
         </a>
     </td>
-    <td>
+    <td class="col-title">
         <div class="cell-title">
             <a href="/library/{{.Book.ID}}" class="book-detail-link" data-book-id="{{.Book.ID}}">{{.Book.Title}}</a>
             {{if eq (printf "%s" .Book.Status) "unavailable"}}
@@ -21,14 +21,14 @@
             {{if .Book.Narrator}}<small>narr. {{.Book.Narrator}}</small>{{end}}
         </div>
     </td>
-    <td>{{.Book.Author}}</td>
-    <td>
+    <td class="col-author">{{.Book.Author}}</td>
+    <td class="col-series">
         {{if .Book.Series}}<span class="cell-mono" style="color:var(--text)">{{.Book.Series}} #{{.Book.SeriesPosition}}</span>
         {{else}}<span class="cell-mono">—</span>{{end}}
     </td>
-    <td class="cell-mono">{{formatDuration .Book.Duration}}</td>
-    <td class="cell-mono">{{formatDate .Book.PurchaseDate}}</td>
-    <td><span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span></td>
+    <td class="cell-mono col-duration">{{formatDuration .Book.Duration}}</td>
+    <td class="cell-mono col-purchased">{{formatDate .Book.PurchaseDate}}</td>
+    <td class="col-status"><span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span></td>
     <td class="col-presence">
         {{if .Presence}}
         <div class="presence-cell" role="list" aria-label="Presence">

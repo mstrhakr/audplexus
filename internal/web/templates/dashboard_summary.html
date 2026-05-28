@@ -11,11 +11,11 @@
         <div class="value" id="stat-complete">{{.CompleteBooks}}</div>
         <div class="delta {{if gt .TotalBooks 0}}up{{end}}">{{if gt .TotalBooks 0}}{{coveragePct .CompleteBooks .TotalBooks}}% of library{{else}}—{{end}}</div>
     </div>
-    <div class="stat-card">
+    <a class="stat-card stat-card-link" href="/library?status=new">
         <div class="label">New</div>
         <div class="value" id="stat-new">{{.NewBooks}}</div>
         <div class="delta">pending action</div>
-    </div>
+    </a>
     <div class="stat-card accent">
         <div class="label">In Progress</div>
         <div class="value" id="stat-active-dl">{{.ActiveDL}}</div>
