@@ -99,24 +99,6 @@
             {{end}}
 
             {{if eq .CurrentStep 2}}
-                <h2>Storage</h2>
-                <p class="sub">Audplexus writes processed audiobooks to the path mounted into the container. Your media servers should be able to read this same path.</p>
-                <div class="form-row">
-                    <label>Library root</label>
-                    <div class="code">{{.AudiobooksPath}}</div>
-                    <div class="hint">Configured at container startup. If this isn't right, mount a different volume to <code>/audiobooks</code> in your compose file.</div>
-                </div>
-                <div class="form-row">
-                    <label>Downloads cache</label>
-                    <div class="code">{{.DownloadsPath}}</div>
-                    <div class="hint">Temporary working directory for in-flight downloads. Doesn't need to be visible to media servers.</div>
-                </div>
-                <div class="alert">
-                    <div>Naming templates and tagging options are configurable later from <b>Settings</b>.</div>
-                </div>
-            {{end}}
-
-            {{if eq .CurrentStep 3}}
                 <h2>Add a destination</h2>
                 <p class="sub">Connect at least one media server so Audplexus knows where to push processed files. You can add more later.</p>
 
@@ -152,7 +134,7 @@
                 </div>
             {{end}}
 
-            {{if eq .CurrentStep 4}}
+            {{if eq .CurrentStep 3}}
                 <h2>You're all set.</h2>
                 <p class="sub">Audplexus is ready to run its first sync. You can change anything from Settings later.</p>
                 <div class="card">

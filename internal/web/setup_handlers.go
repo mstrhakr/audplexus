@@ -27,9 +27,8 @@ type setupStep struct {
 var setupSteps = []setupStep{
 	{NumLabel: "1", Label: "Welcome"},
 	{NumLabel: "2", Label: "Audible"},
-	{NumLabel: "3", Label: "Storage"},
-	{NumLabel: "4", Label: "Destinations"},
-	{NumLabel: "5", Label: "Done"},
+	{NumLabel: "3", Label: "Destinations"},
+	{NumLabel: "4", Label: "Done"},
 }
 
 // isFirstRun returns true when the wizard has neither been completed nor
@@ -83,7 +82,6 @@ func (s *Server) handleSetupWizard(c *gin.Context) {
 	data["Steps"] = setupSteps
 	data["CurrentStep"] = step
 	data["AudiobooksPath"] = s.audiobooksPath
-	data["DownloadsPath"] = s.downloadsPath
 
 	// Destinations summary for steps 3 (list) and 4 (recap). We use the
 	// rich destinationSummaries shape so the picker-list shows type +

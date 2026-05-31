@@ -3426,8 +3426,8 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 	webLog.Info().Msg("authentication successful")
 
 	// If the user is still in onboarding, bounce back into the wizard at
-	// the Storage step rather than dropping them on Settings — the wizard
-	// is what kicked them out to Amazon in the first place.
+	// the Destinations step rather than dropping them on Settings — the
+	// wizard is what kicked them out to Amazon in the first place.
 	if s.isFirstRun(ctx) {
 		c.Redirect(http.StatusSeeOther, "/setup?step=2")
 		return

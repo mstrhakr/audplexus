@@ -336,6 +336,7 @@
                 <dt class="muted">Config</dt>
                 <dd class="cell-mono">{{.ConfigPath}}</dd>
             </dl>
+            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">These paths come from your container's volume mounts and can't be changed here. To move them, update the mounts in your compose file and restart.</p>
         </div>
     </section>
 
@@ -633,13 +634,18 @@ function confirmRestart() {
     .settings-container { display: flex; flex-direction: column; gap: 1.25rem; }
     .settings-section { background: transparent; padding: 0; border: 0; }
 
+    /* The Library/Sync/Performance cards live inside a single <form>, which
+       is one flex child of .settings-container — so the container gap can't
+       reach the sections nested inside it. Give the form the same flex
+       column + gap so every card is spaced consistently. */
+    #settings-main-form { display: flex; flex-direction: column; gap: 1.25rem; }
+
     /* Bottom save bar shared by the Library + Sync + Performance form. */
     .settings-save-bar {
         display: flex;
         gap: 0.5rem;
         flex-wrap: wrap;
         align-items: center;
-        margin-top: 0.25rem;
     }
 
     /* Configuration form — two-column grid of .form-rows so we fit a
