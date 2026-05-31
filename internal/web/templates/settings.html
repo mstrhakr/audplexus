@@ -615,7 +615,8 @@ function confirmRestart() {
 
     var focusSection = '{{.FocusSection}}';
     if (focusSection) {
-        var focusEl = document.getElementById(focusSection + '-settings');
+        var focusMap = { auth: 'section-audible' };
+        var focusEl = document.getElementById(focusMap[focusSection] || ('section-' + focusSection));
         if (focusEl) {
             focusEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
@@ -681,8 +682,11 @@ function confirmRestart() {
 </style>
 
 <script>
-// Settings TOC scroll-spy — highlights the left-rail link whose section
-// is closest to the top of the viewport. Pure JS, no deps.
+// Settings TOC scroll-spy — highlights the left-rail link for the
+// section currently under the topbar. Position-based (not an
+// IntersectionObserver) so every section is evaluated on each scroll,
+// which avoids the highlight snapping back to the top section when only
+// a subset of sections change visibility. Pure JS, no deps.
 (function() {
     var links = Array.prototype.slice.call(document.querySelectorAll('.settings-nav-link[data-section]'));
     if (!links.length) return;
@@ -691,6 +695,13 @@ function confirmRestart() {
         .filter(Boolean);
     if (!sections.length) return;
 
+    // Matches the sticky topbar offset used by the click handler below.
+    var OFFSET = 80;
+    // While a click-driven smooth scroll is animating, suppress the spy
+    // so it doesn't fight the click and revert the highlight.
+    var clickLock = false;
+    var clickTimer = null;
+
     function setActive(id) {
         links.forEach(function(a) {
             if (a.getAttribute('data-section') === id) a.classList.add('active');
@@ -698,18 +709,33 @@ function confirmRestart() {
         });
     }
 
-    var obs = new IntersectionObserver(function(entries) {
-        // Pick the visible section nearest the top.
-        var visible = entries
-            .filter(function(e) { return e.isIntersecting; })
-            .sort(function(a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
-        if (visible[0]) setActive(visible[0].target.id);
-    }, { rootMargin: '-100px 0px -55% 0px', threshold: [0, 0.1, 0.5] });
-    sections.forEach(function(s) { obs.observe(s); });
+    function currentSection() {
+        var doc = document.documentElement;
+        // At (or near) the bottom of the page the last section can't reach
+        // the top, so anchor to it explicitly.
+        if (window.innerHeight + window.scrollY >= doc.scrollHeight - 2) {
+            return sections[sections.length - 1].id;
+        }
+        var line = window.scrollY + OFFSET;
+        var active = sections[0].id;
+        for (var i = 0; i < sections.length; i++) {
+            var top = sections[i].getBoundingClientRect().top + window.scrollY;
+            if (top <= line + 1) active = sections[i].id;
+            else break;
+        }
+        return active;
+    }
 
-    // Smooth-scroll on link click (browsers do this for #anchor, but we
-    // also want to set active immediately so the highlight doesn't lag
-    // the scroll animation).
+    function onScroll() {
+        if (clickLock) return;
+        setActive(currentSection());
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+
+    // Smooth-scroll on link click. Set active immediately and lock the spy
+    // until the scroll settles so the highlight doesn't lag or revert.
     links.forEach(function(a) {
         a.addEventListener('click', function(ev) {
             var id = a.getAttribute('data-section');
@@ -717,11 +743,19 @@ function confirmRestart() {
             if (!el) return;
             ev.preventDefault();
             setActive(id);
+            clickLock = true;
             var y = el.getBoundingClientRect().top + window.scrollY - 72;
             window.scrollTo({ top: y, behavior: 'smooth' });
             history.replaceState(null, '', '#' + id);
+            if (clickTimer) clearTimeout(clickTimer);
+            clickTimer = setTimeout(function() {
+                clickLock = false;
+                setActive(currentSection());
+            }, 700);
         });
     });
+
+    setActive(currentSection());
 })();
 </script>
 
