@@ -35,6 +35,7 @@ import (
 	"github.com/mstrhakr/audplexus/internal/logging"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
 	"github.com/mstrhakr/audplexus/internal/organizer"
+	"github.com/mstrhakr/audplexus/internal/scheduler"
 	audible "github.com/mstrhakr/go-audible"
 	"github.com/robfig/cron/v3"
 )
@@ -53,6 +54,7 @@ type Server struct {
 	db             database.Database
 	sync           *library.SyncService
 	downloads      *library.DownloadManager
+	sched          *scheduler.Scheduler
 	audnexus       *audnexus.Client
 	organizer      *organizer.PlexOrganizer
 	audible        *audible.Client
@@ -93,6 +95,7 @@ func NewServer(
 	db database.Database,
 	syncSvc *library.SyncService,
 	dlMgr *library.DownloadManager,
+	sched *scheduler.Scheduler,
 	anClient *audnexus.Client,
 	org *organizer.PlexOrganizer,
 	audibleClient *audible.Client,
@@ -112,6 +115,7 @@ func NewServer(
 		db:             db,
 		sync:           syncSvc,
 		downloads:      dlMgr,
+		sched:          sched,
 		audnexus:       anClient,
 		organizer:      org,
 		audible:        audibleClient,
@@ -2965,27 +2969,42 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 		return true
 	}
 
+	// Sync settings apply live via the scheduler — no restart needed. The
+	// schedule and enabled flag are coupled (enabled gates whether the cron
+	// entry exists), so reapply the effective schedule whenever either moves.
+	scheduleChanged := false
 	if _, ok := c.GetPostForm("sync_schedule_sent"); ok {
 		schedule := strings.TrimSpace(c.PostForm("sync_schedule"))
 		if setSetting("sync_schedule", schedule) {
-			restartRequired = true
+			scheduleChanged = true
 		}
 	}
 	if _, ok := c.GetPostForm("sync_enabled_sent"); ok {
 		enabled := c.PostForm("sync_enabled") == "true"
 		if setSetting("sync_enabled", strconv.FormatBool(enabled)) {
-			restartRequired = true
+			scheduleChanged = true
 		}
 	}
 	if _, ok := c.GetPostForm("sync_auto_queue_new_sent"); ok {
 		enabled := c.PostForm("sync_auto_queue_new") == "true"
-		if setSetting(library.SettingKeyAutoQueueNewBooks, strconv.FormatBool(enabled)) {
-			restartRequired = true
+		if setSetting(library.SettingKeyAutoQueueNewBooks, strconv.FormatBool(enabled)) && s.sched != nil {
+			s.sched.SetAutoQueueNew(enabled)
 		}
 	}
 	if mode := strings.TrimSpace(c.PostForm("sync_mode")); mode != "" {
-		if setSetting("sync_mode", mode) {
-			restartRequired = true
+		if setSetting("sync_mode", mode) && s.sched != nil {
+			s.sched.SetSyncMode(mode)
+		}
+	}
+	if scheduleChanged && s.sched != nil {
+		enabled := s.settingBool(ctx, "sync_enabled", true)
+		schedule := strings.TrimSpace(s.settingString(ctx, "sync_schedule", ""))
+		applied := ""
+		if enabled {
+			applied = schedule
+		}
+		if err := s.sched.SetSyncSchedule(applied); err != nil {
+			webLog.Error().Err(err).Str("schedule", applied).Msg("failed to apply sync schedule live")
 		}
 	}
 	if raw := c.PostForm("output_format"); raw != "" {
@@ -3062,7 +3081,7 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 	if c.GetHeader("HX-Request") == "true" {
 		msg := "Settings saved"
 		if restartRequired {
-			msg = "Settings saved. Restart required to apply one or more changes."
+			msg = "Settings saved. Worker count changes need a restart to take effect."
 		}
 		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": msg, "RestartRequired": restartRequired})
 		return
