@@ -1281,13 +1281,16 @@ func hasFilesWithExt(dirPath string, ext string) bool {
 func (s *Server) handleBookDetail(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	var id int64
-	if _, err := fmt.Sscanf(c.Param("id"), "%d", &id); err != nil {
-		c.HTML(http.StatusBadRequest, "dashboard.html", gin.H{"Error": "Invalid book ID"})
-		return
+	// Accept either a numeric book ID or an ASIN. Links from Diagnostics
+	// (and other ASIN-keyed surfaces) pass the ASIN, which isn't numeric.
+	param := strings.TrimSpace(c.Param("id"))
+	var book *database.Book
+	var err error
+	if id, perr := strconv.ParseInt(param, 10, 64); perr == nil {
+		book, err = s.db.GetBook(ctx, id)
+	} else {
+		book, err = s.db.GetBookByASIN(ctx, param)
 	}
-
-	book, err := s.db.GetBook(ctx, id)
 	if err != nil || book == nil {
 		c.HTML(http.StatusNotFound, "dashboard.html", gin.H{"Error": "Book not found"})
 		return
