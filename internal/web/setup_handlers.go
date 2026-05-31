@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/library"
 )
 
 // settingKeyOnboarded marks the setup wizard as completed. Stored as "1"
@@ -125,6 +126,11 @@ func (s *Server) handleSetupMarketplace(c *gin.Context) {
 func (s *Server) handleSetupFinish(c *gin.Context) {
 	ctx := c.Request.Context()
 	_ = s.setOnboarded(ctx, true)
+
+	// Persist the "automatically download new books" choice from the final
+	// step. An unchecked toggle submits nothing, so absence means off.
+	autoDownload := c.PostForm("auto_queue_new") == "true"
+	_ = s.db.SetSetting(ctx, library.SettingKeyAutoQueueNewBooks, strconv.FormatBool(autoDownload))
 
 	if s.audible.IsAuthenticated() {
 		// Fire-and-forget — sync runs asynchronously; UI will show progress
