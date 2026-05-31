@@ -3,7 +3,7 @@
     <div class="page-header">
         <div>
             <h1>Settings</h1>
-            <div class="sub">Server configuration. Changes save inline; some apply only after restart.</div>
+            <div class="sub">Server configuration. Changes save as you make them.</div>
         </div>
     </div>
 
@@ -207,8 +207,8 @@
                 <div class="form-row">
                     <label for="sync_mode">Scheduled sync mode</label>
                     <select class="select" id="sync_mode" name="sync_mode">
-                        <option value="full" {{if eq .SyncMode "full"}}selected{{end}}>Full (Audible + filesystem + media server)</option>
-                        <option value="quick" {{if eq .SyncMode "quick"}}selected{{end}}>Quick (Audible-focused)</option>
+                        <option value="full" {{if eq .SyncMode "full"}}selected{{end}}>Full (Audible, your files, and media servers)</option>
+                        <option value="quick" {{if eq .SyncMode "quick"}}selected{{end}}>Quick (just check Audible)</option>
                     </select>
                     <div class="hint">Mode used by scheduled sync runs.</div>
                 </div>
@@ -227,8 +227,8 @@
 
                 <label class="form-row inline">
                     <span class="row-label">
-                        Auto-add new books to queue
-                        <div class="hint">Any book discovered with <code>new</code> status is automatically appended to the download queue after sync.</div>
+                        Automatically download new books
+                        <div class="hint">When a sync finds a new book, add it to the download queue right away. Turn this off if you'd rather pick what to download yourself.</div>
                     </span>
                     <span class="toggle">
                         <input type="checkbox" id="sync_auto_queue_new" name="sync_auto_queue_new" value="true" {{if .SyncAutoQueueNew}}checked{{end}}>
@@ -237,7 +237,6 @@
                     <input type="hidden" name="sync_auto_queue_new_sent" value="1">
                 </label>
             </div>
-            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">Sync schedule and auto-queue-new changes apply on next restart.</p>
         </div>
     </section>
 
@@ -251,19 +250,19 @@
                 <div class="form-row">
                     <label for="download_concurrency">Download workers</label>
                     <input class="input" type="number" id="download_concurrency" name="download_concurrency" value="{{.DownloadConcurrency}}" min="0" max="16">
-                    <div class="hint">0 = auto. Higher values can improve throughput on fast networks.</div>
+                    <div class="hint">0 lets Audplexus pick. Higher numbers can download faster on quick connections.</div>
                 </div>
 
                 <div class="form-row">
                     <label for="decrypt_concurrency">Decrypt workers</label>
                     <input class="input" type="number" id="decrypt_concurrency" name="decrypt_concurrency" value="{{.DecryptConcurrency}}" min="0" max="16">
-                    <div class="hint">0 = auto. This stage is CPU-heavy.</div>
+                    <div class="hint">0 lets Audplexus pick. This step works your CPU hard.</div>
                 </div>
 
                 <div class="form-row">
                     <label for="process_concurrency">Process workers</label>
                     <input class="input" type="number" id="process_concurrency" name="process_concurrency" value="{{.ProcessConcurrency}}" min="0" max="16">
-                    <div class="hint">0 = auto. Controls metadata/organize stage parallelism.</div>
+                    <div class="hint">0 lets Audplexus pick. Sets how many books get tagged and filed at once.</div>
                 </div>
 
                 <div class="form-row">
@@ -278,14 +277,14 @@
                     <div class="hint">Minimum severity for log output. Changes take effect immediately.</div>
                 </div>
             </div>
-            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">Worker concurrency changes apply on next restart.</p>
+            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">Worker count changes apply after a restart.</p>
         </div>
     </section>
 
     {{/* Single save row for the Library + Sync + Performance form. */}}
     <div class="settings-save-bar">
         <button type="submit" class="btn btn-primary">Save settings</button>
-        <button type="button" class="btn btn-secondary" hx-post="/api/library/reorganize" hx-target="#save-status" hx-swap="innerHTML">Reorganize library to current scheme</button>
+        <button type="button" class="btn btn-secondary" hx-post="/api/library/reorganize" hx-target="#save-status" hx-swap="innerHTML">Reorganize library to current settings</button>
         <span id="save-status" class="status-msg"></span>
     </div>
     </form>
@@ -306,10 +305,10 @@
                         {{end}}
                     </select>
                     <div class="hint" id="tag_profile_help">
-                        Atoms written into each m4b on download.
-                        <strong>Basic</strong> matches Audplexus's historical behavior.
-                        <strong>Audiobook-rich</strong> adds <code>series</code>, <code>series-part</code>, and <code>asin</code> — read by Audiobookshelf for series auto-grouping.
-                        Applies to subsequent downloads only.
+                        Tags saved inside each file when it downloads.
+                        <strong>Audiobook-rich</strong> (default) adds <code>series</code>, <code>series-part</code>, and <code>asin</code> tags so apps like Audiobookshelf can group series for you.
+                        <strong>Basic</strong> leaves those out and matches how older versions tagged files.
+                        Only changes files you download from now on.
                     </div>
                 </div>
                 <button type="submit" class="btn btn-secondary">Save Tag Profile</button>
