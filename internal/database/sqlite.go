@@ -41,7 +41,7 @@ func (s *SQLiteDB) Close() error {
 }
 
 func (s *SQLiteDB) Reset(ctx context.Context) error {
-	tables := []string{"download_queue", "sync_history", "settings", "devices", "books"}
+	tables := []string{"sessions", "users", "download_queue", "sync_history", "settings", "devices", "books"}
 	for _, t := range tables {
 		if _, err := s.db.ExecContext(ctx, "DELETE FROM "+t); err != nil {
 			return fmt.Errorf("reset table %s: %w", t, err)
@@ -673,5 +673,141 @@ func buildBookWhere(filter BookFilter) (string, []interface{}) {
 		return "", nil
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// --- Users ---
+
+func (s *SQLiteDB) scanUser(row *sql.Row) (*User, error) {
+	var u User
+	err := row.Scan(&u.ID, &u.Username, &u.Password, &u.Salt, &u.Iterations,
+		&u.Identifier, &u.CreatedAt, &u.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (s *SQLiteDB) GetUserByUsername(ctx context.Context, username string) (*User, error) {
+	return s.scanUser(s.db.QueryRowContext(ctx,
+		`SELECT id, username, password, salt, iterations, identifier, created_at, updated_at
+		 FROM users WHERE username = ? COLLATE NOCASE LIMIT 1`, username))
+}
+
+func (s *SQLiteDB) GetUserByID(ctx context.Context, id int64) (*User, error) {
+	return s.scanUser(s.db.QueryRowContext(ctx,
+		`SELECT id, username, password, salt, iterations, identifier, created_at, updated_at
+		 FROM users WHERE id = ?`, id))
+}
+
+func (s *SQLiteDB) CountUsers(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)
+	return n, err
+}
+
+func (s *SQLiteDB) UpsertUser(ctx context.Context, user *User) error {
+	now := time.Now()
+	user.UpdatedAt = now
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = now
+	}
+	if user.ID == 0 {
+		res, err := s.db.ExecContext(ctx,
+			`INSERT INTO users (username, password, salt, iterations, identifier, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
+			user.CreatedAt, user.UpdatedAt)
+		if err != nil {
+			return fmt.Errorf("insert user: %w", err)
+		}
+		user.ID, _ = res.LastInsertId()
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET username = ?, password = ?, salt = ?, iterations = ?,
+		                  identifier = ?, updated_at = ?
+		 WHERE id = ?`,
+		user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
+		user.UpdatedAt, user.ID)
+	if err != nil {
+		return fmt.Errorf("update user: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteDB) RotateUserIdentifier(ctx context.Context, userID int64, newIdentifier string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET identifier = ?, updated_at = ? WHERE id = ?`,
+		newIdentifier, time.Now(), userID)
+	return err
+}
+
+func (s *SQLiteDB) DeleteUser(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	return err
+}
+
+// --- Sessions ---
+
+func (s *SQLiteDB) CreateSession(ctx context.Context, sess *Session) error {
+	now := time.Now()
+	if sess.CreatedAt.IsZero() {
+		sess.CreatedAt = now
+	}
+	if sess.LastSeen.IsZero() {
+		sess.LastSeen = now
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO sessions (token, user_id, identifier, expires_at, last_seen, created_at, user_agent, ip)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		sess.Token, sess.UserID, sess.Identifier, sess.ExpiresAt, sess.LastSeen,
+		sess.CreatedAt, sess.UserAgent, sess.IP)
+	if err != nil {
+		return fmt.Errorf("insert session: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteDB) GetSession(ctx context.Context, token string) (*Session, error) {
+	var sess Session
+	err := s.db.QueryRowContext(ctx,
+		`SELECT token, user_id, identifier, expires_at, last_seen, created_at, user_agent, ip
+		 FROM sessions WHERE token = ?`, token).Scan(
+		&sess.Token, &sess.UserID, &sess.Identifier, &sess.ExpiresAt, &sess.LastSeen,
+		&sess.CreatedAt, &sess.UserAgent, &sess.IP)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sess, nil
+}
+
+func (s *SQLiteDB) TouchSession(ctx context.Context, token string, lastSeen time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET last_seen = ? WHERE token = ?`, lastSeen, token)
+	return err
+}
+
+func (s *SQLiteDB) DeleteSession(ctx context.Context, token string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token = ?`, token)
+	return err
+}
+
+func (s *SQLiteDB) DeleteSessionsForUser(ctx context.Context, userID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID)
+	return err
+}
+
+func (s *SQLiteDB) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ?`, now)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 

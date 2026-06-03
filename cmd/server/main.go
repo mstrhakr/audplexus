@@ -13,6 +13,7 @@ import (
 
 	"github.com/mstrhakr/audplexus/internal/audio"
 	"github.com/mstrhakr/audplexus/internal/audnexus"
+	"github.com/mstrhakr/audplexus/internal/auth"
 	"github.com/mstrhakr/audplexus/internal/config"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
@@ -59,6 +60,13 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to run migrations")
 	}
 	log.Info().Msg("database migrations complete")
+
+	// Auth bootstrap: seed the API key (idempotent), pick a sane default
+	// auth_method for the install kind, and launch the session GC.
+	if _, err := auth.SeedAPIKey(context.Background(), db); err != nil {
+		log.Warn().Err(err).Msg("seed api key failed")
+	}
+	seedAuthDefaults(context.Background(), db)
 
 	// One-shot startup pass: decode HTML entities (e.g. "&amp;", "&uacute;")
 	// that older sync runs left in book text fields. Idempotent — books that
@@ -159,6 +167,11 @@ func main() {
 	defer dlMgr.Stop()
 	log.Info().Msg("download manager started")
 
+	// Session garbage collector — reaps expired session rows hourly.
+	// Already-expired sessions fail ResolveSession the moment they pass
+	// their deadline, so this is purely housekeeping.
+	auth.StartGC(ctx, db, 0)
+
 	// Start scheduler
 	sched := scheduler.New(syncSvc, dlMgr)
 	if cfg.Sync.Mode != "" {
@@ -222,6 +235,40 @@ func loadCredentials(client *audible.Client, path string) error {
 	}
 	client.SetCredentials(&creds)
 	return nil
+}
+
+// seedAuthDefaults picks an initial auth_method for the installation.
+//
+//   - Fresh install (no books, no destinations, no settings → no auth_method
+//     yet and no "onboarded" marker): default to forms + enabled. The setup
+//     wizard funnels the user to /setup/admin so they create an admin row
+//     before they can finish onboarding.
+//
+//   - Upgrade install (has data but no auth_method): default to none with
+//     auth_required=disabled_for_localhost so loopback integrations keep
+//     working without surprises. A nag banner appears on every page until
+//     the operator switches it on under Settings → Security.
+//
+// Already-configured installs (auth_method already set) are left alone.
+func seedAuthDefaults(ctx context.Context, db database.Database) {
+	existing, _ := db.GetSetting(ctx, auth.SettingKeyAuthMethod)
+	if existing != "" {
+		return
+	}
+	// "Has any prior state" heuristic. onboarded is set by the setup wizard
+	// completion handler — its presence is the most reliable upgrade
+	// indicator since brand-new DBs always start with it empty.
+	onboarded, _ := db.GetSetting(ctx, "onboarded")
+	isFresh := onboarded == ""
+	if isFresh {
+		_ = db.SetSetting(ctx, auth.SettingKeyAuthMethod, string(auth.AuthMethodForms))
+		_ = db.SetSetting(ctx, auth.SettingKeyAuthRequired, string(auth.AuthRequiredEnabled))
+		log.Info().Msg("auth defaults seeded: forms + required")
+		return
+	}
+	_ = db.SetSetting(ctx, auth.SettingKeyAuthMethod, string(auth.AuthMethodNone))
+	_ = db.SetSetting(ctx, auth.SettingKeyAuthRequired, string(auth.AuthRequiredDisabledForLocalhost))
+	log.Warn().Msg("auth defaults seeded: NONE (upgrade install) — enable via Settings → Security")
 }
 
 func getConfigDir() string {

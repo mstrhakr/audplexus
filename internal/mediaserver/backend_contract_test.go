@@ -3,6 +3,7 @@ package mediaserver
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/mstrhakr/audplexus/internal/database"
 )
@@ -161,4 +162,34 @@ func (s *settingsOnlyStubDB) GetBookDestination(ctx context.Context, bookID int6
 }
 func (s *settingsOnlyStubDB) ListBookDestinationsBy(ctx context.Context, destID string, state *database.BookDestinationSyncState) ([]database.BookDestination, error) {
 	return nil, nil
+}
+
+// Auth methods — backends never touch them; empty defaults satisfy the interface.
+func (s *settingsOnlyStubDB) GetUserByUsername(ctx context.Context, u string) (*database.User, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) GetUserByID(ctx context.Context, id int64) (*database.User, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) CountUsers(ctx context.Context) (int, error)            { return 0, nil }
+func (s *settingsOnlyStubDB) UpsertUser(ctx context.Context, u *database.User) error { return nil }
+func (s *settingsOnlyStubDB) RotateUserIdentifier(ctx context.Context, id int64, ident string) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) DeleteUser(ctx context.Context, id int64) error { return nil }
+func (s *settingsOnlyStubDB) CreateSession(ctx context.Context, sess *database.Session) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) GetSession(ctx context.Context, token string) (*database.Session, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) TouchSession(ctx context.Context, token string, t time.Time) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) DeleteSession(ctx context.Context, token string) error { return nil }
+func (s *settingsOnlyStubDB) DeleteSessionsForUser(ctx context.Context, userID int64) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error) {
+	return 0, nil
 }

@@ -138,7 +138,7 @@ func (s *Server) handleDestinations(c *gin.Context) {
 	data["Destinations"] = dests
 	data["HealthyCount"] = healthy
 	data["TotalCount"] = len(dests)
-	c.HTML(http.StatusOK, "destinations.html", s.withSidebar(ctx, data))
+	c.HTML(http.StatusOK, "destinations.html", s.withSidebar(c, data))
 }
 
 // handleDestinationsModalPicker returns the type-picker body that opens

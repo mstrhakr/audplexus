@@ -86,12 +86,11 @@ type diagnosticsDestinationInventory struct {
 }
 
 func (s *Server) handleDiagnostics(c *gin.Context) {
-	ctx := c.Request.Context()
 	marketplace := "us"
 	if creds := s.audible.GetCredentials(); creds != nil && creds.Marketplace != "" {
 		marketplace = creds.Marketplace
 	}
-	c.HTML(http.StatusOK, "diagnostics.html", s.withSidebar(ctx, gin.H{
+	c.HTML(http.StatusOK, "diagnostics.html", s.withSidebar(c, gin.H{
 		"Page":            "diagnostics",
 		"UserMarketplace": marketplace,
 	}))

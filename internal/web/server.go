@@ -32,6 +32,7 @@ import (
 	"github.com/mstrhakr/audplexus/internal/audnexus"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
+	"github.com/mstrhakr/audplexus/internal/auth"
 	"github.com/mstrhakr/audplexus/internal/logging"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
 	"github.com/mstrhakr/audplexus/internal/organizer"
@@ -41,6 +42,7 @@ import (
 )
 
 var webLog = logging.Component("web")
+var authLog = logging.Component("auth")
 
 //go:embed templates/*.html
 var templateFS embed.FS
@@ -75,6 +77,10 @@ type Server struct {
 	// underlying setting. atomic.Bool because reads are middleware and
 	// writes are spread across a handful of handler goroutines.
 	onboarded atomic.Bool
+	// authMgr owns Authenticate/Require/CSRF middleware + the login
+	// throttle. Wired before firstRunGate so unauth'd visitors hit /login,
+	// not /setup.
+	authMgr *auth.Manager
 	// destItemCountCache caches per-destination LibraryItemCount results
 	// (30s TTL) so the dashboard's 12s poll doesn't hammer remote servers.
 	// Keyed by destination ID; entries expire independently.
@@ -126,6 +132,7 @@ func NewServer(
 		downloadsPath:  downloadsPath,
 		configPath:     configPath,
 		startedAt:      time.Now(),
+		authMgr:        auth.NewManager(db),
 	}
 
 	// Seed the onboarded flag from the DB once. firstRunGate (which
@@ -455,6 +462,17 @@ func (s *Server) setupRoutes() {
 	})
 	static.StaticFS("/", http.FS(staticSub))
 
+	// Auth pipeline (must run BEFORE firstRunGate — otherwise an
+	// unauthenticated visitor to a freshly-upgraded install gets bounced
+	// into /setup and can create their own admin account before the legit
+	// operator does):
+	//   1. CSRF      stamps a token cookie, verifies it on non-GET (skipped for API-key)
+	//   2. Authenticate resolves identity, never blocks
+	//   3. Require   enforces auth_method/auth_required (exempts /login, /static, ...)
+	s.router.Use(s.authMgr.CSRF(csrfExemptPath))
+	s.router.Use(s.authMgr.Authenticate())
+	s.router.Use(s.authMgr.Require(authExemptPath))
+
 	// First-run gate — runs before page handlers and redirects to the
 	// setup wizard on fresh installs (no auth + no "onboarded" setting).
 	// Settings, diagnostics, the wizard itself, and POST/api routes pass
@@ -476,8 +494,29 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/setup/finish", s.handleSetupFinish)
 	s.router.GET("/setup/skip", s.handleSetupSkip)
 	s.router.POST("/setup/restart", s.handleSetupRestart)
+	// Admin creation lives inside the wizard as a step, not a standalone
+	// page. These are just the form submission targets — /setup itself
+	// renders the panel. Both must be auth-exempt so the very first
+	// visitor can post without already being authenticated.
+	s.router.POST("/setup/admin", s.handleSetupAdminPost)
+	s.router.GET("/setup/admin/skip", s.handleSetupAdminSkip)
 
-	// Auth
+	// App authentication (Sonarr/Radarr-style Forms login + API key).
+	// /login, /logout are exempt from Require (see authExemptPath). The
+	// Security settings page is gated normally — when auth_method=none it
+	// is reachable, when forms it requires an authenticated session.
+	s.router.GET("/login", s.handleLoginGet)
+	s.router.POST("/login", s.handleLoginPost)
+	s.router.POST("/logout", s.handleLogout)
+	s.router.GET("/settings/security", s.handleSecurityPage)
+	s.router.POST("/settings/security/auth-method", s.handleSecurityAuthMethod)
+	s.router.POST("/settings/security/api-key/rotate", s.handleSecurityAPIKeyRotate)
+	s.router.POST("/settings/security/password", s.handleSecurityPassword)
+	s.router.POST("/settings/security/sessions/revoke-all", s.handleSecurityRevokeAllSessions)
+
+	// Audible OAuth flow — distinct from app auth above. Kept under
+	// /auth/* for backwards compatibility with the URL the existing
+	// settings page POSTs to.
 	s.router.POST("/auth/marketplace", s.handleAudibleMarketplaceSelect)
 	s.router.POST("/auth/start", s.handleAuthStart)
 	s.router.POST("/auth/callback", s.handleAuthCallback)
@@ -668,7 +707,7 @@ func normalizeClientIPForLog(ip string) string {
 func (s *Server) handleDashboard(c *gin.Context) {
 	ctx := c.Request.Context()
 	_, _ = s.clearStaleFailedDownloads(ctx)
-	c.HTML(http.StatusOK, "dashboard.html", s.withSidebar(ctx, s.getDashboardData(ctx)))
+	c.HTML(http.StatusOK, "dashboard.html", s.withSidebar(c, s.getDashboardData(ctx)))
 }
 
 func (s *Server) getDashboardData(ctx context.Context) gin.H {
@@ -1083,7 +1122,7 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		c.HTML(http.StatusOK, "library_table.html", data)
 		return
 	}
-	c.HTML(http.StatusOK, "library.html", s.withSidebar(ctx, data))
+	c.HTML(http.StatusOK, "library.html", s.withSidebar(c, data))
 }
 
 // libraryPresenceFilterOption is one row in the per-destination presence
@@ -1719,7 +1758,7 @@ func (s *Server) handleDownloads(c *gin.Context) {
 		tab = "active"
 	}
 
-	c.HTML(http.StatusOK, "downloads.html", s.withSidebar(ctx, gin.H{
+	c.HTML(http.StatusOK, "downloads.html", s.withSidebar(c, gin.H{
 		"Active":              active,
 		"Pending":             pending,
 		"Complete":            complete,
@@ -1863,7 +1902,7 @@ func (s *Server) clearStaleFailedDownloads(ctx context.Context) (int, error) {
 func (s *Server) handleSettings(c *gin.Context) {
 	ctx := c.Request.Context()
 	data := s.settingsPageData(ctx)
-	c.HTML(http.StatusOK, "settings.html", s.withSidebar(ctx, data))
+	c.HTML(http.StatusOK, "settings.html", s.withSidebar(c, data))
 }
 
 // handleTagProfileSelect persists the active tag profile. Strict validation
@@ -2228,11 +2267,31 @@ func formatUptime(d time.Duration) string {
 // withSidebar merges the sidebar snapshot into the page data map. Use on
 // every full-page render so base.html can render the nav badges + footer.
 // Safe to call with a nil/empty map.
-func (s *Server) withSidebar(ctx context.Context, data gin.H) gin.H {
+func (s *Server) withSidebar(ctxOrC any, data gin.H) gin.H {
 	if data == nil {
 		data = gin.H{}
 	}
+	// Accept either a bare context.Context (legacy callers) or a *gin.Context
+	// so handlers can plumb the per-request CSRF token into the template
+	// data without touching every call site. When a gin.Context is passed,
+	// we also stash the current user so the nav can show "Sign out".
+	var ctx context.Context
+	switch v := ctxOrC.(type) {
+	case *gin.Context:
+		ctx = v.Request.Context()
+		data["CSRFToken"] = auth.CSRFToken(v)
+		if u := auth.CurrentUser(v); u != nil {
+			data["CurrentUser"] = u
+		}
+	case context.Context:
+		ctx = v
+	default:
+		ctx = context.Background()
+	}
 	data["Sidebar"] = s.computeSidebar(ctx)
+	if s.authMgr != nil && s.authMgr.CurrentMethod(ctx) == auth.AuthMethodNone {
+		data["AuthNagShow"] = true
+	}
 	return data
 }
 
@@ -3304,7 +3363,7 @@ func (s *Server) renderAuthPage(c *gin.Context, status int, extra gin.H) {
 		data[k] = v
 	}
 	data["Page"] = "settings"
-	c.HTML(status, "settings.html", s.withSidebar(ctx, data))
+	c.HTML(status, "settings.html", s.withSidebar(c, data))
 }
 
 // handleAudibleMarketplaceSelect updates the preferred Audible marketplace.

@@ -4,15 +4,38 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{.CSRFToken}}">
     <title>Audplexus</title>
     <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/htmx.min.js"></script>
+    <script>
+        // CSRF: read the bound token from the csrftoken cookie (not the meta tag,
+        // because the cookie value rotates after login while the meta tag is stale
+        // for the rest of the page lifetime). Attach it on every non-safe HTMX
+        // request — server-side middleware constant-time compares header vs cookie.
+        // htmx.on() listens on document and survives ordering against <body>.
+        document.addEventListener('htmx:configRequest', function (evt) {
+            var verb = (evt.detail.verb || '').toUpperCase();
+            if (verb === 'GET' || verb === 'HEAD' || verb === 'OPTIONS') return;
+            var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+            if (m) evt.detail.headers['X-CSRF-Token'] = decodeURIComponent(m[1]);
+        });
+        // When the session expires mid-page, Authenticate emits HX-Redirect; HTMX
+        // honors that header automatically. We also catch the HTTP-level 401 as a
+        // belt-and-suspenders so plain fetch()-style flows redirect too.
+        document.addEventListener('htmx:responseError', function (evt) {
+            if (evt.detail.xhr && evt.detail.xhr.status === 401) {
+                window.location.href = '/login';
+            }
+        });
+    </script>
 </head>
 <body>
     {{$sb := .Sidebar}}
     {{$isWizard := eq .Page "setup"}}
-    {{if not $isWizard}}
+    {{$isLogin := eq .Page "login"}}
+    {{if and (not $isWizard) (not $isLogin)}}
     <div class="sidebar-backdrop" data-nav-dismiss aria-hidden="true"></div>
     <nav class="sidebar" id="primary-nav">
         <div class="sidebar-header">
@@ -96,9 +119,16 @@
             </div>
         </header>
         <main class="content">
+            {{if .AuthNagShow}}
+            <div class="auth-nag" role="status" style="background:#3a2a14;border:1px solid #b07a2a;color:#f0c177;padding:.6em 1em;margin-bottom:1em;border-radius:6px;display:flex;justify-content:space-between;align-items:center;gap:1em;">
+                <span><strong>Authentication is disabled.</strong> Anyone who can reach this server has full access. <a href="/settings/security" style="color:#fff;text-decoration:underline;">Set up a password and API key →</a></span>
+            </div>
+            {{end}}
             {{template "content" .}}
         </main>
     </div>
+    {{else if $isLogin}}
+        {{template "content" .}}
     {{else}}
         {{template "content" .}}
     {{end}}

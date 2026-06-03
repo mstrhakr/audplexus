@@ -38,7 +38,7 @@ func (p *PostgresDB) Close() error {
 }
 
 func (p *PostgresDB) Reset(ctx context.Context) error {
-	_, err := p.db.ExecContext(ctx, `TRUNCATE books, download_queue, sync_history, settings, devices RESTART IDENTITY CASCADE`)
+	_, err := p.db.ExecContext(ctx, `TRUNCATE books, download_queue, sync_history, settings, devices, users, sessions RESTART IDENTITY CASCADE`)
 	if err != nil {
 		return fmt.Errorf("reset postgres: %w", err)
 	}
@@ -632,5 +632,140 @@ func buildBookWherePostgres(filter BookFilter) (string, []interface{}) {
 		return "", nil
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// --- Users ---
+
+func (p *PostgresDB) scanUser(row *sql.Row) (*User, error) {
+	var u User
+	err := row.Scan(&u.ID, &u.Username, &u.Password, &u.Salt, &u.Iterations,
+		&u.Identifier, &u.CreatedAt, &u.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (p *PostgresDB) GetUserByUsername(ctx context.Context, username string) (*User, error) {
+	return p.scanUser(p.db.QueryRowContext(ctx,
+		`SELECT id, username, password, salt, iterations, identifier, created_at, updated_at
+		 FROM users WHERE username = $1 LIMIT 1`, username))
+}
+
+func (p *PostgresDB) GetUserByID(ctx context.Context, id int64) (*User, error) {
+	return p.scanUser(p.db.QueryRowContext(ctx,
+		`SELECT id, username, password, salt, iterations, identifier, created_at, updated_at
+		 FROM users WHERE id = $1`, id))
+}
+
+func (p *PostgresDB) CountUsers(ctx context.Context) (int, error) {
+	var n int
+	err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)
+	return n, err
+}
+
+func (p *PostgresDB) UpsertUser(ctx context.Context, user *User) error {
+	now := time.Now()
+	user.UpdatedAt = now
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = now
+	}
+	if user.ID == 0 {
+		err := p.db.QueryRowContext(ctx,
+			`INSERT INTO users (username, password, salt, iterations, identifier, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+			user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
+			user.CreatedAt, user.UpdatedAt).Scan(&user.ID)
+		if err != nil {
+			return fmt.Errorf("insert user: %w", err)
+		}
+		return nil
+	}
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE users SET username = $1, password = $2, salt = $3, iterations = $4,
+		                  identifier = $5, updated_at = $6
+		 WHERE id = $7`,
+		user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
+		user.UpdatedAt, user.ID)
+	if err != nil {
+		return fmt.Errorf("update user: %w", err)
+	}
+	return nil
+}
+
+func (p *PostgresDB) RotateUserIdentifier(ctx context.Context, userID int64, newIdentifier string) error {
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE users SET identifier = $1, updated_at = $2 WHERE id = $3`,
+		newIdentifier, time.Now(), userID)
+	return err
+}
+
+func (p *PostgresDB) DeleteUser(ctx context.Context, id int64) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, id)
+	return err
+}
+
+// --- Sessions ---
+
+func (p *PostgresDB) CreateSession(ctx context.Context, sess *Session) error {
+	now := time.Now()
+	if sess.CreatedAt.IsZero() {
+		sess.CreatedAt = now
+	}
+	if sess.LastSeen.IsZero() {
+		sess.LastSeen = now
+	}
+	_, err := p.db.ExecContext(ctx,
+		`INSERT INTO sessions (token, user_id, identifier, expires_at, last_seen, created_at, user_agent, ip)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		sess.Token, sess.UserID, sess.Identifier, sess.ExpiresAt, sess.LastSeen,
+		sess.CreatedAt, sess.UserAgent, sess.IP)
+	if err != nil {
+		return fmt.Errorf("insert session: %w", err)
+	}
+	return nil
+}
+
+func (p *PostgresDB) GetSession(ctx context.Context, token string) (*Session, error) {
+	var sess Session
+	err := p.db.QueryRowContext(ctx,
+		`SELECT token, user_id, identifier, expires_at, last_seen, created_at, user_agent, ip
+		 FROM sessions WHERE token = $1`, token).Scan(
+		&sess.Token, &sess.UserID, &sess.Identifier, &sess.ExpiresAt, &sess.LastSeen,
+		&sess.CreatedAt, &sess.UserAgent, &sess.IP)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sess, nil
+}
+
+func (p *PostgresDB) TouchSession(ctx context.Context, token string, lastSeen time.Time) error {
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE sessions SET last_seen = $1 WHERE token = $2`, lastSeen, token)
+	return err
+}
+
+func (p *PostgresDB) DeleteSession(ctx context.Context, token string) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM sessions WHERE token = $1`, token)
+	return err
+}
+
+func (p *PostgresDB) DeleteSessionsForUser(ctx context.Context, userID int64) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID)
+	return err
+}
+
+func (p *PostgresDB) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error) {
+	res, err := p.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < $1`, now)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 

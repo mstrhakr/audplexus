@@ -3,6 +3,7 @@ package mediaserver
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/mstrhakr/audplexus/internal/database"
 )
@@ -73,3 +74,16 @@ func (d *destinationIDsStubDB) DeleteLibraryDestination(ctx context.Context, id 
 func (d *destinationIDsStubDB) UpsertBookDestination(ctx context.Context, bd *database.BookDestination) error { return nil }
 func (d *destinationIDsStubDB) GetBookDestinations(ctx context.Context, bookID int64) ([]database.BookDestination, error) { return nil, nil }
 func (d *destinationIDsStubDB) GetBookDestination(ctx context.Context, bookID int64, destID string) (*database.BookDestination, error) { return nil, nil }
+
+func (d *destinationIDsStubDB) GetUserByUsername(ctx context.Context, u string) (*database.User, error) { return nil, nil }
+func (d *destinationIDsStubDB) GetUserByID(ctx context.Context, id int64) (*database.User, error) { return nil, nil }
+func (d *destinationIDsStubDB) CountUsers(ctx context.Context) (int, error) { return 0, nil }
+func (d *destinationIDsStubDB) UpsertUser(ctx context.Context, u *database.User) error { return nil }
+func (d *destinationIDsStubDB) RotateUserIdentifier(ctx context.Context, id int64, ident string) error { return nil }
+func (d *destinationIDsStubDB) DeleteUser(ctx context.Context, id int64) error { return nil }
+func (d *destinationIDsStubDB) CreateSession(ctx context.Context, sess *database.Session) error { return nil }
+func (d *destinationIDsStubDB) GetSession(ctx context.Context, token string) (*database.Session, error) { return nil, nil }
+func (d *destinationIDsStubDB) TouchSession(ctx context.Context, token string, t time.Time) error { return nil }
+func (d *destinationIDsStubDB) DeleteSession(ctx context.Context, token string) error { return nil }
+func (d *destinationIDsStubDB) DeleteSessionsForUser(ctx context.Context, userID int64) error { return nil }
+func (d *destinationIDsStubDB) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error) { return 0, nil }

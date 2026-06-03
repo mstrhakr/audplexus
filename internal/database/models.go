@@ -176,6 +176,32 @@ func redactToken(s string) string {
 	return "<redacted>"
 }
 
+// User is the single-admin auth row. Password/Salt are base64-encoded PBKDF2
+// outputs; never expose Password or Salt in JSON responses or logs.
+type User struct {
+	ID         int64     `json:"id"`
+	Username   string    `json:"username"`
+	Password   string    `json:"-"`
+	Salt       string    `json:"-"`
+	Iterations int       `json:"-"`
+	Identifier string    `json:"-"` // UUID; rotation invalidates sessions
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// Session is one logged-in cookie session. Token is the opaque random value
+// stored in the session cookie; never expose it.
+type Session struct {
+	Token      string    `json:"-"`
+	UserID     int64     `json:"user_id"`
+	Identifier string    `json:"-"` // snapshot of users.identifier at creation
+	ExpiresAt  time.Time `json:"expires_at"`
+	LastSeen   time.Time `json:"last_seen"`
+	CreatedAt  time.Time `json:"created_at"`
+	UserAgent  string    `json:"user_agent,omitempty"`
+	IP         string    `json:"ip,omitempty"`
+}
+
 // BookDestinationSyncState is the per-(book, destination) state machine.
 type BookDestinationSyncState string
 

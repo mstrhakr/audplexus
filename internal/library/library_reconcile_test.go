@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mstrhakr/audplexus/internal/database"
 )
@@ -569,4 +570,18 @@ func (m *reconcileMockDB) GetBookDestination(ctx context.Context, bookID int64, 
 func (m *reconcileMockDB) ListBookDestinationsBy(ctx context.Context, destID string, state *database.BookDestinationSyncState) ([]database.BookDestination, error) {
 	return nil, nil
 }
+
+// Auth interface stubs — reconcile never touches them.
+func (m *reconcileMockDB) GetUserByUsername(ctx context.Context, u string) (*database.User, error) { return nil, nil }
+func (m *reconcileMockDB) GetUserByID(ctx context.Context, id int64) (*database.User, error)      { return nil, nil }
+func (m *reconcileMockDB) CountUsers(ctx context.Context) (int, error)                            { return 0, nil }
+func (m *reconcileMockDB) UpsertUser(ctx context.Context, u *database.User) error                 { return nil }
+func (m *reconcileMockDB) RotateUserIdentifier(ctx context.Context, id int64, ident string) error { return nil }
+func (m *reconcileMockDB) DeleteUser(ctx context.Context, id int64) error                         { return nil }
+func (m *reconcileMockDB) CreateSession(ctx context.Context, sess *database.Session) error        { return nil }
+func (m *reconcileMockDB) GetSession(ctx context.Context, token string) (*database.Session, error) { return nil, nil }
+func (m *reconcileMockDB) TouchSession(ctx context.Context, token string, t time.Time) error      { return nil }
+func (m *reconcileMockDB) DeleteSession(ctx context.Context, token string) error                  { return nil }
+func (m *reconcileMockDB) DeleteSessionsForUser(ctx context.Context, userID int64) error          { return nil }
+func (m *reconcileMockDB) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error) { return 0, nil }
 

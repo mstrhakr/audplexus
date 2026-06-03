@@ -1,6 +1,9 @@
 package database
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Database defines the storage interface for the application.
 // Implementations exist for both SQLite and PostgreSQL.
@@ -56,6 +59,23 @@ type Database interface {
 	ListEnabledLibraryDestinations(ctx context.Context) ([]LibraryDestination, error)
 	UpdateLibraryDestination(ctx context.Context, d *LibraryDestination) error
 	DeleteLibraryDestination(ctx context.Context, id string) error
+
+	// Auth: single-admin Forms login + cookie sessions. The schema supports
+	// multiple users but the UI exposes one. Identifier rotation on the
+	// users row invalidates every session whose snapshot no longer matches.
+	GetUserByUsername(ctx context.Context, username string) (*User, error)
+	GetUserByID(ctx context.Context, id int64) (*User, error)
+	CountUsers(ctx context.Context) (int, error)
+	UpsertUser(ctx context.Context, user *User) error
+	RotateUserIdentifier(ctx context.Context, userID int64, newIdentifier string) error
+	DeleteUser(ctx context.Context, id int64) error
+
+	CreateSession(ctx context.Context, session *Session) error
+	GetSession(ctx context.Context, token string) (*Session, error)
+	TouchSession(ctx context.Context, token string, lastSeen time.Time) error
+	DeleteSession(ctx context.Context, token string) error
+	DeleteSessionsForUser(ctx context.Context, userID int64) error
+	DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error)
 
 	// Per-(book, destination) state. Used by the post-organize fan-out
 	// (recording outcomes) and reconcile (matching server-side items back

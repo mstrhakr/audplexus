@@ -1,6 +1,9 @@
 package database
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // StubDB is the minimal Database implementation used by:
 //   - mediaserver tests that only need GetSetting/SetSetting
@@ -105,4 +108,27 @@ func (s *StubDB) GetBookDestination(ctx context.Context, bookID int64, destID st
 }
 func (s *StubDB) ListBookDestinationsBy(ctx context.Context, destID string, st *BookDestinationSyncState) ([]BookDestination, error) {
 	return nil, nil
+}
+
+// Auth stubs — empty defaults so middleware sees "no admin yet" and (
+// because auth_method falls back to "none" via settings) is permissive.
+func (s *StubDB) GetUserByUsername(ctx context.Context, username string) (*User, error) {
+	return nil, nil
+}
+func (s *StubDB) GetUserByID(ctx context.Context, id int64) (*User, error)   { return nil, nil }
+func (s *StubDB) CountUsers(ctx context.Context) (int, error)                { return 0, nil }
+func (s *StubDB) UpsertUser(ctx context.Context, user *User) error           { return nil }
+func (s *StubDB) RotateUserIdentifier(ctx context.Context, id int64, ident string) error {
+	return nil
+}
+func (s *StubDB) DeleteUser(ctx context.Context, id int64) error             { return nil }
+func (s *StubDB) CreateSession(ctx context.Context, sess *Session) error     { return nil }
+func (s *StubDB) GetSession(ctx context.Context, token string) (*Session, error) { return nil, nil }
+func (s *StubDB) TouchSession(ctx context.Context, token string, t time.Time) error {
+	return nil
+}
+func (s *StubDB) DeleteSession(ctx context.Context, token string) error        { return nil }
+func (s *StubDB) DeleteSessionsForUser(ctx context.Context, userID int64) error { return nil }
+func (s *StubDB) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error) {
+	return 0, nil
 }
