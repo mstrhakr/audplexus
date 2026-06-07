@@ -1,0 +1,116 @@
+{{define "content"}}
+<div class="onboard-shell">
+    <div class="onboard">
+        <div class="onboard-head">
+            <img src="/static/logo.svg" alt="" />
+            <div class="t"><h1>Restore from backup</h1><p>Upload a previously downloaded database backup</p></div>
+        </div>
+
+        <div class="onboard-body">
+            <div id="restore-error" class="alert err" style="display:none;margin-bottom:1rem" role="alert">
+                <span class="ico">!</span>
+                <div id="restore-error-msg"></div>
+            </div>
+
+            <h2>Upload a database backup</h2>
+            <p class="sub">Pick a <code>.db</code> file from a previous <strong>Download backup</strong>. The file is validated before anything is touched: integrity is checked and it must be an Audplexus database.</p>
+
+            <div class="alert warn" style="margin:1rem 0">
+                <span class="ico">!</span>
+                <div>If an existing database is present, it will be moved aside as a safety copy before the upload is installed. The service restarts after the swap.</div>
+            </div>
+
+            <form id="setup-restore-form" enctype="multipart/form-data" style="display:grid;gap:.9rem;max-width:520px">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <label style="display:grid;gap:.3rem">
+                    <span class="row-label">Backup file</span>
+                    <input type="file" name="backup" id="setup-restore-file" accept=".db,application/x-sqlite3,application/octet-stream" required>
+                    <span class="hint" id="setup-restore-file-info"></span>
+                </label>
+                <p id="setup-restore-status" class="muted" style="margin:0;font-size:.82rem"></p>
+            </form>
+        </div>
+
+        <div class="onboard-foot">
+            <a href="/setup" class="btn btn-ghost">← Cancel and return to setup</a>
+            <div class="right" style="margin-left:auto;display:flex;gap:.5rem">
+                <button type="button" class="btn btn-primary" id="setup-restore-submit" disabled onclick="submitSetupRestore()">Restore &amp; Restart</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    var fileInput = document.getElementById('setup-restore-file');
+    var info = document.getElementById('setup-restore-file-info');
+    var submit = document.getElementById('setup-restore-submit');
+    fileInput.addEventListener('change', function() {
+        var f = fileInput.files[0];
+        if (!f) { info.textContent = ''; submit.disabled = true; return; }
+        var kb = f.size / 1024;
+        var sizeStr = kb < 1024 ? kb.toFixed(1) + ' KB' : (kb / 1024).toFixed(1) + ' MB';
+        info.textContent = f.name + ' (' + sizeStr + ')';
+        submit.disabled = false;
+    });
+})();
+
+function getCookie(name) {
+    var parts = ('; ' + document.cookie).split('; ' + name + '=');
+    if (parts.length === 2) return parts.pop().split(';').shift();
+    return '';
+}
+
+function setupRestoreShowError(msg) {
+    var box = document.getElementById('restore-error');
+    document.getElementById('restore-error-msg').textContent = msg;
+    box.style.display = 'flex';
+}
+
+function waitForRestoreRestart(attemptsLeft) {
+    if (attemptsLeft <= 0) { window.location.href = '/'; return; }
+    fetch('/auth/status', { cache: 'no-store' })
+        .then(function(resp) {
+            if (resp.ok) { window.location.href = '/'; return; }
+            setTimeout(function() { waitForRestoreRestart(attemptsLeft - 1); }, 1200);
+        })
+        .catch(function() {
+            setTimeout(function() { waitForRestoreRestart(attemptsLeft - 1); }, 1200);
+        });
+}
+
+function submitSetupRestore() {
+    var fileInput = document.getElementById('setup-restore-file');
+    var f = fileInput.files[0];
+    if (!f) return;
+    var btn = document.getElementById('setup-restore-submit');
+    var status = document.getElementById('setup-restore-status');
+    btn.disabled = true;
+    btn.textContent = 'Uploading…';
+    status.textContent = '';
+    document.getElementById('restore-error').style.display = 'none';
+
+    var form = new FormData();
+    form.append('backup', f);
+    form.append('csrf_token', getCookie('csrftoken'));
+
+    fetch('/setup/restore', {
+        method: 'POST',
+        body: form,
+        headers: { 'X-CSRF-Token': getCookie('csrftoken') }
+    }).then(function(resp) {
+        if (!resp.ok) {
+            return resp.json().then(function(j) { throw new Error(j.error || ('HTTP ' + resp.status)); });
+        }
+        status.textContent = 'Restored. Waiting for service to restart…';
+        btn.textContent = 'Restarting…';
+        waitForRestoreRestart(60);
+    }).catch(function(err) {
+        btn.disabled = false;
+        btn.textContent = 'Restore & Restart';
+        setupRestoreShowError(err.message);
+        status.textContent = '';
+    });
+}
+</script>
+{{end}}

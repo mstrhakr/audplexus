@@ -3,6 +3,7 @@ package web
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -508,6 +509,8 @@ func (s *Server) setupRoutes() {
 	// Setup wizard (5 steps). State is server-driven via ?step= so no JS
 	// is needed; "onboarded" setting tracks completion.
 	s.router.GET("/setup", s.handleSetupWizard)
+	s.router.GET("/setup/restore", s.handleSetupRestorePage)
+	s.router.POST("/setup/restore", s.handleDBRestore)
 	s.router.POST("/setup/marketplace", s.handleSetupMarketplace)
 	s.router.POST("/setup/finish", s.handleSetupFinish)
 	s.router.GET("/setup/skip", s.handleSetupSkip)
@@ -625,6 +628,7 @@ func (s *Server) setupRoutes() {
 		api.POST("/library/reorganize", s.handleReorganizeLibrary)
 		api.POST("/restart", s.handleRestart)
 		api.GET("/settings/db-backup", s.handleDBBackup)
+		api.POST("/settings/db-restore", s.handleDBRestore)
 		api.POST("/settings/factory-reset", s.handleFactoryReset)
 
 		api.GET("/diagnostics/compare", s.handleDiagnosticsCompare)
@@ -3262,6 +3266,152 @@ func (s *Server) handleDBBackup(c *gin.Context) {
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	c.Header("Content-Type", "application/x-sqlite3")
 	c.File(dbPath)
+}
+
+// handleDBRestore replaces the live SQLite database with an uploaded backup.
+//
+// The flow: validate upload is a real SQLite file with integrity_check passing
+// and the schema_migrations table present, write it to a temp path, stop the
+// pipeline, close the DB handle, rename the current DB aside as a pre-restore
+// safety copy, move the uploaded file into place, then SIGTERM ourselves so
+// the process supervisor brings us back with the new file. Restart-on-exit is
+// the same pattern handleRestart uses — re-opening the DB in-process would
+// require rewiring every cached handle held by sync/downloads/scheduler.
+func (s *Server) handleDBRestore(c *gin.Context) {
+	dbPath := filepath.Join(s.configPath, "audible.db")
+	// dbPath may or may not exist: it's absent on a fresh install where the
+	// user is restoring from the setup wizard. We just need configPath itself
+	// to be writable — SQLite (modernc) creates the file on first open.
+
+	fileHeader, err := c.FormFile("backup")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing backup file: " + err.Error()})
+		return
+	}
+	// 2 GiB ceiling — backups are typically a few MB to low hundreds of MB.
+	const maxRestoreBytes = 2 << 30
+	if fileHeader.Size > maxRestoreBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "backup file is too large"})
+		return
+	}
+
+	tmpPath := dbPath + ".restore-upload"
+	if err := c.SaveUploadedFile(fileHeader, tmpPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save upload: " + err.Error()})
+		return
+	}
+	// On any failure path below, remove the staged upload.
+	cleanupTmp := func() { _ = os.Remove(tmpPath) }
+
+	if err := validateSQLiteBackup(tmpPath); err != nil {
+		cleanupTmp()
+		webLog.Warn().Err(err).Msg("db restore: upload rejected")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid backup: " + err.Error()})
+		return
+	}
+
+	webLog.Warn().Msg("db restore: stopping all pipeline workers")
+	s.downloads.StopAndWait()
+
+	// Close the live DB so SQLite releases the file (Windows can't rename
+	// open files). After this point we must SIGTERM regardless — the
+	// in-process handle is unusable.
+	if err := s.db.Close(); err != nil {
+		webLog.Warn().Err(err).Msg("db restore: error closing live db (continuing)")
+	}
+
+	ts := time.Now().Format("20060102-150405")
+	safetyPath := dbPath + ".pre-restore-" + ts
+
+	// Move the live DB aside as a safety backup. WAL/SHM sidecars must
+	// move with it — leaving them next to a different .db would corrupt
+	// the restored database on first open. On a fresh install dbPath may
+	// not exist yet; that's fine, just skip the move.
+	hadLiveDB := false
+	if _, statErr := os.Stat(dbPath); statErr == nil {
+		hadLiveDB = true
+		if err := os.Rename(dbPath, safetyPath); err != nil {
+			cleanupTmp()
+			webLog.Error().Err(err).Msg("db restore: failed to move current db aside — restart to recover")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to set aside current database: " + err.Error()})
+			s.scheduleRestart()
+			return
+		}
+		for _, ext := range []string{"-wal", "-shm"} {
+			if _, err := os.Stat(dbPath + ext); err == nil {
+				_ = os.Rename(dbPath+ext, safetyPath+ext)
+			}
+		}
+	}
+
+	if err := os.Rename(tmpPath, dbPath); err != nil {
+		// Rollback: put the safety copy back so the next start is healthy.
+		if hadLiveDB {
+			_ = os.Rename(safetyPath, dbPath)
+			for _, ext := range []string{"-wal", "-shm"} {
+				_ = os.Rename(safetyPath+ext, dbPath+ext)
+			}
+		}
+		cleanupTmp()
+		webLog.Error().Err(err).Msg("db restore: failed to install uploaded db, rolled back")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to install uploaded database: " + err.Error()})
+		s.scheduleRestart()
+		return
+	}
+
+	webLog.Info().Str("safety_backup", safetyPath).Msg("db restore: complete, restarting service")
+	s.scheduleRestart()
+
+	if c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": "Database restored. Restarting service..."})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Database restored, restarting service", "safety_backup": filepath.Base(safetyPath)})
+}
+
+// scheduleRestart fires SIGTERM after a short delay so the in-flight response
+// can finish. Mirrors handleRestart's restart trigger.
+func (s *Server) scheduleRestart() {
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		proc, err := os.FindProcess(os.Getpid())
+		if err != nil {
+			webLog.Error().Err(err).Msg("restart failed: could not find current process")
+			return
+		}
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			webLog.Warn().Err(err).Msg("restart SIGTERM failed, attempting interrupt")
+			_ = proc.Signal(os.Interrupt)
+		}
+	}()
+}
+
+// validateSQLiteBackup opens path read-only and confirms it's a real SQLite
+// database with our migration table present and PRAGMA integrity_check OK.
+// The migration table check rejects unrelated SQLite files (someone else's
+// browser history, an empty db, etc.) before we replace the live database.
+func validateSQLiteBackup(path string) error {
+	db, err := sql.Open("sqlite", path+"?mode=ro&_pragma=journal_mode%3DDELETE")
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("not a valid SQLite file: %w", err)
+	}
+	var integrity string
+	if err := db.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil {
+		return fmt.Errorf("integrity check failed: %w", err)
+	}
+	if !strings.EqualFold(integrity, "ok") {
+		return fmt.Errorf("integrity check returned %q", integrity)
+	}
+	var name string
+	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'`).Scan(&name)
+	if err != nil {
+		return fmt.Errorf("not an audplexus database (missing schema_migrations table)")
+	}
+	return nil
 }
 
 // handleFactoryReset wipes all data from the database and re-runs migrations.

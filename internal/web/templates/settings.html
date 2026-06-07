@@ -557,6 +557,15 @@
 
                 <div class="danger-action">
                     <div>
+                        <strong>Restore database from backup</strong>
+                        <p>Replace the current database with a previously downloaded backup. The current database is kept on disk as a safety copy. The service will restart.</p>
+                    </div>
+                    <button type="button" class="btn btn-outline-ds" onclick="document.getElementById('restore-file-input').click()">Restore backup…</button>
+                    <input type="file" id="restore-file-input" accept=".db,application/x-sqlite3,application/octet-stream" style="display:none" onchange="openRestoreModal(this.files[0])">
+                </div>
+
+                <div class="danger-action">
+                    <div>
                         <strong>Re-run setup wizard</strong>
                         <p>Clear the "onboarded" flag and walk through the first-run wizard again. Doesn't touch books, downloads, or destinations — useful for testing the wizard or revisiting region/auth steps.</p>
                     </div>
@@ -638,7 +647,95 @@
     </div>
 </div>
 
+<!-- Database Restore confirmation modal -->
+<div id="restore-modal" class="modal-overlay" style="display:none" aria-hidden="true">
+    <div class="modal-backdrop" onclick="closeRestoreModal()"></div>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="restore-modal-title">
+        <button type="button" class="modal-close" onclick="closeRestoreModal()" aria-label="Close">&times;</button>
+        <div class="modal-body">
+            <h2 id="restore-modal-title" style="margin:0 0 .5rem">⚠️ Restore Database</h2>
+            <p style="margin:0 0 .5rem">Replace the current database with the uploaded backup:</p>
+            <div style="background:var(--surface-2,#1a1a1a);padding:.5rem .75rem;border-radius:6px;margin:.5rem 0;font-size:.85rem">
+                <strong>File:</strong> <span id="restore-file-name" class="cell-mono"></span><br>
+                <strong>Size:</strong> <span id="restore-file-size" class="cell-mono"></span>
+            </div>
+            <ul style="margin:.25rem 0 .75rem 1.25rem;font-size:.85rem;line-height:1.6">
+                <li>The current database is moved aside as a safety copy on disk.</li>
+                <li>In-flight downloads will be cancelled.</li>
+                <li>The service restarts after the swap.</li>
+            </ul>
+            <div class="alert warn" style="margin:.5rem 0 1rem">
+                <span class="ico">!</span>
+                <div>Restoring an older backup may roll back recent settings, sync history, and queued downloads.</div>
+            </div>
+            <div style="display:flex;gap:.5rem;justify-content:flex-end">
+                <button class="btn btn-outline-ds" type="button" onclick="closeRestoreModal()">Cancel</button>
+                <button class="btn btn-danger" type="button" id="restore-confirm-btn" onclick="executeRestore()">Restore &amp; Restart</button>
+            </div>
+            <p id="restore-modal-status" class="muted" style="margin:.5rem 0 0;font-size:.78rem"></p>
+        </div>
+    </div>
+</div>
+
 <script>
+var pendingRestoreFile = null;
+
+function openRestoreModal(file) {
+    if (!file) return;
+    pendingRestoreFile = file;
+    document.getElementById('restore-file-name').textContent = file.name;
+    var kb = file.size / 1024;
+    var sizeStr = kb < 1024 ? kb.toFixed(1) + ' KB' : (kb / 1024).toFixed(1) + ' MB';
+    document.getElementById('restore-file-size').textContent = sizeStr;
+    document.getElementById('restore-modal-status').textContent = '';
+    var btn = document.getElementById('restore-confirm-btn');
+    btn.disabled = false;
+    btn.textContent = 'Restore & Restart';
+    document.getElementById('restore-modal').style.display = 'flex';
+}
+
+function closeRestoreModal() {
+    document.getElementById('restore-modal').style.display = 'none';
+    document.getElementById('restore-file-input').value = '';
+    pendingRestoreFile = null;
+}
+
+function getCookie(name) {
+    var parts = ('; ' + document.cookie).split('; ' + name + '=');
+    if (parts.length === 2) return parts.pop().split(';').shift();
+    return '';
+}
+
+function executeRestore() {
+    if (!pendingRestoreFile) return;
+    var btn = document.getElementById('restore-confirm-btn');
+    var status = document.getElementById('restore-modal-status');
+    btn.disabled = true;
+    btn.textContent = 'Uploading…';
+    status.textContent = '';
+
+    var form = new FormData();
+    form.append('backup', pendingRestoreFile);
+    form.append('csrf_token', getCookie('csrftoken'));
+
+    fetch('/api/settings/db-restore', {
+        method: 'POST',
+        body: form,
+        headers: { 'X-CSRF-Token': getCookie('csrftoken') }
+    }).then(function(resp) {
+        if (!resp.ok) {
+            return resp.json().then(function(j) { throw new Error(j.error || ('HTTP ' + resp.status)); });
+        }
+        status.textContent = 'Restored. Waiting for service to restart…';
+        btn.textContent = 'Restarting…';
+        waitForRestartAndReload(60);
+    }).catch(function(err) {
+        btn.disabled = false;
+        btn.textContent = 'Restore & Restart';
+        status.textContent = 'Restore failed: ' + err.message;
+    });
+}
+
 function confirmFactoryReset() {
     document.getElementById('reset-modal').style.display = 'flex';
     document.getElementById('final-confirm').style.display = 'none';

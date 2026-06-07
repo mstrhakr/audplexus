@@ -168,6 +168,17 @@ func (s *Server) handleSetupWizard(c *gin.Context) {
 	c.HTML(http.StatusOK, "setup.html", s.withSidebar(c, data))
 }
 
+// handleSetupRestorePage renders a one-off "restore from backup" page reached
+// from the welcome step. POST goes to handleDBRestore. Lives under /setup/*
+// so it's auth-exempt during first-run bootstrap (when there's no admin yet).
+func (s *Server) handleSetupRestorePage(c *gin.Context) {
+	ctx := c.Request.Context()
+	data := s.authBaseData(ctx)
+	data["Page"] = "setup"
+	data["CSRFToken"] = auth.CSRFToken(c)
+	c.HTML(http.StatusOK, "setup_restore.html", s.withSidebar(c, data))
+}
+
 // indexOfStepKind returns the position of the first step matching kind, or
 // -1 if absent. Used by the admin gate to know which slot to pin the user on.
 func indexOfStepKind(steps []wizardStep, kind string) int {
