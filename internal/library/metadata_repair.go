@@ -101,6 +101,10 @@ func retagBookFile(ctx context.Context, ff *audio.FFmpeg, an *audnexus.Client, b
 	if err != nil {
 		return err
 	}
+	origInfo, err := os.Stat(book.FilePath)
+	if err != nil {
+		return err
+	}
 
 	dir := filepath.Dir(book.FilePath)
 	ext := filepath.Ext(book.FilePath)
@@ -109,7 +113,15 @@ func retagBookFile(ctx context.Context, ff *audio.FFmpeg, an *audnexus.Client, b
 		return err
 	}
 	tmpPath := tmp.Name()
-	tmp.Close()
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	// Remove the placeholder so ffmpeg creates a fresh output file
+	// instead of truncating the 0600 CreateTemp file.
+	if err := os.Remove(tmpPath); err != nil {
+		return err
+	}
 	cleanup := true
 	defer func() {
 		if cleanup {
@@ -118,6 +130,9 @@ func retagBookFile(ctx context.Context, ff *audio.FFmpeg, an *audnexus.Client, b
 	}()
 
 	if err := ff.EmbedMetadata(book.FilePath, tmpPath, meta); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, origInfo.Mode().Perm()); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpPath, book.FilePath); err != nil {
