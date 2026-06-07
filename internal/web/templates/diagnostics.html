@@ -167,24 +167,38 @@ function diagRefreshLogs(scrollToBottom) {
         var level = levelSel ? levelSel.value : 'all';
         var stream = document.getElementById('diag-log-stream');
         var entries = j.entries || [];
-        var rows = entries.map(function(e) {
-            // Detect level by simple substring scan — works for both
-            // JSON ("level":"warn") and ConsoleWriter ("WRN ") formats.
-            var lvl = diagDetectLevel(e.line);
-            if (level !== 'all' && lvl !== level) return '';
-            var color = ({info:'#6ab6ff', warn:'#ffb547', error:'#ff7c7c', debug:'#9aa9b3'})[lvl] || 'var(--text-muted)';
-            var ts = new Date(e.time).toLocaleTimeString();
-            // data-log-line carries the raw line so the per-row copy
-            // button can grab the unescaped value via dataset, and
-            // diagCopyVisibleLogs can gather every visible row in order.
-            return '<div class="diag-log-row" data-log-line="' + escDiag(e.line) + '" data-log-ts="' + escDiag(ts) + '">' +
-                '<span class="diag-log-ts">' + escDiag(ts) + '</span>' +
-                '<span class="diag-log-msg" style="color:' + color + '">' + escDiag(e.line) + '</span>' +
-                '<button type="button" class="diag-log-copy" title="Copy line" aria-label="Copy line" onclick="diagCopyRow(event, this)">' +
-                    '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
-                '</button>' +
-            '</div>';
-        }).filter(Boolean).join('');
+            var rows = entries.map(function(e, idx) {
+                var lvl = (e.level || 'info').toLowerCase();
+                if (level !== 'all' && lvl !== level) return '';
+                var color = ({info:'#6ab6ff', warn:'#ffb547', error:'#ff7c7c', debug:'#9aa9b3'})[lvl] || 'var(--text-muted)';
+                var ts = new Date(e.time).toLocaleTimeString();
+                var hasDetails = e.component || (e.fields && Object.keys(e.fields).length > 0);
+                var rowId = 'diag-log-row-' + idx;
+                var msg = escDiag(e.message || e.raw_line || '');
+                var html = '<div class="diag-log-row" id="' + rowId + '" data-log-raw="' + escDiag(e.raw_line) + '" data-log-ts="' + escDiag(ts) + '">' +
+                    '<span class="diag-log-ts">' + escDiag(ts) + '</span>' +
+                    '<span class="diag-log-level" style="color:' + color + '">[' + escDiag(lvl.toUpperCase()) + ']</span>' +
+                    '<span class="diag-log-msg">' + msg + '</span>';
+                if (hasDetails) {
+                    html += '<button type="button" class="diag-log-expand" title="Show details" onclick="diagToggleExpand(event, this)" aria-expanded="false"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>';
+                }
+                html += '<button type="button" class="diag-log-copy" title="Copy line" aria-label="Copy line" onclick="diagCopyRow(event, this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>';
+                if (hasDetails) {
+                    html += '<div class="diag-log-details" id="' + rowId + '-details" hidden><div class="diag-log-detail-section">';
+                    if (e.component) {
+                        html += '<div class="diag-log-detail-row"><span class="diag-log-detail-key">Component:</span> <span class="diag-log-detail-val">' + escDiag(e.component) + '</span></div>';
+                    }
+                    if (e.fields) {
+                        for (var key in e.fields) {
+                            if (e.fields.hasOwnProperty(key)) {
+                                html += '<div class="diag-log-detail-row"><span class="diag-log-detail-key">' + escDiag(key) + ':</span> <span class="diag-log-detail-val">' + escDiag(String(e.fields[key])) + '</span></div>';
+                            }
+                        }
+                    }
+                    html += '<div class="diag-log-detail-row diag-log-detail-raw"><span class="diag-log-detail-key">Raw:</span> <span class="diag-log-detail-val">' + escDiag(e.raw_line) + '</span></div></div></div>';
+                }
+                return html;
+            }).filter(Boolean).join('');
         stream.innerHTML = rows || '<div class="muted">No log lines in buffer yet.</div>';
         if (scrollToBottom) stream.scrollTop = stream.scrollHeight;
     }).catch(function(err) {
@@ -206,7 +220,7 @@ function diagCopyVisibleLogs(btn) {
     for (var i = 0; i < rows.length; i++) {
         var r = rows[i];
         var ts = r.getAttribute('data-log-ts') || '';
-        var line = r.getAttribute('data-log-line') || '';
+        var line = r.getAttribute('data-log-raw') || '';
         lines.push((ts ? ts + '  ' : '') + line);
     }
     diagWriteClipboard(lines.join('\n')).then(function(ok) {
@@ -220,15 +234,29 @@ function diagCopyRow(ev, btn) {
     ev.stopPropagation();
     var row = btn.closest('.diag-log-row');
     if (!row) return;
-    var line = row.getAttribute('data-log-line') || '';
+        var line = row.getAttribute('data-log-raw') || '';
     diagWriteClipboard(line).then(function(ok) {
-        btn.classList.toggle('is-ok', ok);
-        btn.classList.toggle('is-err', !ok);
-        setTimeout(function() {
-            btn.classList.remove('is-ok');
-            btn.classList.remove('is-err');
-        }, 1200);
-    });
+            btn.classList.toggle('is-ok', ok);
+            btn.classList.toggle('is-err', !ok);
+            setTimeout(function() {
+                btn.classList.remove('is-ok');
+                btn.classList.remove('is-err');
+            }, 1200);
+        });
+    }
+ 
+    // diagToggleExpand opens/closes the details panel for a log entry.
+    function diagToggleExpand(ev, btn) {
+        ev.stopPropagation();
+        var row = btn.closest('.diag-log-row');
+        if (!row) return;
+        var rowId = row.getAttribute('id');
+        var details = document.getElementById(rowId + '-details');
+        if (!details) return;
+        var isOpen = !details.hidden;
+        details.hidden = isOpen;
+        btn.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+    }
 }
 
 // diagWriteClipboard wraps navigator.clipboard with a textarea fallback
@@ -263,13 +291,6 @@ function diagFlashCopy(btn, label, ok) {
         btn.innerHTML = orig;
         btn.disabled = false;
     }, 1400);
-}
-function diagDetectLevel(s) {
-    var t = s.toLowerCase();
-    if (t.indexOf('"level":"error"') !== -1 || / err |\berror\b/.test(t)) return 'error';
-    if (t.indexOf('"level":"warn"') !== -1 || / wrn |\bwarn\b/.test(t)) return 'warn';
-    if (t.indexOf('"level":"debug"') !== -1 || / dbg |\bdebug\b/.test(t)) return 'debug';
-    return 'info';
 }
 
 // Connection tests — Audible auth + every configured destination.

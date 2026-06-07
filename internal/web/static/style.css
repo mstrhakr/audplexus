@@ -3422,6 +3422,104 @@ body.sidebar-open .sidebar-backdrop {
     color: var(--error);
     border-color: var(--error);
     background: rgba(244, 67, 54, 0.14);
+.diag-log-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0;
+}
+
+.diag-log-level {
+    flex-shrink: 0;
+    font-weight: 600;
+    font-size: 0.75rem;
+}
+
+.diag-log-msg {
+    flex: 1;
+    white-space: pre-wrap;
+    word-break: break-word;
+    min-width: 0;
+}
+
+.diag-log-expand {
+    position: relative;
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-muted);
+    border-radius: 5px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.12s, border-color 0.12s, background 0.12s, transform 0.15s;
+}
+
+.diag-log-expand:hover {
+    color: var(--plex-cyan);
+    border-color: var(--plex-cyan);
+    background: var(--surface-2);
+}
+
+.diag-log-expand[aria-expanded="true"] svg {
+    transform: rotate(180deg);
+}
+
+/* Expanded details panel */
+.diag-log-details {
+    background: var(--surface-2);
+    border-left: 2px solid var(--border);
+    margin: 0.6rem 0 0 2.6rem;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    animation: slideDown 0.15s ease-out;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.diag-log-detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.diag-log-detail-row {
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-start;
+}
+
+.diag-log-detail-key {
+    font-weight: 600;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.diag-log-detail-val {
+    color: var(--text);
+    word-break: break-word;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.diag-log-detail-raw {
+    margin-top: 0.4rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
+}
 }
 .diag-log-copy svg { display: block; }
 

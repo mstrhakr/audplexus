@@ -14,6 +14,8 @@
 package logging
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -51,6 +53,81 @@ var (
 type RingEntry struct {
 	Time time.Time `json:"time"`
 	Line string    `json:"line"`
+}
+
+// ParsedEntry is a structured representation of a log line.
+type ParsedEntry struct {
+	Time      time.Time         `json:"time"`
+	Level     string            `json:"level"`
+	Message   string            `json:"message"`
+	Component string            `json:"component,omitempty"`
+	RawLine   string            `json:"raw_line"`
+	Fields    map[string]string `json:"fields,omitempty"`
+}
+
+// ParseLogLine extracts structured data from a raw log line.
+// Handles both JSON format (zerolog) and ConsoleWriter format.
+func ParseLogLine(rawLine string) ParsedEntry {
+	entry := ParsedEntry{RawLine: rawLine}
+
+	// Try JSON parsing first
+	var jsonData map[string]interface{}
+	if err := json.Unmarshal([]byte(rawLine), &jsonData); err == nil {
+		// Extract standard fields
+		if ts, ok := jsonData["time"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, ts); err == nil {
+				entry.Time = t
+			}
+		}
+		if level, ok := jsonData["level"].(string); ok {
+			entry.Level = level
+		}
+		if msg, ok := jsonData["message"].(string); ok {
+			entry.Message = msg
+		}
+		if comp, ok := jsonData["component"].(string); ok {
+			entry.Component = comp
+		}
+
+		// Collect custom fields
+		fields := make(map[string]string)
+		for k, v := range jsonData {
+			if k != "time" && k != "level" && k != "message" && k != "component" {
+				if s, ok := v.(string); ok {
+					fields[k] = s
+				} else {
+					// Convert non-string values to string
+					fields[k] = fmt.Sprintf("%v", v)
+				}
+			}
+		}
+		if len(fields) > 0 {
+			entry.Fields = fields
+		}
+	} else {
+		// ConsoleWriter format fallback: extract what we can
+		entry.Level = detectLevel(rawLine)
+		entry.Message = rawLine
+	}
+
+	if entry.Level == "" {
+		entry.Level = "info"
+	}
+	return entry
+}
+
+func detectLevel(s string) string {
+	t := strings.ToLower(s)
+	if strings.Contains(t, "\"level\":\"error\"") || strings.Contains(t, " err ") || strings.Contains(t, "error") {
+		return "error"
+	}
+	if strings.Contains(t, "\"level\":\"warn\"") || strings.Contains(t, " wrn ") || strings.Contains(t, "warn") {
+		return "warn"
+	}
+	if strings.Contains(t, "\"level\":\"debug\"") || strings.Contains(t, " dbg ") || strings.Contains(t, "debug") {
+		return "debug"
+	}
+	return "info"
 }
 
 type ringBuffer struct {
@@ -283,4 +360,3 @@ func parseLevel(level string) zerolog.Level {
 		return zerolog.InfoLevel
 	}
 }
-

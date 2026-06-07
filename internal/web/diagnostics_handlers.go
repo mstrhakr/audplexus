@@ -3,8 +3,8 @@ package web
 import (
 	"context"
 	"encoding/json"
-	"html"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -47,26 +47,26 @@ type diagnosticsBookDestinationStatus struct {
 }
 
 type diagnosticsIssueItem struct {
-	ASIN                string                            `json:"asin"`
-	Title               string                            `json:"title"`
-	Author              string                            `json:"author"`
-	FilePath            string                            `json:"file_path,omitempty"`
-	OnDisk              bool                              `json:"on_disk"`
-	IssueSummary        string                            `json:"issue_summary"`
+	ASIN                string                             `json:"asin"`
+	Title               string                             `json:"title"`
+	Author              string                             `json:"author"`
+	FilePath            string                             `json:"file_path,omitempty"`
+	OnDisk              bool                               `json:"on_disk"`
+	IssueSummary        string                             `json:"issue_summary"`
 	DestinationStatuses []diagnosticsBookDestinationStatus `json:"destination_statuses"`
-	CanTargetedScan     bool                              `json:"can_targeted_scan"`
-	CanRedownload       bool                              `json:"can_redownload"`
+	CanTargetedScan     bool                               `json:"can_targeted_scan"`
+	CanRedownload       bool                               `json:"can_redownload"`
 }
 
 type diagnosticsCompareResponse struct {
-	GeneratedAt       time.Time                  `json:"generated_at"`
-	TotalBooks        int                        `json:"total_books"`
-	CompleteBooks     int                        `json:"complete_books"`
-	IssueBooks        int                        `json:"issue_books"`
-	DiskMissing       int                        `json:"disk_missing"`
-	Destinations      []diagnosticsDestinationCard `json:"destinations"`
-	Items             []diagnosticsIssueItem     `json:"items"`
-	UserMarketplace   string                     `json:"user_marketplace"`
+	GeneratedAt     time.Time                    `json:"generated_at"`
+	TotalBooks      int                          `json:"total_books"`
+	CompleteBooks   int                          `json:"complete_books"`
+	IssueBooks      int                          `json:"issue_books"`
+	DiskMissing     int                          `json:"disk_missing"`
+	Destinations    []diagnosticsDestinationCard `json:"destinations"`
+	Items           []diagnosticsIssueItem       `json:"items"`
+	UserMarketplace string                       `json:"user_marketplace"`
 }
 
 type diagnosticsRemoteItem struct {
@@ -939,7 +939,6 @@ func normalizeDiagnosticsPathKey(p string) string {
 	return strings.ToLower(strings.Join(parts, "/"))
 }
 
-
 // handleDiagnosticsEnv returns a JSON snapshot of runtime + path
 // info for the DS-style "Logs & Environment" diagnostics tab. Read-only.
 func (s *Server) handleDiagnosticsEnv(c *gin.Context) {
@@ -1030,5 +1029,14 @@ func (s *Server) handleDiagnosticsLogsTail(c *gin.Context) {
 			n = parsed
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"entries": logging.TailLogs(n)})
+	rawEntries := logging.TailLogs(n)
+	parsedEntries := make([]logging.ParsedEntry, len(rawEntries))
+	for i, raw := range rawEntries {
+		entry := logging.ParseLogLine(raw.Line)
+		if entry.Time.IsZero() {
+			entry.Time = raw.Time
+		}
+		parsedEntries[i] = entry
+	}
+	c.JSON(http.StatusOK, gin.H{"entries": parsedEntries})
 }
