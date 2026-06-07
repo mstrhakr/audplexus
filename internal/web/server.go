@@ -450,7 +450,14 @@ func (s *Server) setupRoutes() {
 	staticSub, _ := fs.Sub(staticFS, "static")
 	static := s.router.Group("/static")
 	static.Use(func(c *gin.Context) {
-		c.Header("Cache-Control", "public, max-age=604800")
+		path := c.Request.URL.Path
+		// Keep logos/cacheable images hot, but force stylesheet/script revalidation
+		// so UI changes (like diagnostics styling) show immediately after deploy.
+		if strings.HasSuffix(path, ".png") || strings.HasSuffix(path, ".svg") || strings.HasSuffix(path, ".jpg") || strings.HasSuffix(path, ".jpeg") || strings.HasSuffix(path, ".webp") {
+			c.Header("Cache-Control", "public, max-age=604800")
+		} else {
+			c.Header("Cache-Control", "no-cache")
+		}
 		c.Next()
 	})
 	static.StaticFS("/", http.FS(staticSub))
