@@ -634,7 +634,8 @@ function renderIssues(items) {
             const issue = s.status === 'missing' || s.status === 'unknown';
             const tone = issue ? 'is-issue' : 'is-ok';
             const title = `${s.destination_name} - ${s.status}${s.match_method ? ' (' + s.match_method + ')' : ''}${s.reason ? ': ' + s.reason : ''}`;
-            return `<span class="diag-presence-chip ${tone}" title="${escapeHtml(title)}">${diagDestinationGlyph(s.destination_type, s.destination_name)}${issue ? '<span class="diag-presence-x" aria-hidden="true"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg></span>' : ''}</span>`;
+            const overlay = issue ? '<span class="diag-presence-x" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="3" y1="3" x2="13" y2="13"/><line x1="13" y1="3" x2="3" y2="13"/></svg></span>' : '';
+            return `<span class="diag-presence-chip ${tone}" title="${escapeHtml(title)}">${diagDestinationGlyph(s.destination_type, s.destination_name)}${overlay}</span>`;
         }).join('');
 
         const missingDestinationIDs = getMissingDestinationIds(item);
@@ -898,9 +899,10 @@ document.addEventListener('DOMContentLoaded', () => {
     display: flex;
     align-items: center;
     justify-content: center;
+    background: transparent;
     color: var(--error);
-    background: color-mix(in srgb, var(--surface-2) 52%, #4a1b1b);
 }
+
 .diag-presence-fallback {
     font-size: 9px;
     font-weight: 700;
