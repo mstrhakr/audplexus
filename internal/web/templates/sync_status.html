@@ -109,6 +109,8 @@
 			</div>
 			{{if or (and .Indeterminate (eq .Status "running")) (and .SubPhases (gt (len .SubPhases) 1) (eq .Status "running"))}}
 			<div class="phase-progress-track indeterminate"><div class="phase-progress-fill"></div></div>
+			{{else if or (eq .Status "complete") (eq .Status "skipped")}}
+			<div class="phase-progress-track"><div class="phase-progress-fill" style="width:100%"></div></div>
 			{{else}}
 			<div class="phase-progress-track"><div class="phase-progress-fill" style="width:{{pctFloor .Percent}}%"></div></div>
 			{{end}}

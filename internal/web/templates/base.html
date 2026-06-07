@@ -373,6 +373,8 @@
             
             if (useThrobber) {
                 html += '<div class="phase-progress-track indeterminate"><div class="phase-progress-fill"></div></div>';
+            } else if (p.status === 'complete' || p.status === 'skipped') {
+                html += '<div class="phase-progress-track"><div class="phase-progress-fill" style="width:100%"></div></div>';
             } else if (p.status === 'running') {
                 var pct = Math.max(0, Math.min(100, Math.floor((p.percent || 0) * 100)));
                 html += '<div class="phase-progress-track"><div class="phase-progress-fill" style="width:' + pct + '%"></div></div>';
