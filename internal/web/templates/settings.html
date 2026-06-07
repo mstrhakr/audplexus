@@ -14,6 +14,7 @@
             <a href="#section-library" data-section="section-library" class="settings-nav-link"><span class="settings-nav-dot"></span>Library</a>
             <a href="#section-sync" data-section="section-sync" class="settings-nav-link"><span class="settings-nav-dot"></span>Sync</a>
             <a href="#section-performance" data-section="section-performance" class="settings-nav-link"><span class="settings-nav-dot"></span>Performance</a>
+            <a href="#section-security" data-section="section-security" class="settings-nav-link"><span class="settings-nav-dot"></span>Security</a>
             <a href="#section-system" data-section="section-system" class="settings-nav-link"><span class="settings-nav-dot"></span>System Information</a>
             {{if .Devices}}<a href="#section-devices" data-section="section-devices" class="settings-nav-link"><span class="settings-nav-dot"></span>Registered Devices</a>{{end}}
             <a href="#section-danger" data-section="section-danger" class="settings-nav-link"><span class="settings-nav-dot"></span>Danger Zone</a>
@@ -316,6 +317,112 @@
         </div>
     </section>
 
+    {{/* ── Security ─────────────────────────────────────────────────
+         Authentication mode, API key, admin password, and session
+         control. Each card POSTs to its own /settings/security/* route
+         and re-renders this page with a banner; that's why these forms
+         live outside the main settings <form>. */}}
+    <section class="settings-section" id="section-security" data-section="section-security">
+        <div class="card">
+            <div class="card-head"><h3>Authentication</h3></div>
+            <form method="POST" action="/settings/security/auth-method">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <div class="form-row">
+                    <label for="auth_method">Method</label>
+                    <select id="auth_method" name="auth_method" class="select">
+                        <option value="forms" {{if eq .AuthMethod "forms"}}selected{{end}}>Forms (username + password)</option>
+                        <option value="none" {{if eq .AuthMethod "none"}}selected{{end}}>None — anyone with the URL can access this server</option>
+                    </select>
+                    <div class="hint">Switching to None disables login. Anyone who can reach the port will have full access.</div>
+                </div>
+                <div class="form-row">
+                    <label for="auth_required">Required for</label>
+                    <select id="auth_required" name="auth_required" class="select">
+                        <option value="enabled" {{if eq .AuthRequired "enabled"}}selected{{end}}>All requests</option>
+                        <option value="disabled_for_localhost" {{if eq .AuthRequired "disabled_for_localhost"}}selected{{end}}>Disabled for localhost (127.0.0.1, ::1)</option>
+                        <option value="disabled_for_local" {{if eq .AuthRequired "disabled_for_local"}}selected{{end}}>Disabled for local addresses (LAN + loopback)</option>
+                    </select>
+                    <div class="hint">Skips auth when the request comes from the listed range. API key still works from anywhere.</div>
+                </div>
+                <div class="form-row">
+                    <label for="trusted_proxies">Trusted proxies</label>
+                    <input class="input" type="text" id="trusted_proxies" name="trusted_proxies" value="{{.TrustedProxies}}" placeholder="e.g. 10.0.0.0/8, 192.168.1.5">
+                    <div class="hint">Comma-separated CIDRs. Only when the request's TCP peer matches one of these will X-Forwarded-For be honored for the local-address check. Leave empty if you aren't behind a proxy.</div>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Save authentication</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="card" style="margin-top:1rem">
+            <div class="card-head"><h3>API Key</h3></div>
+            <div class="card-body">
+                <p>External clients authenticate by sending this key as the <code>X-Api-Key</code> header, <code>?apikey=</code> query parameter, or <code>Authorization: Bearer …</code>.</p>
+                <div class="form-row">
+                    <label for="api_key_value">Current key</label>
+                    <div style="display:flex;gap:.5em;">
+                        <input id="api_key_value" class="input" type="text" readonly value="{{.APIKey}}" style="flex:1;font-family:monospace;">
+                        <button type="button" class="btn btn-secondary" onclick="navigator.clipboard.writeText(document.getElementById('api_key_value').value)">Copy</button>
+                    </div>
+                </div>
+                <form method="POST" action="/settings/security/api-key/rotate" onsubmit="return confirm('Rotate the API key? Every external integration using the current key will stop working until you update it.');">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    <button type="submit" class="btn btn-secondary">Rotate key</button>
+                </form>
+            </div>
+        </div>
+
+        {{if eq .AuthMethod "forms"}}
+        <div class="card" style="margin-top:1rem">
+            <div class="card-head"><h3>Admin Account</h3></div>
+            <form method="POST" action="/settings/security/password">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <div class="form-row">
+                    <label for="username">Username</label>
+                    <input class="input" type="text" id="username" name="username" value="{{.Username}}" autocomplete="username" required>
+                </div>
+                <div class="form-row">
+                    <label for="current_password">Current password</label>
+                    <input class="input" type="password" id="current_password" name="current_password" autocomplete="current-password">
+                    <div class="hint">Leave blank when setting an initial password. Required when changing an existing one.</div>
+                </div>
+                <div class="form-row">
+                    <label for="new_password">New password</label>
+                    <input class="input" type="password" id="new_password" name="new_password" autocomplete="new-password" minlength="8" required>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Save password</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="card" style="margin-top:1rem">
+            <div class="card-head"><h3>Sessions</h3></div>
+            <div class="card-body">
+                <p>Sign out of every browser. Your current session will be re-issued so you stay logged in here.</p>
+                <form method="POST" action="/settings/security/sessions/revoke-all" onsubmit="return confirm('Revoke every other session?');">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    <button type="submit" class="btn btn-secondary">Sign out all other sessions</button>
+                </form>
+            </div>
+        </div>
+        {{end}}
+
+        {{if .User}}
+        <div class="card" style="margin-top:1rem">
+            <div class="card-head"><h3>Sign Out</h3></div>
+            <div class="card-body">
+                <p>Currently signed in as <strong>{{.User.Username}}</strong>.</p>
+                <form method="POST" action="/logout">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    <button type="submit" class="btn btn-secondary">Sign out</button>
+                </form>
+            </div>
+        </div>
+        {{end}}
+    </section>
+
     {{/* ── System Information ───────────────────────────────────────
          Read-only paths configured at container startup. Rendered as a
          single .card with a .meta-grid <dl> — same pattern as the book
@@ -401,6 +508,7 @@
                         <p>Clear the "onboarded" flag and walk through the first-run wizard again. Doesn't touch books, downloads, or destinations — useful for testing the wizard or revisiting region/auth steps.</p>
                     </div>
                     <form method="POST" action="/setup/restart" style="margin:0">
+                        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
                         <button type="submit" class="btn btn-outline-ds">Re-run wizard</button>
                     </form>
                 </div>

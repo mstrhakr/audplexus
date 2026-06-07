@@ -121,7 +121,7 @@
         <main class="content">
             {{if .AuthNagShow}}
             <div class="auth-nag" role="status" style="background:#3a2a14;border:1px solid #b07a2a;color:#f0c177;padding:.6em 1em;margin-bottom:1em;border-radius:6px;display:flex;justify-content:space-between;align-items:center;gap:1em;">
-                <span><strong>Authentication is disabled.</strong> Anyone who can reach this server has full access. <a href="/settings/security" style="color:#fff;text-decoration:underline;">Set up a password and API key →</a></span>
+                <span><strong>Authentication is disabled.</strong> Anyone who can reach this server has full access. <a href="/settings#section-security" style="color:#fff;text-decoration:underline;">Set up a password and API key →</a></span>
             </div>
             {{end}}
             {{template "content" .}}

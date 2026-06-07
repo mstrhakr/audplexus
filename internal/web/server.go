@@ -471,7 +471,7 @@ func (s *Server) setupRoutes() {
 	//   3. Require   enforces auth_method/auth_required (exempts /login, /static, ...)
 	s.router.Use(s.authMgr.CSRF(csrfExemptPath))
 	s.router.Use(s.authMgr.Authenticate())
-	s.router.Use(s.authMgr.Require(authExemptPath))
+	s.router.Use(s.authMgr.Require(s.authExemptPath))
 
 	// First-run gate — runs before page handlers and redirects to the
 	// setup wizard on fresh installs (no auth + no "onboarded" setting).
@@ -508,11 +508,15 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/login", s.handleLoginGet)
 	s.router.POST("/login", s.handleLoginPost)
 	s.router.POST("/logout", s.handleLogout)
-	s.router.GET("/settings/security", s.handleSecurityPage)
 	s.router.POST("/settings/security/auth-method", s.handleSecurityAuthMethod)
 	s.router.POST("/settings/security/api-key/rotate", s.handleSecurityAPIKeyRotate)
 	s.router.POST("/settings/security/password", s.handleSecurityPassword)
 	s.router.POST("/settings/security/sessions/revoke-all", s.handleSecurityRevokeAllSessions)
+	// Security lives as a section on the main Settings page. Keep the old
+	// /settings/security URL working by bouncing it to the anchor.
+	s.router.GET("/settings/security", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/settings#section-security")
+	})
 
 	// Audible OAuth flow — distinct from app auth above. Kept under
 	// /auth/* for backwards compatibility with the URL the existing

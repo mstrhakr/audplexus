@@ -89,7 +89,7 @@
                         <button type="submit" class="btn btn-primary">{{if .AdminExists}}Update account and continue{{else}}Create account and continue{{end}} →</button>
                         {{if not .AdminExists}}
                         <a href="/setup/admin/skip" class="btn btn-ghost"
-                           onclick="return confirm('Skip authentication? Anyone who can reach this server will have full access. You can enable it later from Settings → Security.')">Skip — set up later</a>
+                           onclick="return confirm('Skip authentication? Anyone who can reach this server will have full access. You can enable it later from Security.')">Skip — set up later</a>
                         {{end}}
                     </div>
                 </form>

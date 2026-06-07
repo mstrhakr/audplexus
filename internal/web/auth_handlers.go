@@ -100,19 +100,22 @@ func (s *Server) handleLogout(c *gin.Context) {
 	c.Redirect(http.StatusSeeOther, "/login")
 }
 
-// handleSecurityPage renders the Security settings page. Always allows
-// access — even when auth_method is "none" so the user can switch on auth.
-func (s *Server) handleSecurityPage(c *gin.Context) {
-	s.renderSecurityPage(c, http.StatusOK, gin.H{})
-}
-
+// renderSecurityPage renders the unified Settings page with the security
+// section data merged in. Used by every POST handler in this file — the
+// section lives on /settings under #section-security, so all responses
+// re-render the same page with the success/error banner attached.
 func (s *Server) renderSecurityPage(c *gin.Context, status int, extra gin.H) {
 	ctx := c.Request.Context()
-	data := s.securityPageData(ctx, c)
+	data := s.settingsPageData(ctx)
+	for k, v := range s.securityPageData(ctx, c) {
+		data[k] = v
+	}
 	for k, v := range extra {
 		data[k] = v
 	}
-	c.HTML(status, "settings_security.html", s.withSidebar(ctx, data))
+	data["Page"] = "settings"
+	data["FocusSection"] = "security"
+	c.HTML(status, "settings.html", s.withSidebar(c, data))
 }
 
 func (s *Server) securityPageData(ctx context.Context, c *gin.Context) gin.H {
