@@ -35,6 +35,11 @@ const (
 type Manager struct {
 	DB       database.Database
 	Throttle *LoginThrottle
+	// OnCSRFFailure, when set, is invoked by the CSRF middleware in place
+	// of the default JSON 403 abort. Wired by the web package so browser
+	// callers get the styled error page while /api/* + XHR keep the JSON
+	// contract. Nil-safe — the middleware falls back to the JSON abort.
+	OnCSRFFailure gin.HandlerFunc
 }
 
 // NewManager wires the middleware against a database and a fresh throttle.
@@ -260,6 +265,12 @@ func (m *Manager) CSRF(exempt func(path string) bool) gin.HandlerFunc {
 				Str("ip", c.ClientIP()).
 				Str("path", c.Request.URL.Path).
 				Msg("CSRF token mismatch")
+			if m.OnCSRFFailure != nil {
+				m.OnCSRFFailure(c)
+				if c.IsAborted() {
+					return
+				}
+			}
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "csrf token invalid"})
 			return
 		}

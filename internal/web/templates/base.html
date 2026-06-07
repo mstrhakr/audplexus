@@ -35,7 +35,8 @@
     {{$sb := .Sidebar}}
     {{$isWizard := eq .Page "setup"}}
     {{$isLogin := eq .Page "login"}}
-    {{if and (not $isWizard) (not $isLogin)}}
+    {{$isError := eq .Page "error"}}
+    {{if and (not $isWizard) (not $isLogin) (not $isError)}}
     <div class="sidebar-backdrop" data-nav-dismiss aria-hidden="true"></div>
     <nav class="sidebar" id="primary-nav">
         <div class="sidebar-header">
@@ -128,6 +129,8 @@
         </main>
     </div>
     {{else if $isLogin}}
+        {{template "content" .}}
+    {{else if $isError}}
         {{template "content" .}}
     {{else}}
         {{template "content" .}}

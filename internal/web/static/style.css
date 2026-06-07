@@ -3627,3 +3627,316 @@ body.sidebar-open .sidebar-backdrop {
 
 /* ── btn-outline-ds → match DS .btn-outline ──────────────────────── */
 /* (already defined at line ~847; this is a no-op anchor for grep) */
+
+/* ── Error page (404 / CSRF / generic catch) ─────────────────────────
+   Standalone shell rendered without sidebar. Visual concept: a quiet
+   "diagnostic channel" panel — a giant mono status code anchors the
+   page, a refined card holds the human-readable message + actions, and
+   a faint grid + radial glow keep it from feeling like a blank slate.
+   All colors come from the existing tokens; no new palette. */
+body:has(> .errpg-shell) { display: block; min-height: 100vh; }
+
+.errpg-shell {
+    position: relative;
+    min-height: 100vh;
+    padding: clamp(1.5rem, 4vw, 3rem);
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    gap: 2.5rem;
+    overflow: hidden;
+    background:
+        radial-gradient(ellipse 90% 60% at 50% 0%, rgba(31, 200, 245, 0.07), transparent 70%),
+        linear-gradient(180deg, #14142a 0%, var(--bg) 55%, #101023 100%);
+    color: var(--text);
+}
+
+.errpg-grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+        linear-gradient(rgba(124, 201, 255, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(124, 201, 255, 0.05) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse 70% 70% at 50% 45%, #000 30%, transparent 85%);
+    -webkit-mask-image: radial-gradient(ellipse 70% 70% at 50% 45%, #000 30%, transparent 85%);
+    pointer-events: none;
+    z-index: 0;
+}
+
+.errpg-glow {
+    position: absolute;
+    width: 620px;
+    height: 620px;
+    left: 50%;
+    top: 35%;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, rgba(233, 69, 96, 0.18), transparent 65%);
+    filter: blur(40px);
+    pointer-events: none;
+    z-index: 0;
+    animation: errpg-pulse 8s ease-in-out infinite;
+}
+
+@keyframes errpg-pulse {
+    0%, 100% { opacity: 0.7; transform: translate(-50%, -50%) scale(1); }
+    50%      { opacity: 1;   transform: translate(-50%, -50%) scale(1.08); }
+}
+
+.errpg-topbar {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-family: var(--font-mono);
+    font-size: var(--fs-eyebrow);
+    letter-spacing: var(--tracking-eyebrow);
+    text-transform: uppercase;
+    color: var(--text-strong);
+}
+.errpg-topbar .errpg-tag.muted { color: var(--text-muted); }
+.errpg-topbar .errpg-sep { color: var(--accent); opacity: 0.7; }
+
+.errpg-stage {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
+    align-items: center;
+    gap: clamp(2rem, 5vw, 4.5rem);
+    max-width: 1080px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+@media (max-width: 860px) {
+    .errpg-stage { grid-template-columns: 1fr; gap: 1.5rem; }
+}
+
+.errpg-code {
+    position: relative;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: clamp(8rem, 22vw, 17rem);
+    line-height: 0.85;
+    letter-spacing: -0.06em;
+    color: var(--text-strong);
+    user-select: none;
+    text-shadow: 0 4px 40px rgba(0, 0, 0, 0.45);
+}
+.errpg-code-digit {
+    display: inline-block;
+    animation: errpg-slidein 700ms cubic-bezier(.2,.8,.2,1) both;
+}
+.errpg-code-digit:nth-child(1) { animation-delay: 50ms; }
+.errpg-code-digit:nth-child(2) { animation-delay: 150ms; }
+.errpg-code-digit:nth-child(3) { animation-delay: 250ms; }
+.errpg-code-digit.accent {
+    color: var(--accent);
+    text-shadow: 0 0 32px rgba(233, 69, 96, 0.55);
+}
+.errpg-code-ghost {
+    position: absolute;
+    inset: 0;
+    color: transparent;
+    -webkit-text-stroke: 1px rgba(124, 201, 255, 0.18);
+    text-stroke: 1px rgba(124, 201, 255, 0.18);
+    transform: translate(6px, 6px);
+    pointer-events: none;
+    z-index: -1;
+}
+
+@keyframes errpg-slidein {
+    from { opacity: 0; transform: translateY(20px); filter: blur(8px); }
+    to   { opacity: 1; transform: translateY(0);    filter: blur(0); }
+}
+
+.errpg-card {
+    position: relative;
+    background: linear-gradient(180deg, rgba(22, 33, 62, 0.85), rgba(15, 52, 96, 0.55));
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.75rem 1.85rem 1.5rem;
+    box-shadow:
+        0 28px 60px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(6px);
+    animation: errpg-slidein 700ms cubic-bezier(.2,.8,.2,1) both;
+    animation-delay: 350ms;
+}
+.errpg-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 14px;
+    padding: 1px;
+    background: linear-gradient(135deg, rgba(124, 201, 255, 0.35), transparent 40%, transparent 60%, rgba(233, 69, 96, 0.35));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+    pointer-events: none;
+}
+
+.errpg-card-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: var(--font-mono);
+    font-size: var(--fs-eyebrow);
+    letter-spacing: var(--tracking-eyebrow);
+    text-transform: uppercase;
+    color: var(--plex-cyan);
+    margin-bottom: 0.85rem;
+}
+.errpg-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(233, 69, 96, 0.18);
+    animation: errpg-blink 1.6s ease-in-out infinite;
+}
+@keyframes errpg-blink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+}
+
+.errpg-title {
+    font-family: var(--font-sans);
+    font-size: clamp(1.4rem, 2.6vw, 1.85rem);
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    color: var(--text-strong);
+    margin-bottom: 0.6rem;
+}
+
+.errpg-lede {
+    font-size: var(--fs-md);
+    line-height: 1.55;
+    color: var(--text-muted);
+    margin-bottom: 1.2rem;
+}
+
+.errpg-detail {
+    margin-bottom: 1.2rem;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+}
+.errpg-detail summary {
+    cursor: pointer;
+    color: var(--text-link);
+    list-style: none;
+    user-select: none;
+    padding: 0.35rem 0;
+}
+.errpg-detail summary::-webkit-details-marker { display: none; }
+.errpg-detail summary::before {
+    content: "›";
+    display: inline-block;
+    margin-right: 0.4rem;
+    transition: transform 160ms ease;
+}
+.errpg-detail[open] summary::before { transform: rotate(90deg); }
+.errpg-detail-pre {
+    margin-top: 0.5rem;
+    padding: 0.75rem 0.9rem;
+    background: rgba(10, 14, 28, 0.65);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--plex-cyan);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 180px;
+    overflow: auto;
+}
+
+.errpg-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    margin-bottom: 1.4rem;
+}
+.errpg-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+.errpg-action svg { flex-shrink: 0; }
+
+.errpg-meta {
+    list-style: none;
+    margin: 0;
+    padding: 0.95rem 0 0;
+    border-top: 1px dashed var(--border);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem 1rem;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+}
+.errpg-meta li {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.errpg-meta .k {
+    color: var(--text-muted);
+    letter-spacing: var(--tracking-eyebrow);
+    text-transform: uppercase;
+    font-size: var(--fs-eyebrow);
+}
+.errpg-meta .v {
+    color: var(--text-strong);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.errpg-footer {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+}
+.errpg-footer a { color: var(--text-link); }
+.errpg-footer a:hover { color: var(--text-link-hover); }
+.errpg-footer .errpg-sep { opacity: 0.6; }
+.errpg-tick {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--audible-teal);
+    box-shadow: 0 0 0 3px rgba(103, 196, 177, 0.18);
+    animation: errpg-blink 2.2s ease-in-out infinite;
+}
+
+/* Subtle variant for the soft "not found" case — drop the red glow,
+   lean on the cyan side of the palette instead. */
+.errpg-shell[data-status="404"] .errpg-glow {
+    background: radial-gradient(circle, rgba(124, 201, 255, 0.18), transparent 65%);
+}
+.errpg-shell[data-status="404"] .errpg-code-digit.accent {
+    color: var(--plex-cyan);
+    text-shadow: 0 0 32px rgba(124, 201, 255, 0.55);
+}
+.errpg-shell[data-status="404"] .errpg-dot {
+    background: var(--plex-cyan);
+    box-shadow: 0 0 0 3px rgba(124, 201, 255, 0.18);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .errpg-glow,
+    .errpg-dot,
+    .errpg-tick { animation: none; }
+    .errpg-code-digit,
+    .errpg-card { animation: none; }
+}

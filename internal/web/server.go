@@ -462,6 +462,14 @@ func (s *Server) setupRoutes() {
 	})
 	static.StaticFS("/", http.FS(staticSub))
 
+	// Browser-friendly CSRF failure page. Wired before the middleware is
+	// installed so the very first failed POST already routes through it.
+	s.authMgr.OnCSRFFailure = s.handleCSRFFailure
+
+	// Unmatched routes get the shared error page (HTML) for browsers and a
+	// JSON 404 for API/XHR callers.
+	s.router.NoRoute(s.handleNotFound)
+
 	// Auth pipeline (must run BEFORE firstRunGate — otherwise an
 	// unauthenticated visitor to a freshly-upgraded install gets bounced
 	// into /setup and can create their own admin account before the legit
