@@ -625,6 +625,12 @@ func ginLogger() gin.HandlerFunc {
 			return
 		}
 
+		// /api/diagnostics/logs/tail is polled every ~2s by the diagnostics UI.
+		// Logging each poll floods the same log view that consumes this endpoint.
+		if path == "/api/diagnostics/logs/tail" {
+			return
+		}
+
 		evt := webLog.Debug()
 		if latency >= 2*time.Second {
 			evt = webLog.Warn()
