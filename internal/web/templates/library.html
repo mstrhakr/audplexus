@@ -21,6 +21,7 @@
     {{$search := .Filter.Search}}
     <div class="tabs" role="tablist" aria-label="Filter library by status">
         <a href="/library{{if $search}}?search={{$search}}{{end}}" class="{{if eq $active ""}}active{{end}}" role="tab">All <span class="count">{{index .StatusCounts "all"}}</span></a>
+        <a href="/library?status=available{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "available"}}active{{end}}" role="tab" title="All Audible titles except unavailable">Available <span class="count">{{index .StatusCounts "available"}}</span></a>
         <a href="/library?status=new{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "new"}}active{{end}}" role="tab">New <span class="count">{{index .StatusCounts "new"}}</span></a>
         <a href="/library?status=downloading{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "downloading"}}active{{end}}" role="tab">In Progress <span class="count">{{index .StatusCounts "in_progress"}}</span></a>
         <a href="/library?status=queued{{if $search}}&search={{$search}}{{end}}" class="{{if eq $active "queued"}}active{{end}}" role="tab">Waiting <span class="count">{{index .StatusCounts "waiting"}}</span></a>
@@ -46,6 +47,7 @@
                 hx-trigger="change"
                 hx-include=".lib-filter">
             <option value="" {{if eq $active ""}}selected{{end}}>All statuses</option>
+            <option value="available" {{if eq $active "available"}}selected{{end}}>Available</option>
             <option value="new" {{if eq $active "new"}}selected{{end}}>New</option>
             <option value="queued" {{if eq $active "queued"}}selected{{end}}>Queued</option>
             <option value="downloading" {{if eq $active "downloading"}}selected{{end}}>Downloading</option>

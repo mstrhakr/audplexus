@@ -37,7 +37,7 @@
             <span class="fill{{if lt .Coverage 50}} bad{{else if lt .Coverage 90}} warn{{end}}" style="display:block;width:{{.Coverage}}%;height:100%"></span>
         </span>
         <b style="font-size:.76rem">{{.Coverage}}%</b>
-        <span class="dest-row-help">of your library is present on this server</span>
+        <span class="dest-row-help">{{if eq .CoverageBasis "available"}}of available books{{else}}of your library{{end}} is present on this server</span>
         {{end}}
     </div>
     {{end}}

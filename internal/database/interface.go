@@ -69,6 +69,9 @@ type Database interface {
 // BookFilter defines parameters for listing books.
 type BookFilter struct {
 	Status  *BookStatus
+	// ExcludeStatuses filters out rows whose status matches any listed value.
+	// Used by derived UI buckets such as "available" = all minus unavailable.
+	ExcludeStatuses []BookStatus
 	Search  string
 	SortBy  string // "title", "author", "purchase_date", "status"
 	SortDir string // "asc", "desc"

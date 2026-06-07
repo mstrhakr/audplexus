@@ -43,6 +43,7 @@ func TestListBooksPresenceFilters(t *testing.T) {
 		{ASIN: "B0001", Title: "A", Author: "x", Status: BookStatusComplete, FilePath: "/m/a.m4b"},
 		{ASIN: "B0002", Title: "B", Author: "x", Status: BookStatusComplete, FilePath: "/m/b.m4b"},
 		{ASIN: "B0003", Title: "C", Author: "x", Status: BookStatusNew, FilePath: ""},
+		{ASIN: "B0004", Title: "D", Author: "x", Status: BookStatusUnavailable, FilePath: ""},
 	}
 	for _, b := range books {
 		if err := db.UpsertBook(ctx, b); err != nil {
@@ -67,11 +68,12 @@ func TestListBooksPresenceFilters(t *testing.T) {
 		wantASIN []string
 	}{
 		{"on disk only", BookFilter{OnDisk: ptrBool(true)}, []string{"B0001", "B0002"}},
-		{"not on disk", BookFilter{OnDisk: ptrBool(false)}, []string{"B0003"}},
+		{"not on disk", BookFilter{OnDisk: ptrBool(false)}, []string{"B0003", "B0004"}},
 		{"present in plex", BookFilter{PresentInDestinations: []string{plex.ID}}, []string{"B0001", "B0002"}},
 		{"present in abs", BookFilter{PresentInDestinations: []string{abs.ID}}, []string{"B0001"}},
-		{"missing from abs", BookFilter{MissingFromDestinations: []string{abs.ID}}, []string{"B0002", "B0003"}},
+		{"missing from abs", BookFilter{MissingFromDestinations: []string{abs.ID}}, []string{"B0002", "B0003", "B0004"}},
 		{"in plex AND missing from abs", BookFilter{PresentInDestinations: []string{plex.ID}, MissingFromDestinations: []string{abs.ID}}, []string{"B0002"}},
+		{"available only", BookFilter{ExcludeStatuses: []BookStatus{BookStatusUnavailable}}, []string{"B0001", "B0002", "B0003"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

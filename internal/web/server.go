@@ -681,11 +681,12 @@ func (s *Server) getDashboardData(ctx context.Context) gin.H {
 }
 
 func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
-	_, totalBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Limit: 1})
-	completeStatus := database.BookStatusComplete
-	_, completeBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
-	newStatus := database.BookStatusNew
-	_, newBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &newStatus, Limit: 1})
+	counts := s.libraryStatusCounts(ctx)
+	totalBooks := counts["all"]
+	availableBooks := counts["available"]
+	completeBooks := counts["complete"]
+	newBooks := counts["new"]
+	coverageBooks := s.coverageDenominator(ctx, counts)
 
 	activeStatus := database.DownloadStatusActive
 	activeDownloads, _ := s.db.ListDownloads(ctx, &activeStatus)
@@ -699,8 +700,10 @@ func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
 
 	return gin.H{
 		"TotalBooks":    totalBooks,
+		"AvailableBooks": availableBooks,
 		"CompleteBooks": completeBooks,
 		"NewBooks":      newBooks,
+		"CoverageBasis": s.coverageBasis(ctx),
 		"ActiveDL":      len(activeDownloads),
 		"PendingDL":     len(pendingDownloads),
 		"FailedDL":      len(failedDownloads),
@@ -709,11 +712,9 @@ func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
 		// Per-destination summary cards. Replaces the legacy
 		// single-active-backend stat cards. Empty slice means "no
 		// destinations configured yet" — template shows a CTA.
-		// Coverage % uses totalBooks (Audible library size) as the
-		// denominator so it represents "fraction of the library present
-		// in this destination" — stable across status transitions and
-		// matches the user's mental model.
-		"DestinationSummaries": s.destinationSummaries(ctx, totalBooks),
+		// Coverage % uses the selected denominator so it can represent
+		// either the full library or only available titles.
+		"DestinationSummaries": s.destinationSummaries(ctx, coverageBooks),
 	}
 }
 
@@ -747,6 +748,7 @@ type destinationSummaryView struct {
 	ItemCountSet    bool
 	Coverage        int
 	CoverageSet     bool
+	CoverageBasis   string // "all" | "available"
 	Health          string // "healthy" | "failed" | "never" | "not_configured"
 	HealthDetail    string // for failed: shorter human message
 	LastError       string
@@ -771,10 +773,11 @@ func (s *Server) destinationSummaries(ctx context.Context, libraryTotal int) []d
 		return nil
 	}
 
+	basis := s.coverageBasis(ctx)
 	out := make([]destinationSummaryView, 0, len(rows))
 	for _, r := range rows {
 		row := r
-		out = append(out, s.buildDestinationSummary(ctx, &row, libraryTotal))
+		out = append(out, s.buildDestinationSummary(ctx, &row, libraryTotal, basis))
 	}
 	return out
 }
@@ -789,11 +792,8 @@ func (s *Server) singleDestinationSummary(ctx context.Context, id string) *desti
 	if err != nil || row == nil {
 		return nil
 	}
-	// Coverage % uses the total library size as the denominator so the
-	// meter renders the same as it does on the full grid. Cheap
-	// LIMIT-1 count.
-	_, libraryTotal, _ := s.db.ListBooks(ctx, database.BookFilter{Limit: 1})
-	v := s.buildDestinationSummary(ctx, row, libraryTotal)
+	counts := s.libraryStatusCounts(ctx)
+	v := s.buildDestinationSummary(ctx, row, s.coverageDenominator(ctx, counts), s.coverageBasis(ctx))
 	return &v
 }
 
@@ -801,7 +801,7 @@ func (s *Server) singleDestinationSummary(ctx context.Context, id string) *desti
 // builder and the single-row swap path. Probes LibraryItemCount (with
 // the 30s cache) only for enabled+configured destinations so toggling
 // a disabled row stays cheap.
-func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, libraryTotal int) destinationSummaryView {
+func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, libraryTotal int, basis string) destinationSummaryView {
 	hasCred := row.APIKey != "" || row.PlexToken != ""
 	v := destinationSummaryView{
 		ID:              row.ID,
@@ -821,6 +821,7 @@ func (s *Server) buildDestinationSummary(ctx context.Context, row *database.Libr
 		LastCheckedAt:   row.LastHealthCheckAt,
 		CreatedAt:       row.CreatedAt,
 		UpdatedAt:       row.UpdatedAt,
+		CoverageBasis:   basis,
 	}
 
 	if !v.Enabled || !v.Configured {
@@ -854,6 +855,21 @@ func (s *Server) buildDestinationSummary(ctx context.Context, row *database.Libr
 		v.CoverageSet = true
 	}
 	return v
+}
+
+func (s *Server) coverageBasis(ctx context.Context) string {
+	basis := s.settingString(ctx, library.SettingKeyCoverageBasis, library.CoverageBasisAll)
+	if basis == library.CoverageBasisAvailable {
+		return basis
+	}
+	return library.CoverageBasisAll
+}
+
+func (s *Server) coverageDenominator(ctx context.Context, counts map[string]int) int {
+	if s.coverageBasis(ctx) == library.CoverageBasisAvailable {
+		return counts["available"]
+	}
+	return counts["all"]
 }
 
 // buildDestinationBackend delegates to DestinationManager.BuildBackend
@@ -1007,8 +1023,13 @@ func (s *Server) handleLibrary(c *gin.Context) {
 
 	statusStr := c.Query("status")
 	if statusStr != "" {
-		status := database.BookStatus(statusStr)
-		filter.Status = &status
+		switch statusStr {
+		case "available":
+			filter.ExcludeStatuses = []database.BookStatus{database.BookStatusUnavailable}
+		default:
+			status := database.BookStatus(statusStr)
+			filter.Status = &status
+		}
 	}
 
 	// Presence filters. on_disk is a tri-state: missing/empty = any,
@@ -1047,6 +1068,7 @@ func (s *Server) handleLibrary(c *gin.Context) {
 	}
 
 	counts := s.libraryStatusCounts(ctx)
+	coverageBasis := s.coverageBasis(ctx)
 
 	totalPages := (total + pageSize - 1) / pageSize
 	if totalPages < 1 {
@@ -1068,6 +1090,7 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		"BookPresence":      s.computeBookPresence(ctx, books),
 		"StatusCounts":      counts,
 		"ActiveStatus":      statusStr,
+		"CoverageBasis":     coverageBasis,
 		"PresenceFilters":   s.libraryPresenceFilterOpts(ctx, destFilterState),
 		"OnDiskFilter":      c.Query("on_disk"),
 		"PageNum":           pageNum,
@@ -1127,6 +1150,7 @@ func (s *Server) libraryPresenceFilterOpts(ctx context.Context, state map[string
 func (s *Server) libraryStatusCounts(ctx context.Context) map[string]int {
 	out := map[string]int{
 		"all":         0,
+		"available":   0,
 		"new":         0,
 		"in_progress": 0,
 		"waiting":     0,
@@ -1158,6 +1182,10 @@ func (s *Server) libraryStatusCounts(ctx context.Context) map[string]int {
 		// Other statuses (skipped) contribute to "all" but not to any
 		// filter tab; that matches the legacy behaviour where skipped
 		// was implicitly counted via the unfiltered total only.
+	}
+	out["available"] = out["all"] - out["unavailable"]
+	if out["available"] < 0 {
+		out["available"] = 0
 	}
 	return out
 }
@@ -1891,6 +1919,7 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 	syncEnabled := s.settingBool(ctx, "sync_enabled", true)
 	syncMode := s.settingString(ctx, "sync_mode", "full")
 	syncAutoQueueNew := s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)
+	coverageBasis := s.coverageBasis(ctx)
 	outputFormat, _ := s.db.GetSetting(ctx, "output_format")
 	if outputFormat == "" {
 		outputFormat = "m4b"
@@ -1944,6 +1973,7 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 		"SyncEnabled":          syncEnabled,
 		"SyncMode":             syncMode,
 		"SyncAutoQueueNew":     syncAutoQueueNew,
+		"CoverageBasis":        coverageBasis,
 		"OutputFormat":         outputFormat,
 		"NativeAudiobooksPath": hostPath,
 		"PlexSectionPath":      plexSectionPath,
@@ -2998,6 +3028,13 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 		if setSetting("sync_mode", mode) && s.sched != nil {
 			s.sched.SetSyncMode(mode)
 		}
+	}
+	if raw := strings.TrimSpace(c.PostForm("coverage_basis")); raw != "" {
+		basis := library.CoverageBasisAll
+		if raw == library.CoverageBasisAvailable {
+			basis = raw
+		}
+		_ = setSetting(library.SettingKeyCoverageBasis, basis)
 	}
 	if scheduleChanged && s.sched != nil {
 		enabled := s.settingBool(ctx, "sync_enabled", true)

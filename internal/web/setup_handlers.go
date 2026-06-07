@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
 )
 
@@ -86,9 +85,8 @@ func (s *Server) handleSetupWizard(c *gin.Context) {
 	// Destinations summary for steps 3 (list) and 4 (recap). We use the
 	// rich destinationSummaries shape so the picker-list shows type +
 	// display name + URL consistently with the live Destinations page.
-	completeStatus := database.BookStatusComplete
-	_, completeBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
-	data["Destinations"] = s.destinationSummaries(ctx, completeBooks)
+	counts := s.libraryStatusCounts(ctx)
+	data["Destinations"] = s.destinationSummaries(ctx, s.coverageDenominator(ctx, counts))
 
 	// On the Audible step, if the user has already picked a marketplace
 	// but isn't authenticated yet, generate the auth URL so the page can

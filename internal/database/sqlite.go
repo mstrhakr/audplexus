@@ -645,6 +645,16 @@ func buildBookWhere(filter BookFilter) (string, []interface{}) {
 		clauses = append(clauses, "status = ?")
 		args = append(args, *filter.Status)
 	}
+	if len(filter.ExcludeStatuses) > 0 {
+		placeholders := make([]string, 0, len(filter.ExcludeStatuses))
+		for range filter.ExcludeStatuses {
+			placeholders = append(placeholders, "?")
+		}
+		clauses = append(clauses, "status NOT IN ("+strings.Join(placeholders, ",")+")")
+		for _, status := range filter.ExcludeStatuses {
+			args = append(args, status)
+		}
+	}
 	if filter.Search != "" {
 		clauses = append(clauses, "(title LIKE ? OR author LIKE ? OR series LIKE ? OR asin LIKE ?)")
 		search := "%" + filter.Search + "%"

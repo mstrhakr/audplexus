@@ -122,7 +122,8 @@ func destinationConfigured(d *database.LibraryDestination) bool {
 // (item count, coverage, last error) and a clear top-level CTA to add more.
 func (s *Server) handleDestinations(c *gin.Context) {
 	ctx := c.Request.Context()
-	_, libraryTotal, _ := s.db.ListBooks(ctx, database.BookFilter{Limit: 1})
+	counts := s.libraryStatusCounts(ctx)
+	libraryTotal := s.coverageDenominator(ctx, counts)
 
 	dests := s.destinationSummaries(ctx, libraryTotal)
 

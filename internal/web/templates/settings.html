@@ -151,6 +151,15 @@
                     <div class="hint">Extension is added automatically. Keep tokens data-only and place punctuation/spaces inside conditional blocks.</div>
                 </div>
 
+                <div class="form-row">
+                    <label for="coverage_basis">Coverage percent basis</label>
+                    <select class="select" id="coverage_basis" name="coverage_basis">
+                        <option value="all" {{if eq .CoverageBasis "all"}}selected{{end}}>All library items</option>
+                        <option value="available" {{if eq .CoverageBasis "available"}}selected{{end}}>Available items only</option>
+                    </select>
+                    <div class="hint">Controls coverage meters on the dashboard and destination cards.</div>
+                </div>
+
                 <label class="form-row inline">
                     <span class="row-label">
                         Embed cover art
