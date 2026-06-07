@@ -329,7 +329,7 @@
                 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
                 <div class="form-row">
                     <label for="auth_method">Method</label>
-                    <select id="auth_method" name="auth_method" class="select">
+                    <select id="auth_method" name="auth_method" class="select" data-auth-method-toggle>
                         <option value="forms" {{if eq .AuthMethod "forms"}}selected{{end}}>Forms (username + password)</option>
                         <option value="none" {{if eq .AuthMethod "none"}}selected{{end}}>None — anyone with the URL can access this server</option>
                     </select>
@@ -353,12 +353,83 @@
                     <button type="submit" class="btn btn-primary">Save authentication</button>
                 </div>
             </form>
+
+            {{/* Admin Account is a sub-card nested inside Authentication.
+                 Visibility is driven by the Method dropdown via JS (see
+                 [data-auth-method-toggle] handler below) so the user sees it
+                 the moment they pick Forms — no save round-trip required.
+                 Initial display state matches the rendered .AuthMethod, with
+                 a fallback to "show" when no admin exists yet so the user can
+                 set credentials before flipping to Forms. */}}
+            {{$showAdmin := or (eq .AuthMethod "forms") (not .Username)}}
+            <div class="auth-admin-subcard"
+                 data-auth-admin-subcard
+                 style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border, #2a2a2a);{{if not $showAdmin}}display:none;{{end}}">
+                <h4 style="margin:0 0 .25rem;font-size:.95rem">Admin Account</h4>
+                <p class="hint" style="margin:0 0 .75rem" data-auth-admin-hint>
+                    {{if and (ne .AuthMethod "forms") (not .Username)}}
+                    Set a username and password here, then switch <em>Method</em> above to <strong>Forms</strong> and save to require login.
+                    {{else}}
+                    Credentials for the Forms login.
+                    {{end}}
+                </p>
+                <form method="POST" action="/settings/security/password">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    <div class="form-row">
+                        <label for="username">Username</label>
+                        <input class="input" type="text" id="username" name="username" value="{{.Username}}" autocomplete="username" required>
+                    </div>
+                    <div class="form-row">
+                        <label for="current_password">Current password</label>
+                        <input class="input" type="password" id="current_password" name="current_password" autocomplete="current-password">
+                        <div class="hint">Leave blank when setting an initial password. Required when changing an existing one.</div>
+                    </div>
+                    <div class="form-row">
+                        <label for="new_password">New password</label>
+                        <input class="input" type="password" id="new_password" name="new_password" autocomplete="new-password" minlength="8" required>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Save password</button>
+                    </div>
+                </form>
+            </div>
         </div>
+
+        <script>
+        (function() {
+            // Toggle the Admin Account sub-card live with the Method dropdown,
+            // so the user doesn't have to save + reload to see the password
+            // form. Hide when "none" AND an admin already exists; otherwise
+            // show (so first-time users can set credentials before flipping
+            // the switch).
+            var sel = document.querySelector('[data-auth-method-toggle]');
+            var sub = document.querySelector('[data-auth-admin-subcard]');
+            var hint = document.querySelector('[data-auth-admin-hint]');
+            if (!sel || !sub) return;
+            var hasAdmin = {{if .Username}}true{{else}}false{{end}};
+            function apply() {
+                var isForms = sel.value === 'forms';
+                if (isForms || !hasAdmin) {
+                    sub.style.display = '';
+                    if (hint) {
+                        hint.innerHTML = (isForms || hasAdmin)
+                            ? 'Credentials for the Forms login.'
+                            : 'Set a username and password here, then switch <em>Method</em> above to <strong>Forms</strong> and save to require login.';
+                    }
+                } else {
+                    sub.style.display = 'none';
+                }
+            }
+            sel.addEventListener('change', apply);
+            apply();
+        })();
+        </script>
 
         <div class="card" style="margin-top:1rem">
             <div class="card-head"><h3>API Key</h3></div>
             <div class="card-body">
                 <p>External clients authenticate by sending this key as the <code>X-Api-Key</code> header, <code>?apikey=</code> query parameter, or <code>Authorization: Bearer …</code>.</p>
+                {{if .APIKey}}
                 <div class="form-row">
                     <label for="api_key_value">Current key</label>
                     <div style="display:flex;gap:.5em;">
@@ -366,37 +437,19 @@
                         <button type="button" class="btn btn-secondary" onclick="navigator.clipboard.writeText(document.getElementById('api_key_value').value)">Copy</button>
                     </div>
                 </div>
-                <form method="POST" action="/settings/security/api-key/rotate" onsubmit="return confirm('Rotate the API key? Every external integration using the current key will stop working until you update it.');">
+                {{else}}
+                <div class="alert" role="status" style="margin-bottom:1rem">
+                    <div>No API key is stored yet. Generate one to enable external integrations (Sonarr, scripts, mobile apps).</div>
+                </div>
+                {{end}}
+                <form method="POST" action="/settings/security/api-key/rotate" onsubmit="return {{if .APIKey}}confirm('Rotate the API key? Every external integration using the current key will stop working until you update it.'){{else}}true{{end}};">
                     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-                    <button type="submit" class="btn btn-secondary">Rotate key</button>
+                    <button type="submit" class="btn btn-secondary">{{if .APIKey}}Rotate key{{else}}Generate key{{end}}</button>
                 </form>
             </div>
         </div>
 
         {{if eq .AuthMethod "forms"}}
-        <div class="card" style="margin-top:1rem">
-            <div class="card-head"><h3>Admin Account</h3></div>
-            <form method="POST" action="/settings/security/password">
-                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-                <div class="form-row">
-                    <label for="username">Username</label>
-                    <input class="input" type="text" id="username" name="username" value="{{.Username}}" autocomplete="username" required>
-                </div>
-                <div class="form-row">
-                    <label for="current_password">Current password</label>
-                    <input class="input" type="password" id="current_password" name="current_password" autocomplete="current-password">
-                    <div class="hint">Leave blank when setting an initial password. Required when changing an existing one.</div>
-                </div>
-                <div class="form-row">
-                    <label for="new_password">New password</label>
-                    <input class="input" type="password" id="new_password" name="new_password" autocomplete="new-password" minlength="8" required>
-                </div>
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">Save password</button>
-                </div>
-            </form>
-        </div>
-
         <div class="card" style="margin-top:1rem">
             <div class="card-head"><h3>Sessions</h3></div>
             <div class="card-body">

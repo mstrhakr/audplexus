@@ -1931,6 +1931,18 @@ func (s *Server) clearStaleFailedDownloads(ctx context.Context) (int, error) {
 func (s *Server) handleSettings(c *gin.Context) {
 	ctx := c.Request.Context()
 	data := s.settingsPageData(ctx)
+	// Security lives as a section on this page, so pull in its fields too
+	// (AuthMethod, AuthRequired, APIKey, Username, etc). Without this the
+	// <select>s would render empty and default to the first <option>, and
+	// the API key field would look blank even though it's seeded.
+	for k, v := range s.securityPageData(ctx, c) {
+		// Don't let Page="security" leak in from securityPageData — the
+		// sidebar highlight needs to stay on Settings.
+		if k == "Page" {
+			continue
+		}
+		data[k] = v
+	}
 	c.HTML(http.StatusOK, "settings.html", s.withSidebar(c, data))
 }
 
