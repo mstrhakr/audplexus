@@ -406,6 +406,54 @@
             sel.addEventListener('change', apply);
             apply();
         })();
+
+        // Copy-to-clipboard with a fallback for non-secure contexts.
+        // navigator.clipboard is undefined on plain HTTP over a LAN IP, so we
+        // fall back to selecting the input and using document.execCommand —
+        // deprecated but still universally supported and good enough here.
+        (function() {
+            function copyText(text, srcEl) {
+                if (navigator.clipboard && window.isSecureContext) {
+                    return navigator.clipboard.writeText(text);
+                }
+                // Fallback path: select the source element if it's an input,
+                // otherwise stage a hidden textarea and copy from it.
+                var el = srcEl;
+                var staged = false;
+                if (!el || !('select' in el)) {
+                    el = document.createElement('textarea');
+                    el.value = text;
+                    el.style.position = 'fixed';
+                    el.style.opacity = '0';
+                    document.body.appendChild(el);
+                    staged = true;
+                }
+                el.focus();
+                el.select();
+                try {
+                    document.execCommand('copy');
+                } finally {
+                    if (staged) document.body.removeChild(el);
+                }
+                return Promise.resolve();
+            }
+            document.body.addEventListener('click', function(ev) {
+                var btn = ev.target.closest && ev.target.closest('[data-copy-target]');
+                if (!btn) return;
+                ev.preventDefault();
+                var sel = btn.getAttribute('data-copy-target');
+                var src = sel ? document.querySelector(sel) : null;
+                var text = src ? ('value' in src ? src.value : src.textContent) : '';
+                var original = btn.getAttribute('data-copy-label') || btn.textContent;
+                Promise.resolve(copyText(text, src)).then(function() {
+                    btn.textContent = 'Copied!';
+                }).catch(function() {
+                    btn.textContent = 'Copy failed';
+                }).finally(function() {
+                    setTimeout(function() { btn.textContent = original; }, 1500);
+                });
+            });
+        })();
         </script>
 
         <div class="card" style="margin-top:1rem">
@@ -417,7 +465,7 @@
                     <label for="api_key_value">Current key</label>
                     <div style="display:flex;gap:.5em;">
                         <input id="api_key_value" class="input" type="text" readonly value="{{.APIKey}}" style="flex:1;font-family:monospace;">
-                        <button type="button" class="btn btn-secondary" onclick="navigator.clipboard.writeText(document.getElementById('api_key_value').value)">Copy</button>
+                        <button type="button" class="btn btn-secondary" data-copy-target="#api_key_value" data-copy-label="Copy">Copy</button>
                     </div>
                 </div>
                 {{else}}
