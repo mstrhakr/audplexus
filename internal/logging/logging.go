@@ -136,10 +136,12 @@ type ringBuffer struct {
 	head    int
 	cap     int
 	count   int
+	subs    map[int]chan RingEntry
+	nextSub int
 }
 
 func newRingBuffer(capacity int) *ringBuffer {
-	return &ringBuffer{entries: make([]RingEntry, capacity), cap: capacity}
+	return &ringBuffer{entries: make([]RingEntry, capacity), cap: capacity, subs: make(map[int]chan RingEntry)}
 }
 
 // Write implements io.Writer. Splits on newlines so multi-line writes
@@ -153,14 +155,43 @@ func (rb *ringBuffer) Write(p []byte) (int, error) {
 		if l == "" {
 			continue
 		}
-		rb.entries[rb.head] = RingEntry{Time: now, Line: l}
+		entry := RingEntry{Time: now, Line: l}
+		rb.entries[rb.head] = entry
 		rb.head = (rb.head + 1) % rb.cap
 		if rb.count < rb.cap {
 			rb.count++
 		}
+		for _, ch := range rb.subs {
+			select {
+			case ch <- entry:
+			default:
+				// Keep stream non-blocking if a subscriber is slow.
+			}
+		}
 	}
 	rb.mu.Unlock()
 	return len(p), nil
+}
+
+func (rb *ringBuffer) Subscribe() (int, <-chan RingEntry) {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+	id := rb.nextSub
+	rb.nextSub++
+	ch := make(chan RingEntry, 256)
+	rb.subs[id] = ch
+	return id, ch
+}
+
+func (rb *ringBuffer) Unsubscribe(id int) {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+	ch, ok := rb.subs[id]
+	if !ok {
+		return
+	}
+	delete(rb.subs, id)
+	close(ch)
 }
 
 // Snapshot returns the most recent n entries (oldest first). n=0 returns
@@ -192,6 +223,17 @@ func (rb *ringBuffer) Snapshot(n int) []RingEntry {
 // Safe for concurrent use.
 func TailLogs(n int) []RingEntry {
 	return ringBuf.Snapshot(n)
+}
+
+// SubscribeLogs opens a live feed of new in-memory log entries.
+// The returned id must be passed to UnsubscribeLogs when done.
+func SubscribeLogs() (int, <-chan RingEntry) {
+	return ringBuf.Subscribe()
+}
+
+// UnsubscribeLogs closes a previously opened live log feed.
+func UnsubscribeLogs(id int) {
+	ringBuf.Unsubscribe(id)
 }
 
 // Init configures the global logging defaults. Call once at startup.

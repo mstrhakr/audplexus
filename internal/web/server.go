@@ -579,7 +579,7 @@ func (s *Server) setupRoutes() {
 		// browser can pretty-render in the diagnostics page.
 		api.GET("/diagnostics/env", s.handleDiagnosticsEnv)
 		api.GET("/diagnostics/destinations", s.handleDiagnosticsDestinations)
-		api.GET("/diagnostics/logs/tail", s.handleDiagnosticsLogsTail)
+		api.GET("/diagnostics/logs/stream", s.handleDiagnosticsLogsSSE)
 		api.POST("/downloads/redownload/:asin", s.handleRedownload)
 
 		// Per-book conversion between m4b and chapter-split mp3.
@@ -625,9 +625,9 @@ func ginLogger() gin.HandlerFunc {
 			return
 		}
 
-		// /api/diagnostics/logs/tail is polled every ~2s by the diagnostics UI.
-		// Logging each poll floods the same log view that consumes this endpoint.
-		if path == "/api/diagnostics/logs/tail" {
+		// Diagnostics logs stream is consumed by the log viewer itself.
+		// Suppress per-request access logs to avoid feedback noise.
+		if path == "/api/diagnostics/logs/stream" {
 			return
 		}
 

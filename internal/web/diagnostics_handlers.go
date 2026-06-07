@@ -1034,24 +1034,56 @@ func (s *Server) handleDiagnosticsDestinations(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"destinations": out})
 }
 
-// handleDiagnosticsLogsTail returns the most recent log lines from the
-// in-memory ring buffer (capped at 1024). Polled by the diagnostics
-// page every 2s while the Logs panel is visible.
-func (s *Server) handleDiagnosticsLogsTail(c *gin.Context) {
-	n := 200
+// handleDiagnosticsLogsSSE streams diagnostics log entries via SSE.
+// It emits a bootstrap event with recent history, then incremental
+// "log" events for each new line captured by the in-memory ring buffer.
+func (s *Server) handleDiagnosticsLogsSSE(c *gin.Context) {
+	n := 300
 	if v := c.Query("n"); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 1024 {
 			n = parsed
 		}
 	}
-	rawEntries := logging.TailLogs(n)
-	parsedEntries := make([]logging.ParsedEntry, len(rawEntries))
-	for i, raw := range rawEntries {
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	ctx := c.Request.Context()
+	id, ch := logging.SubscribeLogs()
+	defer logging.UnsubscribeLogs(id)
+
+	initialRaw := logging.TailLogs(n)
+	initial := make([]logging.ParsedEntry, len(initialRaw))
+	for i, raw := range initialRaw {
 		entry := logging.ParseLogLine(raw.Line)
 		if entry.Time.IsZero() {
 			entry.Time = raw.Time
 		}
-		parsedEntries[i] = entry
+		initial[i] = entry
 	}
-	c.JSON(http.StatusOK, gin.H{"entries": parsedEntries})
+	c.SSEvent("logs_bootstrap", gin.H{"entries": initial})
+
+	keepAlive := time.NewTicker(20 * time.Second)
+	defer keepAlive.Stop()
+
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-keepAlive.C:
+			c.SSEvent("ping", gin.H{"ts": time.Now().UTC()})
+			return true
+		case raw, ok := <-ch:
+			if !ok {
+				return false
+			}
+			entry := logging.ParseLogLine(raw.Line)
+			if entry.Time.IsZero() {
+				entry.Time = raw.Time
+			}
+			c.SSEvent("log", entry)
+			return true
+		}
+	})
 }
