@@ -334,7 +334,7 @@ func (s *Server) setupTemplates() {
 		// destination health detail) are raw, so templates pipe through
 		// this helper to keep the render uniform.
 		"cleanError": cleanErrorForDisplay,
-		"hasSuffix": strings.HasSuffix,
+		"hasSuffix":  strings.HasSuffix,
 		"coveragePct": func(part, total int) int {
 			if total <= 0 {
 				return 0
@@ -699,15 +699,15 @@ func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
 	lastSync, _ := s.db.GetLastSync(ctx)
 
 	return gin.H{
-		"TotalBooks":    totalBooks,
+		"TotalBooks":     totalBooks,
 		"AvailableBooks": availableBooks,
-		"CompleteBooks": completeBooks,
-		"NewBooks":      newBooks,
-		"CoverageBasis": s.coverageBasis(ctx),
-		"ActiveDL":      len(activeDownloads),
-		"PendingDL":     len(pendingDownloads),
-		"FailedDL":      len(failedDownloads),
-		"LastSync":      lastSync,
+		"CompleteBooks":  completeBooks,
+		"NewBooks":       newBooks,
+		"CoverageBasis":  s.coverageBasis(ctx),
+		"ActiveDL":       len(activeDownloads),
+		"PendingDL":      len(pendingDownloads),
+		"FailedDL":       len(failedDownloads),
+		"LastSync":       lastSync,
 
 		// Per-destination summary cards. Replaces the legacy
 		// single-active-backend stat cards. Empty slice means "no
@@ -738,7 +738,7 @@ type destinationSummaryView struct {
 	TypeLabel       string
 	Enabled         bool
 	Configured      bool
-	HasCredential   bool   // API key for Emby/Jellyfin/ABS, token for Plex
+	HasCredential   bool // API key for Emby/Jellyfin/ABS, token for Plex
 	URL             string
 	PlexSectionID   string // plex-only
 	LibraryID       string // emby/jellyfin/abs
@@ -920,7 +920,6 @@ func (s *Server) getCachedDestinationItemCount(ctx context.Context, destID strin
 	return items, err
 }
 
-
 func (s *Server) getDashboardDownloadsData(ctx context.Context) gin.H {
 	failedStatus := database.DownloadStatusFailed
 	failedDownloads, _ := s.db.ListDownloads(ctx, &failedStatus)
@@ -1082,23 +1081,23 @@ func (s *Server) handleLibrary(c *gin.Context) {
 	}
 
 	data := gin.H{
-		"Books":             books,
-		"Total":             total,
-		"Filter":            filter,
-		"Page":              "library",
-		"BookActions":       buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
-		"BookPresence":      s.computeBookPresence(ctx, books),
-		"StatusCounts":      counts,
-		"ActiveStatus":      statusStr,
-		"CoverageBasis":     coverageBasis,
-		"PresenceFilters":   s.libraryPresenceFilterOpts(ctx, destFilterState),
-		"OnDiskFilter":      c.Query("on_disk"),
-		"PageNum":           pageNum,
-		"TotalPages":        totalPages,
-		"PageSize":          pageSize,
-		"PageFrom":          from,
-		"PageTo":            to,
-		"PageNums":          paginationNumbers(pageNum, totalPages),
+		"Books":           books,
+		"Total":           total,
+		"Filter":          filter,
+		"Page":            "library",
+		"BookActions":     buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
+		"BookPresence":    s.computeBookPresence(ctx, books),
+		"StatusCounts":    counts,
+		"ActiveStatus":    statusStr,
+		"CoverageBasis":   coverageBasis,
+		"PresenceFilters": s.libraryPresenceFilterOpts(ctx, destFilterState),
+		"OnDiskFilter":    c.Query("on_disk"),
+		"PageNum":         pageNum,
+		"TotalPages":      totalPages,
+		"PageSize":        pageSize,
+		"PageFrom":        from,
+		"PageTo":          to,
+		"PageNums":        paginationNumbers(pageNum, totalPages),
 	}
 
 	// For HTMX partial requests, render only the table body
@@ -1328,13 +1327,13 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 	fileInfo := s.buildBookFileInfo(ctx, book)
 
 	data := gin.H{
-		"Book":          book,
-		"Page":          "library",
-		"BookFolderPath": folderPath,
-		"BookFiles":     files,
-		"BookFileCount": len(files),
-		"BookFileInfo":  fileInfo,
-		"BookAction":    buildLibraryBookActions([]database.Book{*book}, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false))[book.ID],
+		"Book":                    book,
+		"Page":                    "library",
+		"BookFolderPath":          folderPath,
+		"BookFiles":               files,
+		"BookFileCount":           len(files),
+		"BookFileInfo":            fileInfo,
+		"BookAction":              buildLibraryBookActions([]database.Book{*book}, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false))[book.ID],
 		"BookDestinationStatuses": s.bookDestinationStatuses(ctx, book.ID),
 	}
 
@@ -1983,9 +1982,9 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 		"DownloadConcurrency":  downloadConcurrency,
 		"DecryptConcurrency":   decryptConcurrency,
 		"ProcessConcurrency":   processConcurrency,
-		"AuthorDirTemplate":   authorDirTemplate,
-		"BookDirTemplate":     bookDirTemplate,
-		"FileNameTemplate":    fileNameTemplate,
+		"AuthorDirTemplate":    authorDirTemplate,
+		"BookDirTemplate":      bookDirTemplate,
+		"FileNameTemplate":     fileNameTemplate,
 		"LogLevel":             logLevel,
 		"Devices":              devices,
 		"Page":                 "settings",
@@ -2179,12 +2178,12 @@ func destinationLogoPath(t string) string {
 // page render (a handful of LIMIT 1 / len() queries) — for HTMX fragment
 // responses the value is omitted since base.html isn't part of the swap.
 type sidebarData struct {
-	NewBooks       int
-	ActiveDL       int
+	NewBooks        int
+	ActiveDL        int
 	FailedDestAlert int
-	Version        string
-	Uptime         string
-	Healthy        bool // true when no failed destinations and Audible auth is good
+	Version         string
+	Uptime          string
+	Healthy         bool // true when no failed destinations and Audible auth is good
 }
 
 // computeSidebar gathers the fields the sidebar template renders. Cheap
@@ -3772,5 +3771,3 @@ func (s *Server) handleReorganizeLibrary(c *gin.Context) {
 		"failed":  failed,
 	})
 }
-
-

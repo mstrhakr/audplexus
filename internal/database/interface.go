@@ -68,15 +68,15 @@ type Database interface {
 
 // BookFilter defines parameters for listing books.
 type BookFilter struct {
-	Status  *BookStatus
+	Status *BookStatus
 	// ExcludeStatuses filters out rows whose status matches any listed value.
 	// Used by derived UI buckets such as "available" = all minus unavailable.
 	ExcludeStatuses []BookStatus
-	Search  string
-	SortBy  string // "title", "author", "purchase_date", "status"
-	SortDir string // "asc", "desc"
-	Limit   int
-	Offset  int
+	Search          string
+	SortBy          string // "title", "author", "purchase_date", "status"
+	SortDir         string // "asc", "desc"
+	Limit           int
+	Offset          int
 
 	// Presence filters. Each is independent and stacks with the others;
 	// an empty/nil value means "no filter on this dimension".
@@ -94,4 +94,3 @@ type BookFilter struct {
 	PresentInDestinations   []string
 	MissingFromDestinations []string
 }
-

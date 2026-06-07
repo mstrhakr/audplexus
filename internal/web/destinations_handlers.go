@@ -174,13 +174,14 @@ func (s *Server) handleDestinationsModalForm(c *gin.Context) {
 // role="status" aria-live="polite" so SR users hear the outcome.
 //
 // Two routes hit this handler:
-//   POST /destinations/test         — form values, no row persisted
-//   POST /destinations/:id/test     — saved row, secrets carried over;
-//                                     on test outcome the row's
-//                                     last_health_check_* columns are
-//                                     updated so the dashboard's
-//                                     "Healthy/Failed" badge reflects
-//                                     the most recent test.
+//
+//	POST /destinations/test         — form values, no row persisted
+//	POST /destinations/:id/test     — saved row, secrets carried over;
+//	                                  on test outcome the row's
+//	                                  last_health_check_* columns are
+//	                                  updated so the dashboard's
+//	                                  "Healthy/Failed" badge reflects
+//	                                  the most recent test.
 func (s *Server) handleDestinationTest(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
@@ -307,8 +308,9 @@ func (s *Server) handleDestinationsDiscoverABS(c *gin.Context) {
 // ABS discover handler; filter is CollectionType="audiobooks".
 //
 // Two routes hit this handler:
-//   POST /destinations/discover/emby           — form values
-//   POST /destinations/:id/discover/emby       — saved row, api_key carried
+//
+//	POST /destinations/discover/emby           — form values
+//	POST /destinations/:id/discover/emby       — saved row, api_key carried
 func (s *Server) handleDestinationsDiscoverEmby(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
@@ -346,8 +348,9 @@ func (s *Server) handleDestinationsDiscoverEmby(c *gin.Context) {
 // discover handler; filter is CollectionType="books".
 //
 // Two routes hit this handler:
-//   POST /destinations/discover/jellyfin           — form values
-//   POST /destinations/:id/discover/jellyfin       — saved row, api_key carried
+//
+//	POST /destinations/discover/jellyfin           — form values
+//	POST /destinations/:id/discover/jellyfin       — saved row, api_key carried
 func (s *Server) handleDestinationsDiscoverJellyfin(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
