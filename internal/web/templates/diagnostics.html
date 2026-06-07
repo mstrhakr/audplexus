@@ -150,6 +150,14 @@ function diagRefreshEnv() {
 
 // Log tail — initial fetch + 2s polling. Pauses when checkbox set or tab inactive.
 var diagLogTimer = null;
+var diagExpandedLogKeys = {};
+
+function diagLogKey(e) {
+    var t = String(e.time || '');
+    var raw = String(e.raw_line || e.line || '');
+    return t + '|' + raw;
+}
+
 function diagStartLogPoll() {
     if (diagLogTimer) return;
     diagLogTimer = setInterval(function() {
@@ -174,17 +182,19 @@ function diagRefreshLogs(scrollToBottom) {
                 var ts = new Date(e.time).toLocaleTimeString();
                 var hasDetails = e.component || (e.fields && Object.keys(e.fields).length > 0);
                 var rowId = 'diag-log-row-' + idx;
+                var key = diagLogKey(e);
+                var isExpanded = !!diagExpandedLogKeys[key];
                 var msg = escDiag(e.message || e.raw_line || '');
-                var html = '<div class="diag-log-row" id="' + rowId + '" data-log-raw="' + escDiag(e.raw_line) + '" data-log-ts="' + escDiag(ts) + '">' +
+                var html = '<div class="diag-log-row" id="' + rowId + '" data-log-key="' + escDiag(key) + '" data-log-raw="' + escDiag(e.raw_line) + '" data-log-ts="' + escDiag(ts) + '">' +
                     '<span class="diag-log-ts">' + escDiag(ts) + '</span>' +
                     '<span class="diag-log-level" style="color:' + color + '">[' + escDiag(lvl.toUpperCase()) + ']</span>' +
                     '<span class="diag-log-msg">' + msg + '</span>';
                 if (hasDetails) {
-                    html += '<button type="button" class="diag-log-expand" title="Show details" aria-label="Show details" style="width:22px;height:22px;min-width:22px;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:0 0 22px" onclick="diagToggleExpand(event, this)" aria-expanded="false"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>';
+                    html += '<button type="button" class="diag-log-expand" title="Show details" aria-label="Show details" style="width:22px;height:22px;min-width:22px;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:0 0 22px" onclick="diagToggleExpand(event, this)" aria-expanded="' + (isExpanded ? 'true' : 'false') + '"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>';
                 }
                 html += '<button type="button" class="diag-log-copy" title="Copy line" aria-label="Copy line" style="width:22px;height:22px;min-width:22px;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:0 0 22px" onclick="diagCopyRow(event, this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>';
                 if (hasDetails) {
-                    html += '<div class="diag-log-details" id="' + rowId + '-details" hidden><div class="diag-log-detail-section">';
+                    html += '<div class="diag-log-details" id="' + rowId + '-details"' + (isExpanded ? '' : ' hidden') + '><div class="diag-log-detail-section">';
                     if (e.component) {
                         html += '<div class="diag-log-detail-row"><span class="diag-log-detail-key">Component:</span> <span class="diag-log-detail-val">' + escDiag(e.component) + '</span></div>';
                     }
@@ -251,11 +261,20 @@ function diagToggleExpand(ev, btn) {
     var row = btn.closest('.diag-log-row');
     if (!row) return;
     var rowId = row.getAttribute('id');
+    var key = row.getAttribute('data-log-key') || '';
     var details = document.getElementById(rowId + '-details');
     if (!details) return;
     var isOpen = !details.hidden;
     details.hidden = isOpen;
-    btn.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+    var nowExpanded = !isOpen;
+    btn.setAttribute('aria-expanded', nowExpanded ? 'true' : 'false');
+    if (key) {
+        if (nowExpanded) {
+            diagExpandedLogKeys[key] = true;
+        } else {
+            delete diagExpandedLogKeys[key];
+        }
+    }
 }
 
 // diagWriteClipboard wraps navigator.clipboard with a textarea fallback
