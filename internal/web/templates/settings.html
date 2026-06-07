@@ -749,7 +749,7 @@ function confirmRestart() {
             ev.preventDefault();
             setActive(id);
             clickLock = true;
-            var y = el.getBoundingClientRect().top + window.scrollY - 72;
+            var y = el.getBoundingClientRect().top + window.scrollY - OFFSET;
             window.scrollTo({ top: y, behavior: 'smooth' });
             history.replaceState(null, '', '#' + id);
             if (clickTimer) clearTimeout(clickTimer);
