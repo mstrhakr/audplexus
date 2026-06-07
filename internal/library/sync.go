@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mstrhakr/audplexus/internal/audio"
+	"github.com/mstrhakr/audplexus/internal/audnexus"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/errs"
 	"github.com/mstrhakr/audplexus/internal/logging"
@@ -41,11 +43,12 @@ const (
 type SyncPhase string
 
 const (
-	PhaseAudibleSync    SyncPhase = "audible_sync"
-	PhaseFileScan       SyncPhase = "file_scan"
-	PhasePlexSync       SyncPhase = "plex_sync"
-	PhaseCollectionSync SyncPhase = "collection_sync"
-	PhaseDownloadQueue  SyncPhase = "download_queue"
+	PhaseAudibleSync     SyncPhase = "audible_sync"
+	PhaseFileScan        SyncPhase = "file_scan"
+	PhaseMetadataRepair  SyncPhase = "metadata_repair"
+	PhasePlexSync        SyncPhase = "plex_sync"
+	PhaseCollectionSync  SyncPhase = "collection_sync"
+	PhaseDownloadQueue   SyncPhase = "download_queue"
 )
 
 // DefaultFullPhases returns the standard set of sync phases in idle state.
@@ -57,6 +60,7 @@ func DefaultFullPhases() []PhaseStatus {
 	return []PhaseStatus{
 		{Name: PhaseAudibleSync, Label: "Audible Library", Status: "idle"},
 		{Name: PhaseFileScan, Label: "File System Scan", Status: "idle"},
+		{Name: PhaseMetadataRepair, Label: "Metadata Repair", Status: "idle"},
 		{Name: PhasePlexSync, Label: "Library Scan", Status: "idle"},
 		{Name: PhaseCollectionSync, Label: "Collection Sync", Status: "idle"},
 	}
@@ -175,6 +179,13 @@ type SyncService struct {
 
 	libraryDir string
 
+	// ffmpeg and audnexus are optional dependencies used by the
+	// Metadata Repair phase. Set via SetFFmpeg / SetAudnexusClient
+	// after construction so callers that don't run repair (tests,
+	// embedded use) don't have to build them.
+	ffmpeg   *audio.FFmpeg
+	audnexus *audnexus.Client
+
 	// Plex callback (set by web layer after construction)
 	plexSyncFunc      PlexSyncFunc
 	plexReconcileFunc PlexReconcileFunc
@@ -261,6 +272,19 @@ func (s *SyncService) subPhaseFnFor(phase SyncPhase) SubPhaseFn {
 			}
 		}
 	}
+}
+
+// SetFFmpeg wires the ffmpeg wrapper used by the Metadata Repair phase.
+// Optional — when nil, the repair phase fails with a clear message.
+func (s *SyncService) SetFFmpeg(ff *audio.FFmpeg) {
+	s.ffmpeg = ff
+}
+
+// SetAudnexusClient wires the audnexus client used by Metadata Repair
+// to enrich book metadata before re-tagging. Optional — when nil,
+// repair falls back to DB-only fields.
+func (s *SyncService) SetAudnexusClient(c *audnexus.Client) {
+	s.audnexus = c
 }
 
 // SetPlexSyncCallback registers the combined Plex sync function.
@@ -468,6 +492,16 @@ func (s *SyncService) RunPhase(ctx context.Context, phase SyncPhase) error {
 			s.setPhase(phase, "complete", fmt.Sprintf("%d files reconciled", reconciled))
 		}
 
+	case PhaseMetadataRepair:
+		repaired, err := RepairBookMetadata(ctx, s.db, s.ffmpeg, s.audnexus, func(processed, total int) {
+			s.updatePhaseProgress(PhaseMetadataRepair, processed, total, false)
+		})
+		if err != nil {
+			phaseErr = err
+		} else {
+			s.setPhase(phase, "complete", fmt.Sprintf("%d files re-tagged", repaired))
+		}
+
 	case PhasePlexSync:
 		if s.plexSyncFunc == nil {
 			phaseErr = fmt.Errorf("media server not configured")
@@ -619,6 +653,29 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 		}
 	}
 
+	// --- Phase 2b: Metadata Repair (full sync only) ---
+	// Probes every complete book and re-embeds AudiobookRich tags when
+	// the file's ASIN atom is missing or stale, so audiobook servers
+	// (Audiobookshelf in particular) can match by ID. Non-fatal:
+	// failures degrade to a "partial" sync but don't block the rest.
+	if mode == SyncModeFull {
+		if s.ffmpeg == nil {
+			s.setPhase(PhaseMetadataRepair, "skipped", "ffmpeg unavailable")
+		} else {
+			s.setPhase(PhaseMetadataRepair, "running", "Checking metadata on existing files...")
+			repaired, repairErr := RepairBookMetadata(ctx, s.db, s.ffmpeg, s.audnexus, func(processed, total int) {
+				s.updatePhaseProgress(PhaseMetadataRepair, processed, total, false)
+			})
+			if repairErr != nil {
+				s.setPhase(PhaseMetadataRepair, "failed", repairErr.Error())
+				syncLog.Warn().Err(repairErr).Msg("metadata repair phase failed")
+			} else {
+				s.setPhase(PhaseMetadataRepair, "complete", fmt.Sprintf("%d files re-tagged", repaired))
+				syncLog.Info().Int("repaired", repaired).Msg("metadata repair complete")
+			}
+		}
+	}
+
 	// --- Phase 3: Library Scan (full sync only). Phase identifier kept as
 	// PhasePlexSync for URL/JS back-compat, but user-visible messages are
 	// backend-agnostic — works for Plex, Emby, Jellyfin, ABS. ---
@@ -710,6 +767,7 @@ func (s *SyncService) buildPhases(mode SyncMode, prev []PhaseStatus) []PhaseStat
 		return []PhaseStatus{
 			defaultPhase(PhaseAudibleSync, "Audible Library"),
 			defaultPhase(PhaseFileScan, "File System Scan"),
+			defaultPhase(PhaseMetadataRepair, "Metadata Repair"),
 			defaultPhase(PhasePlexSync, "Library Scan"),
 			defaultPhase(PhaseCollectionSync, "Collection Sync"),
 		}
@@ -721,6 +779,7 @@ func (s *SyncService) buildPhases(mode SyncMode, prev []PhaseStatus) []PhaseStat
 		label string
 	}{
 		{name: PhaseFileScan, label: "File System Scan"},
+		{name: PhaseMetadataRepair, label: "Metadata Repair"},
 		{name: PhasePlexSync, label: "Library Scan"},
 		{name: PhaseCollectionSync, label: "Collection Sync"},
 	} {

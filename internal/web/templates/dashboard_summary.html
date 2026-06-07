@@ -1,31 +1,31 @@
 {{define "dashboard_summary.html"}}
 <div class="section-h">At a glance</div>
 <div class="stat-grid">
-    <div class="stat-card">
+    <a class="stat-card stat-card-link" href="/library">
         <div class="label">Library Items</div>
         <div class="value" id="stat-total">{{.TotalBooks}}</div>
         <div class="delta">total synced from Audible</div>
-    </div>
-    <div class="stat-card">
+    </a>
+    <a class="stat-card stat-card-link" href="/library?status=complete">
         <div class="label">Downloaded</div>
         <div class="value" id="stat-complete">{{.CompleteBooks}}</div>
         <div class="delta {{if gt .TotalBooks 0}}up{{end}}">{{if gt .TotalBooks 0}}{{coveragePct .CompleteBooks .TotalBooks}}% of library{{else}}—{{end}}</div>
-    </div>
-    <div class="stat-card">
+    </a>
+    <a class="stat-card stat-card-link" href="/library?status=new">
         <div class="label">New</div>
         <div class="value" id="stat-new">{{.NewBooks}}</div>
         <div class="delta">pending action</div>
-    </div>
-    <div class="stat-card accent">
+    </a>
+    <a class="stat-card accent stat-card-link" href="/library?status=downloading">
         <div class="label">In Progress</div>
         <div class="value" id="stat-active-dl">{{.ActiveDL}}</div>
         <div class="delta"><span id="stat-pending-dl">{{.PendingDL}}</span> waiting</div>
-    </div>
-    <div class="stat-card">
+    </a>
+    <a class="stat-card stat-card-link" href="/library?status=failed">
         <div class="label">Failed</div>
         <div class="value" id="stat-failed-dl">{{.FailedDL}}</div>
         <div class="delta {{if gt .FailedDL 0}}down{{else}}up{{end}}">{{if gt .FailedDL 0}}needs attention{{else}}all clear{{end}}</div>
-    </div>
+    </a>
 </div>
 
 <section aria-labelledby="dest-summary-heading">

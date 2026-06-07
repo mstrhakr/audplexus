@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/library"
 )
 
 // settingKeyOnboarded marks the setup wizard as completed. Stored as "1"
@@ -26,9 +27,8 @@ type setupStep struct {
 var setupSteps = []setupStep{
 	{NumLabel: "1", Label: "Welcome"},
 	{NumLabel: "2", Label: "Audible"},
-	{NumLabel: "3", Label: "Storage"},
-	{NumLabel: "4", Label: "Destinations"},
-	{NumLabel: "5", Label: "Done"},
+	{NumLabel: "3", Label: "Destinations"},
+	{NumLabel: "4", Label: "Done"},
 }
 
 // isFirstRun returns true when the wizard has neither been completed nor
@@ -82,7 +82,6 @@ func (s *Server) handleSetupWizard(c *gin.Context) {
 	data["Steps"] = setupSteps
 	data["CurrentStep"] = step
 	data["AudiobooksPath"] = s.audiobooksPath
-	data["DownloadsPath"] = s.downloadsPath
 
 	// Destinations summary for steps 3 (list) and 4 (recap). We use the
 	// rich destinationSummaries shape so the picker-list shows type +
@@ -126,12 +125,29 @@ func (s *Server) handleSetupFinish(c *gin.Context) {
 	ctx := c.Request.Context()
 	_ = s.setOnboarded(ctx, true)
 
+	// Persist the "automatically download new books" choice from the final
+	// step. An unchecked toggle submits nothing, so absence means off.
+	autoDownload := c.PostForm("auto_queue_new") == "true"
+	_ = s.db.SetSetting(ctx, library.SettingKeyAutoQueueNewBooks, strconv.FormatBool(autoDownload))
+	if s.sched != nil {
+		s.sched.SetAutoQueueNew(autoDownload)
+	}
+
 	if s.audible.IsAuthenticated() {
 		// Fire-and-forget — sync runs asynchronously; UI will show progress
 		// via the existing /api/sync/status polling on the dashboard.
 		go func() {
-			if _, err := s.sync.QuickSync(context.Background()); err != nil {
+			added, err := s.sync.QuickSync(context.Background())
+			if err != nil {
 				webLog.Warn().Err(err).Msg("setup: first quick sync failed")
+				return
+			}
+			if autoDownload && added > 0 {
+				if queued, qErr := s.downloads.QueueNewBooks(context.Background()); qErr != nil {
+					webLog.Warn().Err(qErr).Int("added", added).Msg("setup: failed to auto-queue new books after first quick sync")
+				} else {
+					webLog.Info().Int("added", added).Int("queued", queued).Msg("setup: auto-queued new books after first quick sync")
+				}
 			}
 		}()
 	}

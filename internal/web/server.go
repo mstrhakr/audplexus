@@ -35,6 +35,7 @@ import (
 	"github.com/mstrhakr/audplexus/internal/logging"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
 	"github.com/mstrhakr/audplexus/internal/organizer"
+	"github.com/mstrhakr/audplexus/internal/scheduler"
 	audible "github.com/mstrhakr/go-audible"
 	"github.com/robfig/cron/v3"
 )
@@ -53,9 +54,11 @@ type Server struct {
 	db             database.Database
 	sync           *library.SyncService
 	downloads      *library.DownloadManager
+	sched          *scheduler.Scheduler
 	audnexus       *audnexus.Client
 	organizer      *organizer.PlexOrganizer
 	audible        *audible.Client
+	ffmpeg         *audio.FFmpeg
 	credPath       string
 	port           int
 	audiobooksPath string
@@ -92,9 +95,11 @@ func NewServer(
 	db database.Database,
 	syncSvc *library.SyncService,
 	dlMgr *library.DownloadManager,
+	sched *scheduler.Scheduler,
 	anClient *audnexus.Client,
 	org *organizer.PlexOrganizer,
 	audibleClient *audible.Client,
+	ffmpeg *audio.FFmpeg,
 	credPath string,
 	port int,
 	audiobooksPath string,
@@ -110,9 +115,11 @@ func NewServer(
 		db:             db,
 		sync:           syncSvc,
 		downloads:      dlMgr,
+		sched:          sched,
 		audnexus:       anClient,
 		organizer:      org,
 		audible:        audibleClient,
+		ffmpeg:         ffmpeg,
 		credPath:       credPath,
 		port:           port,
 		audiobooksPath: audiobooksPath,
@@ -702,7 +709,11 @@ func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
 		// Per-destination summary cards. Replaces the legacy
 		// single-active-backend stat cards. Empty slice means "no
 		// destinations configured yet" — template shows a CTA.
-		"DestinationSummaries": s.destinationSummaries(ctx, completeBooks),
+		// Coverage % uses totalBooks (Audible library size) as the
+		// denominator so it represents "fraction of the library present
+		// in this destination" — stable across status transitions and
+		// matches the user's mental model.
+		"DestinationSummaries": s.destinationSummaries(ctx, totalBooks),
 	}
 }
 
@@ -750,7 +761,7 @@ type destinationSummaryView struct {
 //
 // Per a11y-lead: badges are role="status" so SR users hear destination
 // state changes (Healthy → Failed) without per-tick count chatter.
-func (s *Server) destinationSummaries(ctx context.Context, completeBooks int) []destinationSummaryView {
+func (s *Server) destinationSummaries(ctx context.Context, libraryTotal int) []destinationSummaryView {
 	rows, err := s.db.ListLibraryDestinations(ctx)
 	if err != nil {
 		webLog.Warn().Err(err).Msg("dashboard: list destinations failed")
@@ -763,7 +774,7 @@ func (s *Server) destinationSummaries(ctx context.Context, completeBooks int) []
 	out := make([]destinationSummaryView, 0, len(rows))
 	for _, r := range rows {
 		row := r
-		out = append(out, s.buildDestinationSummary(ctx, &row, completeBooks))
+		out = append(out, s.buildDestinationSummary(ctx, &row, libraryTotal))
 	}
 	return out
 }
@@ -778,12 +789,11 @@ func (s *Server) singleDestinationSummary(ctx context.Context, id string) *desti
 	if err != nil || row == nil {
 		return nil
 	}
-	// Coverage % is relative to the count of complete books; we need
-	// that number for the meter to render the same as it does on the
-	// full grid. Cheap LIMIT-1 count.
-	completeStatus := database.BookStatusComplete
-	_, completeBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
-	v := s.buildDestinationSummary(ctx, row, completeBooks)
+	// Coverage % uses the total library size as the denominator so the
+	// meter renders the same as it does on the full grid. Cheap
+	// LIMIT-1 count.
+	_, libraryTotal, _ := s.db.ListBooks(ctx, database.BookFilter{Limit: 1})
+	v := s.buildDestinationSummary(ctx, row, libraryTotal)
 	return &v
 }
 
@@ -791,7 +801,7 @@ func (s *Server) singleDestinationSummary(ctx context.Context, id string) *desti
 // builder and the single-row swap path. Probes LibraryItemCount (with
 // the 30s cache) only for enabled+configured destinations so toggling
 // a disabled row stays cheap.
-func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, completeBooks int) destinationSummaryView {
+func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, libraryTotal int) destinationSummaryView {
 	hasCred := row.APIKey != "" || row.PlexToken != ""
 	v := destinationSummaryView{
 		ID:              row.ID,
@@ -832,8 +842,8 @@ func (s *Server) buildDestinationSummary(ctx context.Context, row *database.Libr
 	}
 	v.ItemCount = count
 	v.ItemCountSet = true
-	if completeBooks > 0 {
-		cov := int(math.Round((float64(count) / float64(completeBooks)) * 100))
+	if libraryTotal > 0 {
+		cov := int(math.Round((float64(count) / float64(libraryTotal)) * 100))
 		if cov < 0 {
 			cov = 0
 		}
@@ -1001,6 +1011,34 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		filter.Status = &status
 	}
 
+	// Presence filters. on_disk is a tri-state: missing/empty = any,
+	// "yes" = on disk, "no" = missing locally. Per-destination filters
+	// arrive as presence_<dest_id>=in|out — iterating the raw query
+	// keeps the param list extensible as the user adds destinations.
+	switch c.Query("on_disk") {
+	case "yes":
+		v := true
+		filter.OnDisk = &v
+	case "no":
+		v := false
+		filter.OnDisk = &v
+	}
+	destFilterState := map[string]string{}
+	for key, vals := range c.Request.URL.Query() {
+		if !strings.HasPrefix(key, "presence_") || len(vals) == 0 {
+			continue
+		}
+		destID := strings.TrimPrefix(key, "presence_")
+		switch vals[0] {
+		case "in":
+			filter.PresentInDestinations = append(filter.PresentInDestinations, destID)
+			destFilterState[destID] = "in"
+		case "out":
+			filter.MissingFromDestinations = append(filter.MissingFromDestinations, destID)
+			destFilterState[destID] = "out"
+		}
+	}
+
 	books, total, err := s.db.ListBooks(ctx, filter)
 	if err != nil {
 		webLog.Error().Err(err).Msg("failed to list books")
@@ -1022,20 +1060,22 @@ func (s *Server) handleLibrary(c *gin.Context) {
 	}
 
 	data := gin.H{
-		"Books":        books,
-		"Total":        total,
-		"Filter":       filter,
-		"Page":         "library",
-		"BookActions":  buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
-		"BookPresence": s.computeBookPresence(ctx, books),
-		"StatusCounts": counts,
-		"ActiveStatus": statusStr,
-		"PageNum":      pageNum,
-		"TotalPages":   totalPages,
-		"PageSize":     pageSize,
-		"PageFrom":     from,
-		"PageTo":       to,
-		"PageNums":     paginationNumbers(pageNum, totalPages),
+		"Books":             books,
+		"Total":             total,
+		"Filter":            filter,
+		"Page":              "library",
+		"BookActions":       buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
+		"BookPresence":      s.computeBookPresence(ctx, books),
+		"StatusCounts":      counts,
+		"ActiveStatus":      statusStr,
+		"PresenceFilters":   s.libraryPresenceFilterOpts(ctx, destFilterState),
+		"OnDiskFilter":      c.Query("on_disk"),
+		"PageNum":           pageNum,
+		"TotalPages":        totalPages,
+		"PageSize":          pageSize,
+		"PageFrom":          from,
+		"PageTo":            to,
+		"PageNums":          paginationNumbers(pageNum, totalPages),
 	}
 
 	// For HTMX partial requests, render only the table body
@@ -1044,6 +1084,37 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		return
 	}
 	c.HTML(http.StatusOK, "library.html", s.withSidebar(ctx, data))
+}
+
+// libraryPresenceFilterOption is one row in the per-destination presence
+// dropdown — rendered as a <select> in the filter bar.
+type libraryPresenceFilterOption struct {
+	ID          string
+	DisplayName string
+	State       string // "" | "in" | "out" — current selection
+}
+
+// libraryPresenceFilterOpts returns one option entry per enabled
+// library destination, carrying the currently-selected state from the
+// URL so the dropdown re-renders with the right option selected after
+// an HTMX swap.
+func (s *Server) libraryPresenceFilterOpts(ctx context.Context, state map[string]string) []libraryPresenceFilterOption {
+	dests, err := s.db.ListLibraryDestinations(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]libraryPresenceFilterOption, 0, len(dests))
+	for _, d := range dests {
+		if !d.Enabled {
+			continue
+		}
+		out = append(out, libraryPresenceFilterOption{
+			ID:          d.ID,
+			DisplayName: d.DisplayName,
+			State:       state[d.ID],
+		})
+	}
+	return out
 }
 
 // libraryStatusCounts returns the count of books per status bucket used by
@@ -1210,19 +1281,23 @@ func hasFilesWithExt(dirPath string, ext string) bool {
 func (s *Server) handleBookDetail(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	var id int64
-	if _, err := fmt.Sscanf(c.Param("id"), "%d", &id); err != nil {
-		c.HTML(http.StatusBadRequest, "dashboard.html", gin.H{"Error": "Invalid book ID"})
-		return
+	// Accept either a numeric book ID or an ASIN. Links from Diagnostics
+	// (and other ASIN-keyed surfaces) pass the ASIN, which isn't numeric.
+	param := strings.TrimSpace(c.Param("id"))
+	var book *database.Book
+	var err error
+	if id, perr := strconv.ParseInt(param, 10, 64); perr == nil {
+		book, err = s.db.GetBook(ctx, id)
+	} else {
+		book, err = s.db.GetBookByASIN(ctx, param)
 	}
-
-	book, err := s.db.GetBook(ctx, id)
 	if err != nil || book == nil {
 		c.HTML(http.StatusNotFound, "dashboard.html", gin.H{"Error": "Book not found"})
 		return
 	}
 
 	folderPath, files := buildBookFileDetails(book.FilePath)
+	fileInfo := s.buildBookFileInfo(ctx, book)
 
 	data := gin.H{
 		"Book":          book,
@@ -1230,6 +1305,7 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 		"BookFolderPath": folderPath,
 		"BookFiles":     files,
 		"BookFileCount": len(files),
+		"BookFileInfo":  fileInfo,
 		"BookAction":    buildLibraryBookActions([]database.Book{*book}, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false))[book.ID],
 		"BookDestinationStatuses": s.bookDestinationStatuses(ctx, book.ID),
 	}
@@ -1368,6 +1444,225 @@ func isAudioFile(path string) bool {
 	default:
 		return false
 	}
+}
+
+// bookFileInfoTag is one row of the raw-tag list on the File info
+// block. Stays as a slice rather than a map so the template can render
+// in a deterministic order — the ffprobe map iteration order is
+// otherwise nondeterministic and shuffles between requests.
+type bookFileInfoTag struct {
+	Key   string
+	Value string
+}
+
+// bookFileInfoView is the view-model for the "File info" block on
+// Book Details. Every field is independently optional — the template
+// uses zero values + an empty tag list to silently omit rows so a
+// degraded probe (file moved, container quirks) still renders a
+// useful partial card instead of a hard failure.
+type bookFileInfoView struct {
+	Path            string
+	Extension       string
+	SizeBytes       int64
+	SizeLabel       string
+	ModifiedAt      string
+	Format          string
+	Codec           string
+	CodecLong       string
+	BitRate         string
+	SampleRate      string
+	Channels        string
+	ChapterCount    int
+	HasArtwork      bool
+	Duration        string
+	ActivationBytes string
+	Tags            []bookFileInfoTag
+	ProbeError      string
+}
+
+// buildBookFileInfo populates the File info block for a book that is
+// known to be on disk. Returns nil for books with no FilePath so the
+// template can skip the whole section with a single nil check.
+//
+// The function tolerates partial failures: a missing file still
+// surfaces what's in the DB; a probe that errors leaves Format/etc
+// blank but keeps the size/modified-time rows. Activation bytes are
+// fetched from the audible client when available (account-scoped),
+// since they're what was used to decrypt this file — handy for
+// re-decryption.
+func (s *Server) buildBookFileInfo(ctx context.Context, book *database.Book) *bookFileInfoView {
+	if book == nil || strings.TrimSpace(book.FilePath) == "" {
+		return nil
+	}
+
+	v := &bookFileInfoView{
+		Path:      book.FilePath,
+		Extension: strings.TrimPrefix(strings.ToLower(filepath.Ext(book.FilePath)), "."),
+	}
+
+	if info, err := os.Stat(book.FilePath); err == nil && !info.IsDir() {
+		v.SizeBytes = info.Size()
+		v.SizeLabel = humanFileSize(info.Size())
+		v.ModifiedAt = info.ModTime().Format("2006-01-02 15:04")
+	}
+
+	if s.ffmpeg != nil {
+		probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		defer cancel()
+		probe, err := s.ffmpeg.ProbeFile(probeCtx, book.FilePath)
+		if err != nil {
+			v.ProbeError = err.Error()
+		} else if probe != nil {
+			if probe.FormatLongName != "" {
+				v.Format = probe.FormatLongName
+			} else {
+				v.Format = probe.FormatName
+			}
+			v.Codec = probe.AudioCodec
+			v.CodecLong = probe.AudioCodecLong
+			v.BitRate = formatProbeBitRate(probe.AudioBitRate, probe.BitRate)
+			v.SampleRate = formatSampleRate(probe.SampleRate)
+			v.Channels = formatChannels(probe.Channels, probe.ChannelLayout)
+			v.ChapterCount = probe.ChapterCount
+			v.HasArtwork = probe.HasArtwork
+			if probe.DurationSec > 0 {
+				v.Duration = formatDurationSeconds(probe.DurationSec)
+			}
+			// Size from ffprobe wins when stat failed (rare; usually
+			// the same number).
+			if v.SizeBytes == 0 && probe.Size > 0 {
+				v.SizeBytes = probe.Size
+				v.SizeLabel = humanFileSize(probe.Size)
+			}
+			v.Tags = sortedProbeTags(probe.Tags)
+		}
+	}
+
+	// Activation bytes are per-account, not per-book — but the field
+	// belongs on the file-info card because they're the secret that
+	// decrypted this particular file. Skip silently when the audible
+	// client isn't authenticated or the call errors.
+	if s.audible != nil && s.audible.IsAuthenticated() {
+		abCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if resp, err := s.audible.GetActivationBytes(abCtx); err == nil && resp != nil {
+			v.ActivationBytes = resp.ActivationBytes
+		}
+	}
+
+	return v
+}
+
+// formatProbeBitRate picks the most informative of two bit-rate
+// candidates (audio stream first, container second) and converts
+// bits/sec → "128 kb/s". ffprobe sometimes reports "0" or "" for
+// the audio stream on lossy containers — fall back to the container.
+func formatProbeBitRate(streamBPS, containerBPS string) string {
+	pick := streamBPS
+	if pick == "" || pick == "0" {
+		pick = containerBPS
+	}
+	if pick == "" || pick == "0" {
+		return ""
+	}
+	var bps int64
+	if _, err := fmt.Sscanf(pick, "%d", &bps); err != nil || bps <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d kb/s", bps/1000)
+}
+
+func formatSampleRate(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	var hz int64
+	if _, err := fmt.Sscanf(raw, "%d", &hz); err != nil || hz <= 0 {
+		return ""
+	}
+	if hz%1000 == 0 {
+		return fmt.Sprintf("%d kHz", hz/1000)
+	}
+	return fmt.Sprintf("%.1f kHz", float64(hz)/1000.0)
+}
+
+func formatChannels(n int, layout string) string {
+	if n <= 0 {
+		return ""
+	}
+	if layout != "" {
+		return fmt.Sprintf("%d (%s)", n, layout)
+	}
+	switch n {
+	case 1:
+		return "1 (mono)"
+	case 2:
+		return "2 (stereo)"
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+func formatDurationSeconds(sec float64) string {
+	total := int(sec)
+	h := total / 3600
+	m := (total % 3600) / 60
+	s := total % 60
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm %ds", h, m, s)
+	}
+	if m > 0 {
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
+}
+
+// sortedProbeTags returns the tag map as a slice. Container-level
+// identity tags (encoder, major_brand, asin, series) bubble to the
+// top so the most useful info renders first; the rest sort
+// alphabetically. Empty values are dropped.
+func sortedProbeTags(tags map[string]string) []bookFileInfoTag {
+	if len(tags) == 0 {
+		return nil
+	}
+	priority := map[string]int{
+		"encoder":           1,
+		"major_brand":       2,
+		"minor_version":     3,
+		"compatible_brands": 4,
+		"asin":              5,
+		"series":            6,
+		"series-part":       7,
+		"title":             8,
+		"artist":            9,
+		"album_artist":      10,
+		"album":             11,
+		"date":              12,
+		"genre":             13,
+		"language":          14,
+		"media_type":        15,
+	}
+	out := make([]bookFileInfoTag, 0, len(tags))
+	for k, val := range tags {
+		if strings.TrimSpace(val) == "" {
+			continue
+		}
+		out = append(out, bookFileInfoTag{Key: k, Value: val})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		pi, oki := priority[out[i].Key]
+		pj, okj := priority[out[j].Key]
+		switch {
+		case oki && okj:
+			return pi < pj
+		case oki:
+			return true
+		case okj:
+			return false
+		default:
+			return out[i].Key < out[j].Key
+		}
+	})
+	return out
 }
 
 func humanFileSize(sizeBytes int64) string {
@@ -2677,27 +2972,42 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 		return true
 	}
 
+	// Sync settings apply live via the scheduler — no restart needed. The
+	// schedule and enabled flag are coupled (enabled gates whether the cron
+	// entry exists), so reapply the effective schedule whenever either moves.
+	scheduleChanged := false
 	if _, ok := c.GetPostForm("sync_schedule_sent"); ok {
 		schedule := strings.TrimSpace(c.PostForm("sync_schedule"))
 		if setSetting("sync_schedule", schedule) {
-			restartRequired = true
+			scheduleChanged = true
 		}
 	}
 	if _, ok := c.GetPostForm("sync_enabled_sent"); ok {
 		enabled := c.PostForm("sync_enabled") == "true"
 		if setSetting("sync_enabled", strconv.FormatBool(enabled)) {
-			restartRequired = true
+			scheduleChanged = true
 		}
 	}
 	if _, ok := c.GetPostForm("sync_auto_queue_new_sent"); ok {
 		enabled := c.PostForm("sync_auto_queue_new") == "true"
-		if setSetting(library.SettingKeyAutoQueueNewBooks, strconv.FormatBool(enabled)) {
-			restartRequired = true
+		if setSetting(library.SettingKeyAutoQueueNewBooks, strconv.FormatBool(enabled)) && s.sched != nil {
+			s.sched.SetAutoQueueNew(enabled)
 		}
 	}
 	if mode := strings.TrimSpace(c.PostForm("sync_mode")); mode != "" {
-		if setSetting("sync_mode", mode) {
-			restartRequired = true
+		if setSetting("sync_mode", mode) && s.sched != nil {
+			s.sched.SetSyncMode(mode)
+		}
+	}
+	if scheduleChanged && s.sched != nil {
+		enabled := s.settingBool(ctx, "sync_enabled", true)
+		schedule := strings.TrimSpace(s.settingString(ctx, "sync_schedule", ""))
+		applied := ""
+		if enabled {
+			applied = schedule
+		}
+		if err := s.sched.SetSyncSchedule(applied); err != nil {
+			webLog.Error().Err(err).Str("schedule", applied).Msg("failed to apply sync schedule live")
 		}
 	}
 	if raw := c.PostForm("output_format"); raw != "" {
@@ -2774,7 +3084,7 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 	if c.GetHeader("HX-Request") == "true" {
 		msg := "Settings saved"
 		if restartRequired {
-			msg = "Settings saved. Restart required to apply one or more changes."
+			msg = "Settings saved. Worker count changes need a restart to take effect."
 		}
 		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": msg, "RestartRequired": restartRequired})
 		return
@@ -3116,8 +3426,8 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 	webLog.Info().Msg("authentication successful")
 
 	// If the user is still in onboarding, bounce back into the wizard at
-	// the Storage step rather than dropping them on Settings — the wizard
-	// is what kicked them out to Amazon in the first place.
+	// the Destinations step rather than dropping them on Settings — the
+	// wizard is what kicked them out to Amazon in the first place.
 	if s.isFirstRun(ctx) {
 		c.Redirect(http.StatusSeeOther, "/setup?step=2")
 		return

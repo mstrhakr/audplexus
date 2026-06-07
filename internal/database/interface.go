@@ -74,5 +74,21 @@ type BookFilter struct {
 	SortDir string // "asc", "desc"
 	Limit   int
 	Offset  int
+
+	// Presence filters. Each is independent and stacks with the others;
+	// an empty/nil value means "no filter on this dimension".
+	//
+	// OnDisk filters on whether books.file_path is non-empty. nil means
+	// either; true keeps only on-disk rows; false keeps only rows whose
+	// file is missing locally.
+	//
+	// PresentInDestinations keeps books that ARE currently synced to
+	// every listed destination (sync_state in synced|syncing).
+	// MissingFromDestinations keeps books NOT currently synced to any
+	// of the listed destinations. The two slices stack — a book is
+	// included only when it satisfies every per-destination predicate.
+	OnDisk                  *bool
+	PresentInDestinations   []string
+	MissingFromDestinations []string
 }
 

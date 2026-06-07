@@ -466,6 +466,23 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 .stat-grid .stat-card .delta.down  { color: #ff7c7c; }
 .stat-grid .stat-card .delta.warn  { color: #ffb547; }
 
+/* Clickable variant — anchor styled as a card. No text decoration,
+   subtle hover lift so the affordance is visible without trumpeting it. */
+.stat-grid .stat-card.stat-card-link {
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+.stat-grid .stat-card.stat-card-link:hover {
+    border-color: var(--accent);
+    background: var(--surface-2);
+}
+.stat-grid .stat-card.stat-card-link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
 /* Filter tabs (Library) */
 .tabs {
     display: flex;
@@ -2010,6 +2027,75 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     margin: 0.25rem 0;
 }
 
+/* Collapsible description — clamps to ~9.5rem with a fade-out, then
+   the JS-driven toggle below flips the class to reveal the rest. */
+.book-description {
+    position: relative;
+    margin-top: 0.5rem;
+}
+.book-description-clamp {
+    max-height: 9.5rem;
+    overflow: hidden;
+    position: relative;
+}
+.book-description-clamp::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3rem;
+    pointer-events: none;
+    background: linear-gradient(to bottom,
+        rgba(22, 33, 62, 0) 0%,
+        var(--surface) 100%);
+}
+.book-description-toggle {
+    margin-top: 0.5rem;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.82rem;
+}
+.book-description-toggle:hover { text-decoration: underline; }
+
+/* File info — same meta-grid recipe as the top-of-card metadata,
+   but path/tag rows can be long so they break on word boundaries. */
+.book-file-info-grid {
+    margin-top: 0.5rem;
+}
+.book-file-info-path {
+    word-break: break-all;
+    font-size: 0.78rem;
+}
+.book-file-tags-details {
+    margin-top: 0.6rem;
+}
+.book-file-tags-details > summary {
+    display: inline-block;
+    cursor: pointer;
+    color: #9cc9ff;
+    padding: 0.35rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: rgba(15, 52, 96, 0.35);
+    user-select: none;
+    font-size: 0.82rem;
+}
+.book-file-tags-details[open] > summary { margin-bottom: 0.55rem; }
+.book-file-tags-grid {
+    grid-template-columns: max-content 1fr;
+    gap: 0.2rem 0.75rem;
+    font-size: 0.78rem;
+}
+.book-file-tag-value {
+    word-break: break-word;
+    max-width: 100%;
+}
+
 /* Progress bar */
 .progress-bar {
     height: 8px;
@@ -2555,30 +2641,159 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     font-weight: 600;
 }
 
+/* Hamburger toggle — hidden on desktop, shown alongside the topbar
+   breadcrumb on mobile. Styled like a ghost icon button so the affordance
+   reads as utility, not a primary action. */
+.nav-toggle {
+    display: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 7px;
+    padding: 0.35rem 0.45rem;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+}
+.nav-toggle:hover { background: var(--surface-2); }
+.nav-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Backdrop is always in the DOM so transitions are cheap; only made
+   interactive when the drawer is open. */
+.sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 40;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+body.sidebar-open .sidebar-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .sync-phases { gap: 0.25rem; }
     .sync-phase { flex-basis: 100%; }
+
+    /* Sidebar becomes an off-canvas drawer. transform keeps the
+       animation on the compositor and avoids reflowing the page. */
     .sidebar {
-        width: 100%;
-        position: relative;
-        flex-direction: row;
-        border-right: none;
-        border-bottom: 1px solid var(--border);
+        width: 260px;
+        transform: translateX(-100%);
+        transition: transform 0.22s ease;
+        z-index: 50;
+        flex-direction: column;
+        border-right: 1px solid var(--border);
+        border-bottom: none;
     }
-    .sidebar-header { display: none; }
-    .nav-links { display: flex; }
-    .nav-links li a { padding: 0.75rem; }
+    body.sidebar-open .sidebar { transform: translateX(0); }
+    .sidebar-header { display: flex; }
+    .nav-links { display: block; }
+    .nav-links li a { padding: 0.65rem 1rem; }
+
     .main { margin-left: 0; width: 100%; }
     .content { margin-left: 0; padding: 1rem; }
-    .topbar { padding: 0 1rem; }
+    .topbar { padding: 0 1rem; gap: 0.65rem; }
     .topbar-search { min-width: 0; flex: 1; }
+    .nav-toggle { display: inline-flex; }
+
     body { flex-direction: column; }
     .book-detail { flex-direction: column; }
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
     .settings-page { max-width: 100%; }
     .auth-panel { padding: 1rem; border-radius: 10px; }
     .destination-type-grid { grid-template-columns: 1fr; }
+
+    /* Library table → card view. Tables can't reflow on narrow viewports
+       without horizontal scroll or this CSS-flip; we choose the flip so
+       the row remains scannable on a phone. Named column classes
+       (col-title, col-author, …) on the row template keep this robust
+       against future column reorders. */
+    .table-wrap { overflow-x: visible; }
+    #book-table .tbl,
+    #book-table .tbl tbody,
+    #book-table .tbl tr {
+        display: block;
+        width: 100%;
+        border: none;
+    }
+    #book-table .tbl thead { display: none; }
+    #book-table .tbl tr {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0.75rem 0.85rem 0.55rem;
+        margin-bottom: 0.6rem;
+        position: relative;
+    }
+    /* Clearfix for the floated cover. */
+    #book-table .tbl tr::after {
+        content: "";
+        display: block;
+        clear: both;
+    }
+    #book-table .tbl tr > td {
+        display: block;
+        padding: 0;
+        border: none;
+        text-align: left;
+        white-space: normal;
+        vertical-align: baseline;
+    }
+
+    /* Cover floats left so subsequent cells wrap around it. */
+    #book-table .tbl .col-cover {
+        float: left;
+        width: 60px;
+        margin: 0 0.7rem 0.4rem 0;
+    }
+    #book-table .tbl .col-cover img,
+    #book-table .tbl .col-cover .cover-thumb-placeholder {
+        width: 60px;
+        height: 90px;
+        display: block;
+    }
+
+    /* Block lines for title / author / series. */
+    #book-table .tbl .col-title  { font-size: 0.93rem; line-height: 1.3; margin-bottom: 0.1rem; }
+    #book-table .tbl .col-author { color: var(--text-muted); font-size: 0.82rem; }
+    #book-table .tbl .col-series { font-size: 0.78rem; }
+    /* Skip the "—" placeholder cell so empty series doesn't leave a gap. */
+    #book-table .tbl .col-series:has(.cell-mono:only-child) { display: none; }
+
+    /* Metrics row: duration + purchased + status + presence, all
+       inline-flex so they pack into one wrapping line under the
+       block fields above. */
+    #book-table .tbl .col-duration,
+    #book-table .tbl .col-purchased,
+    #book-table .tbl .col-status,
+    #book-table .tbl .col-presence {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        margin: 0.25rem 0.55rem 0 0;
+        font-size: 0.78rem;
+        vertical-align: middle;
+    }
+    #book-table .tbl .col-presence { flex-wrap: wrap; }
+
+    /* Actions clear the cover float and span full card width. */
+    #book-table .tbl .col-actions {
+        clear: both;
+        margin-top: 0.55rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid var(--border);
+        text-align: left;
+        width: auto;
+        white-space: normal;
+    }
+    #book-table .tbl .col-actions .table-actions { justify-content: flex-start; }
+
+    #book-table .table-pagination { display: block; }
 }
 
 /* =====================================================================
@@ -3268,7 +3483,6 @@ a.btn, a.btn:hover, a.btn:visited { text-decoration: none; }
     height: 22px;
     border-radius: 6px;
     border: 1px solid var(--border);
-    background: var(--surface-2);
     display: inline-flex;
     align-items: center;
     justify-content: center;

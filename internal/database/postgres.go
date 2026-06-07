@@ -605,10 +605,27 @@ func buildBookWherePostgres(filter BookFilter) (string, []interface{}) {
 		paramIdx++
 	}
 	if filter.Search != "" {
-		clauses = append(clauses, fmt.Sprintf("(title ILIKE $%d OR author ILIKE $%d)", paramIdx, paramIdx+1))
+		clauses = append(clauses, fmt.Sprintf("(title ILIKE $%d OR author ILIKE $%d OR series ILIKE $%d OR asin ILIKE $%d)", paramIdx, paramIdx+1, paramIdx+2, paramIdx+3))
 		search := "%" + filter.Search + "%"
-		args = append(args, search, search)
-		paramIdx += 2
+		args = append(args, search, search, search, search)
+		paramIdx += 4
+	}
+	if filter.OnDisk != nil {
+		if *filter.OnDisk {
+			clauses = append(clauses, "file_path != ''")
+		} else {
+			clauses = append(clauses, "(file_path IS NULL OR file_path = '')")
+		}
+	}
+	for _, destID := range filter.PresentInDestinations {
+		clauses = append(clauses, fmt.Sprintf("EXISTS (SELECT 1 FROM book_library_destinations bld WHERE bld.book_id = books.id AND bld.destination_id = $%d AND bld.sync_state IN ('synced','syncing'))", paramIdx))
+		args = append(args, destID)
+		paramIdx++
+	}
+	for _, destID := range filter.MissingFromDestinations {
+		clauses = append(clauses, fmt.Sprintf("NOT EXISTS (SELECT 1 FROM book_library_destinations bld WHERE bld.book_id = books.id AND bld.destination_id = $%d AND bld.sync_state IN ('synced','syncing'))", paramIdx))
+		args = append(args, destID)
+		paramIdx++
 	}
 
 	if len(clauses) == 0 {

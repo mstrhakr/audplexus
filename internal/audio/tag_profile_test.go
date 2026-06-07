@@ -5,18 +5,18 @@ import (
 	"testing"
 )
 
-func TestParseTagProfileDefaultsToBasic(t *testing.T) {
+func TestParseTagProfileDefaults(t *testing.T) {
 	cases := map[string]TagProfile{
-		"":                  TagProfileBasic,
-		"basic":             TagProfileBasic,
-		"BASIC":             TagProfileBasic,
-		"audiobook-rich":    TagProfileAudiobookRich,
-		"AUDIOBOOK-RICH":    TagProfileAudiobookRich,
-		" audiobook-rich ":  TagProfileAudiobookRich,
-		"audiobook_rich":    TagProfileAudiobookRich,
-		"rich":              TagProfileAudiobookRich,
-		"unknown":           TagProfileBasic, // anything unrecognized falls back
-		"plex":              TagProfileBasic, // doesn't accidentally match a media-server type
+		"":                 DefaultTagProfile,
+		"basic":            TagProfileBasic,
+		"BASIC":            TagProfileBasic,
+		"audiobook-rich":   TagProfileAudiobookRich,
+		"AUDIOBOOK-RICH":   TagProfileAudiobookRich,
+		" audiobook-rich ": TagProfileAudiobookRich,
+		"audiobook_rich":   TagProfileAudiobookRich,
+		"rich":             TagProfileAudiobookRich,
+		"unknown":          DefaultTagProfile, // anything unrecognized falls back to default
+		"plex":             DefaultTagProfile, // doesn't accidentally match a media-server type
 	}
 	for input, want := range cases {
 		t.Run(input, func(t *testing.T) {
@@ -28,9 +28,9 @@ func TestParseTagProfileDefaultsToBasic(t *testing.T) {
 }
 
 func TestResolveTagProfileNilDB(t *testing.T) {
-	// A nil DB must not panic; falls back to Basic.
-	if got := ResolveTagProfile(context.Background(), nil); got != TagProfileBasic {
-		t.Errorf("ResolveTagProfile(nil db) = %q, want %q", got, TagProfileBasic)
+	// A nil DB must not panic; falls back to the default profile.
+	if got := ResolveTagProfile(context.Background(), nil); got != DefaultTagProfile {
+		t.Errorf("ResolveTagProfile(nil db) = %q, want %q", got, DefaultTagProfile)
 	}
 }
 
@@ -52,10 +52,10 @@ func TestResolveTagProfileFromDB(t *testing.T) {
 		stored string
 		want   TagProfile
 	}{
-		{"", TagProfileBasic},                      // unset = default Basic
-		{"basic", TagProfileBasic},                 // explicit basic
-		{"audiobook-rich", TagProfileAudiobookRich}, // opt-in
-		{"junk", TagProfileBasic},                  // unknown stored value falls back
+		{"", DefaultTagProfile},                     // unset = default profile
+		{"basic", TagProfileBasic},                  // explicit basic
+		{"audiobook-rich", TagProfileAudiobookRich}, // explicit rich
+		{"junk", DefaultTagProfile},                 // unknown stored value falls back to default
 	} {
 		t.Run(tc.stored, func(t *testing.T) {
 			db := &fakeSettingsReader{value: tc.stored}
@@ -72,7 +72,7 @@ func TestAllTagProfilesIncludesBothInOrder(t *testing.T) {
 		t.Fatalf("AllTagProfiles() = %d entries, want 2", len(all))
 	}
 	if all[0] != TagProfileBasic {
-		t.Errorf("AllTagProfiles()[0] = %q, want Basic first (default)", all[0])
+		t.Errorf("AllTagProfiles()[0] = %q, want Basic first", all[0])
 	}
 	if all[1] != TagProfileAudiobookRich {
 		t.Errorf("AllTagProfiles()[1] = %q, want AudiobookRich second", all[1])

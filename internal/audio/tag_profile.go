@@ -6,8 +6,9 @@ import (
 )
 
 // TagProfile selects which set of metadata atoms get embedded into the m4b
-// when EmbedMetadata runs. Existing libraries upgrade transparently to the
-// Basic profile (today's behavior). Audiobook-rich is opt-in.
+// when EmbedMetadata runs. New installs default to Audiobook-rich so series
+// grouping works out of the box; Basic stays available for anyone who wants
+// the historical tag set.
 type TagProfile string
 
 const (
@@ -32,6 +33,11 @@ const (
 	TagProfileAudiobookRich TagProfile = "audiobook-rich"
 )
 
+// DefaultTagProfile is the profile used when nothing is stored yet (new
+// installs) or when a stored value can't be recognized. Audiobook-rich is
+// additive and safe — it only adds series/asin atoms on top of Basic.
+const DefaultTagProfile = TagProfileAudiobookRich
+
 // SettingKeyTagProfile is the DB setting key that stores the active tag
 // profile. Stored alongside other Audplexus settings.
 const SettingKeyTagProfile = "tag_profile"
@@ -45,19 +51,19 @@ type settingsReader interface {
 }
 
 // ResolveTagProfile reads the active tag profile from the DB setting,
-// falling back to Basic for any unset or unknown value. Existing installs
-// keep today's behavior automatically.
+// falling back to DefaultTagProfile for any unset or unknown value.
 func ResolveTagProfile(ctx context.Context, db settingsReader) TagProfile {
 	if db == nil {
-		return TagProfileBasic
+		return DefaultTagProfile
 	}
 	raw, _ := db.GetSetting(ctx, SettingKeyTagProfile)
 	return ParseTagProfile(raw)
 }
 
 // ParseTagProfile maps a setting string to a TagProfile, defaulting to
-// Basic for empty or unrecognized values. Lenient — used when reading
-// existing settings where unknown legacy values should fall back gracefully.
+// DefaultTagProfile for empty or unrecognized values. Lenient — used when
+// reading existing settings where unknown legacy values should fall back
+// gracefully.
 func ParseTagProfile(s string) TagProfile {
 	p, _ := parseTagProfile(s)
 	return p
@@ -73,12 +79,14 @@ func ParseTagProfileStrict(s string) (TagProfile, bool) {
 
 func parseTagProfile(s string) (TagProfile, bool) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "", string(TagProfileBasic):
+	case "":
+		return DefaultTagProfile, true
+	case string(TagProfileBasic):
 		return TagProfileBasic, true
 	case string(TagProfileAudiobookRich), "audiobook_rich", "rich":
 		return TagProfileAudiobookRich, true
 	default:
-		return TagProfileBasic, false
+		return DefaultTagProfile, false
 	}
 }
 

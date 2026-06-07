@@ -3,7 +3,7 @@
     <div class="page-header">
         <div>
             <h1>Settings</h1>
-            <div class="sub">Server configuration. Changes save inline; some apply only after restart.</div>
+            <div class="sub">Server configuration. Changes save as you make them.</div>
         </div>
     </div>
 
@@ -207,8 +207,8 @@
                 <div class="form-row">
                     <label for="sync_mode">Scheduled sync mode</label>
                     <select class="select" id="sync_mode" name="sync_mode">
-                        <option value="full" {{if eq .SyncMode "full"}}selected{{end}}>Full (Audible + filesystem + media server)</option>
-                        <option value="quick" {{if eq .SyncMode "quick"}}selected{{end}}>Quick (Audible-focused)</option>
+                        <option value="full" {{if eq .SyncMode "full"}}selected{{end}}>Full (Audible, your files, and media servers)</option>
+                        <option value="quick" {{if eq .SyncMode "quick"}}selected{{end}}>Quick (just check Audible)</option>
                     </select>
                     <div class="hint">Mode used by scheduled sync runs.</div>
                 </div>
@@ -227,8 +227,8 @@
 
                 <label class="form-row inline">
                     <span class="row-label">
-                        Auto-add new books to queue
-                        <div class="hint">Any book discovered with <code>new</code> status is automatically appended to the download queue after sync.</div>
+                        Automatically download new books
+                        <div class="hint">When a sync finds a new book, add it to the download queue right away. Turn this off if you'd rather pick what to download yourself.</div>
                     </span>
                     <span class="toggle">
                         <input type="checkbox" id="sync_auto_queue_new" name="sync_auto_queue_new" value="true" {{if .SyncAutoQueueNew}}checked{{end}}>
@@ -237,7 +237,6 @@
                     <input type="hidden" name="sync_auto_queue_new_sent" value="1">
                 </label>
             </div>
-            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">Sync schedule and auto-queue-new changes apply on next restart.</p>
         </div>
     </section>
 
@@ -251,19 +250,19 @@
                 <div class="form-row">
                     <label for="download_concurrency">Download workers</label>
                     <input class="input" type="number" id="download_concurrency" name="download_concurrency" value="{{.DownloadConcurrency}}" min="0" max="16">
-                    <div class="hint">0 = auto. Higher values can improve throughput on fast networks.</div>
+                    <div class="hint">0 lets Audplexus pick. Higher numbers can download faster on quick connections.</div>
                 </div>
 
                 <div class="form-row">
                     <label for="decrypt_concurrency">Decrypt workers</label>
                     <input class="input" type="number" id="decrypt_concurrency" name="decrypt_concurrency" value="{{.DecryptConcurrency}}" min="0" max="16">
-                    <div class="hint">0 = auto. This stage is CPU-heavy.</div>
+                    <div class="hint">0 lets Audplexus pick. This step works your CPU hard.</div>
                 </div>
 
                 <div class="form-row">
                     <label for="process_concurrency">Process workers</label>
                     <input class="input" type="number" id="process_concurrency" name="process_concurrency" value="{{.ProcessConcurrency}}" min="0" max="16">
-                    <div class="hint">0 = auto. Controls metadata/organize stage parallelism.</div>
+                    <div class="hint">0 lets Audplexus pick. Sets how many books get tagged and filed at once.</div>
                 </div>
 
                 <div class="form-row">
@@ -278,14 +277,14 @@
                     <div class="hint">Minimum severity for log output. Changes take effect immediately.</div>
                 </div>
             </div>
-            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">Worker concurrency changes apply on next restart.</p>
+            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">Worker count changes apply after a restart.</p>
         </div>
     </section>
 
     {{/* Single save row for the Library + Sync + Performance form. */}}
     <div class="settings-save-bar">
         <button type="submit" class="btn btn-primary">Save settings</button>
-        <button type="button" class="btn btn-secondary" hx-post="/api/library/reorganize" hx-target="#save-status" hx-swap="innerHTML">Reorganize library to current scheme</button>
+        <button type="button" class="btn btn-secondary" hx-post="/api/library/reorganize" hx-target="#save-status" hx-swap="innerHTML">Reorganize library to current settings</button>
         <span id="save-status" class="status-msg"></span>
     </div>
     </form>
@@ -306,10 +305,10 @@
                         {{end}}
                     </select>
                     <div class="hint" id="tag_profile_help">
-                        Atoms written into each m4b on download.
-                        <strong>Basic</strong> matches Audplexus's historical behavior.
-                        <strong>Audiobook-rich</strong> adds <code>series</code>, <code>series-part</code>, and <code>asin</code> — read by Audiobookshelf for series auto-grouping.
-                        Applies to subsequent downloads only.
+                        Tags saved inside each file when it downloads.
+                        <strong>Audiobook-rich</strong> (default) adds <code>series</code>, <code>series-part</code>, and <code>asin</code> tags so apps like Audiobookshelf can group series for you.
+                        <strong>Basic</strong> leaves those out and matches how older versions tagged files.
+                        Only changes files you download from now on.
                     </div>
                 </div>
                 <button type="submit" class="btn btn-secondary">Save Tag Profile</button>
@@ -337,6 +336,7 @@
                 <dt class="muted">Config</dt>
                 <dd class="cell-mono">{{.ConfigPath}}</dd>
             </dl>
+            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">These paths come from your container's volume mounts and can't be changed here. To move them, update the mounts in your compose file and restart.</p>
         </div>
     </section>
 
@@ -615,7 +615,8 @@ function confirmRestart() {
 
     var focusSection = '{{.FocusSection}}';
     if (focusSection) {
-        var focusEl = document.getElementById(focusSection + '-settings');
+        var focusMap = { auth: 'section-audible' };
+        var focusEl = document.getElementById(focusMap[focusSection] || ('section-' + focusSection));
         if (focusEl) {
             focusEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
@@ -633,13 +634,18 @@ function confirmRestart() {
     .settings-container { display: flex; flex-direction: column; gap: 1.25rem; }
     .settings-section { background: transparent; padding: 0; border: 0; }
 
+    /* The Library/Sync/Performance cards live inside a single <form>, which
+       is one flex child of .settings-container — so the container gap can't
+       reach the sections nested inside it. Give the form the same flex
+       column + gap so every card is spaced consistently. */
+    #settings-main-form { display: flex; flex-direction: column; gap: 1.25rem; }
+
     /* Bottom save bar shared by the Library + Sync + Performance form. */
     .settings-save-bar {
         display: flex;
         gap: 0.5rem;
         flex-wrap: wrap;
         align-items: center;
-        margin-top: 0.25rem;
     }
 
     /* Configuration form — two-column grid of .form-rows so we fit a
@@ -681,8 +687,11 @@ function confirmRestart() {
 </style>
 
 <script>
-// Settings TOC scroll-spy — highlights the left-rail link whose section
-// is closest to the top of the viewport. Pure JS, no deps.
+// Settings TOC scroll-spy — highlights the left-rail link for the
+// section currently under the topbar. Position-based (not an
+// IntersectionObserver) so every section is evaluated on each scroll,
+// which avoids the highlight snapping back to the top section when only
+// a subset of sections change visibility. Pure JS, no deps.
 (function() {
     var links = Array.prototype.slice.call(document.querySelectorAll('.settings-nav-link[data-section]'));
     if (!links.length) return;
@@ -691,6 +700,13 @@ function confirmRestart() {
         .filter(Boolean);
     if (!sections.length) return;
 
+    // Matches the sticky topbar offset used by the click handler below.
+    var OFFSET = 80;
+    // While a click-driven smooth scroll is animating, suppress the spy
+    // so it doesn't fight the click and revert the highlight.
+    var clickLock = false;
+    var clickTimer = null;
+
     function setActive(id) {
         links.forEach(function(a) {
             if (a.getAttribute('data-section') === id) a.classList.add('active');
@@ -698,18 +714,33 @@ function confirmRestart() {
         });
     }
 
-    var obs = new IntersectionObserver(function(entries) {
-        // Pick the visible section nearest the top.
-        var visible = entries
-            .filter(function(e) { return e.isIntersecting; })
-            .sort(function(a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
-        if (visible[0]) setActive(visible[0].target.id);
-    }, { rootMargin: '-100px 0px -55% 0px', threshold: [0, 0.1, 0.5] });
-    sections.forEach(function(s) { obs.observe(s); });
+    function currentSection() {
+        var doc = document.documentElement;
+        // At (or near) the bottom of the page the last section can't reach
+        // the top, so anchor to it explicitly.
+        if (window.innerHeight + window.scrollY >= doc.scrollHeight - 2) {
+            return sections[sections.length - 1].id;
+        }
+        var line = window.scrollY + OFFSET;
+        var active = sections[0].id;
+        for (var i = 0; i < sections.length; i++) {
+            var top = sections[i].getBoundingClientRect().top + window.scrollY;
+            if (top <= line + 1) active = sections[i].id;
+            else break;
+        }
+        return active;
+    }
 
-    // Smooth-scroll on link click (browsers do this for #anchor, but we
-    // also want to set active immediately so the highlight doesn't lag
-    // the scroll animation).
+    function onScroll() {
+        if (clickLock) return;
+        setActive(currentSection());
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll, { passive: true });
+
+    // Smooth-scroll on link click. Set active immediately and lock the spy
+    // until the scroll settles so the highlight doesn't lag or revert.
     links.forEach(function(a) {
         a.addEventListener('click', function(ev) {
             var id = a.getAttribute('data-section');
@@ -717,11 +748,19 @@ function confirmRestart() {
             if (!el) return;
             ev.preventDefault();
             setActive(id);
-            var y = el.getBoundingClientRect().top + window.scrollY - 72;
+            clickLock = true;
+            var y = el.getBoundingClientRect().top + window.scrollY - OFFSET;
             window.scrollTo({ top: y, behavior: 'smooth' });
             history.replaceState(null, '', '#' + id);
+            if (clickTimer) clearTimeout(clickTimer);
+            clickTimer = setTimeout(function() {
+                clickLock = false;
+                setActive(currentSection());
+            }, 700);
         });
     });
+
+    setActive(currentSection());
 })();
 </script>
 

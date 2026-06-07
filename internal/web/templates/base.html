@@ -13,7 +13,8 @@
     {{$sb := .Sidebar}}
     {{$isWizard := eq .Page "setup"}}
     {{if not $isWizard}}
-    <nav class="sidebar">
+    <div class="sidebar-backdrop" data-nav-dismiss aria-hidden="true"></div>
+    <nav class="sidebar" id="primary-nav">
         <div class="sidebar-header">
             <img src="/static/logo.svg" alt="Audplexus Logo" class="sidebar-logo" />
             <div class="sidebar-brand">
@@ -76,6 +77,10 @@
         {{$pageLabels := dict "dashboard" "Dashboard" "library" "Library" "pipeline" "Pipeline" "destinations" "Destinations" "destinations_new_picker" "Destinations" "destinations_new_form" "Destinations" "diagnostics" "Diagnostics" "settings" "Settings"}}
         {{$current := index $pageLabels .Page}}
         <header class="topbar" role="banner">
+            <button type="button" class="nav-toggle" aria-label="Open navigation"
+                    aria-controls="primary-nav" aria-expanded="false" data-nav-toggle>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            </button>
             <nav class="crumbs" aria-label="Breadcrumb">
                 <span>Audplexus</span>
                 {{if $current}}
@@ -572,7 +577,14 @@
             } else {
                 // Not running: rebuild full view with run buttons
                 el.innerHTML = buildSyncHTML(d, true);
-                if (window.htmx) htmx.process(el);
+                if (window.htmx) {
+                    htmx.process(el);
+                    // Nudge dashboard summary + downloads panels to refetch
+                    // immediately rather than waiting for the next 12s tick.
+                    // Other pages with hx-trigger="sync:done from:body"
+                    // partials pick this up too.
+                    htmx.trigger(document.body, 'sync:done');
+                }
             }
         }
 
@@ -822,7 +834,7 @@
                         if (empty) empty.remove();
                         var tr = document.createElement('tr');
                         var label = d.title || d.asin;
-                        tr.innerHTML = '<td>' + d.asin + '</td><td>' + label + '</td><td>just now</td>';
+                        tr.innerHTML = '<td>' + escHTML(label) + '</td><td class="cell-mono">' + escHTML(d.asin) + '</td><td>just now</td>';
                         cb.insertBefore(tr, cb.firstChild);
                         adj('complete-count', 1);
                     }
@@ -837,7 +849,7 @@
                         var tr = document.createElement('tr');
                         var label = d.title || d.asin;
                         var errMsg = d.error || 'unknown error';
-                        tr.innerHTML = '<td>' + d.asin + '</td><td class="error-text">' + errMsg + '</td><td>' + label + '</td>';
+                        tr.innerHTML = '<td>' + escHTML(label) + '</td><td class="cell-mono">' + escHTML(d.asin) + '</td><td class="error-text">' + escHTML(errMsg) + '</td>';
                         fb.insertBefore(tr, fb.firstChild);
                         adj('failed-count', 1);
                     }
@@ -1101,6 +1113,43 @@
         document.body.addEventListener('dest-deleted', destChanged);
 
         window.AudplexusDestModal = { open: open, close: close };
+    })();
+    </script>
+
+    <script>
+    // Mobile nav drawer: hamburger button toggles a body class; the
+    // backdrop + any [data-nav-dismiss] element closes. Nav links
+    // close on click so an in-app navigation doesn't leave the drawer
+    // hanging open under the new page.
+    (function(){
+        var toggleBtn = document.querySelector('[data-nav-toggle]');
+        var sidebar   = document.getElementById('primary-nav');
+        if (!toggleBtn || !sidebar) return;
+
+        function open()  {
+            document.body.classList.add('sidebar-open');
+            toggleBtn.setAttribute('aria-expanded', 'true');
+        }
+        function close() {
+            document.body.classList.remove('sidebar-open');
+            toggleBtn.setAttribute('aria-expanded', 'false');
+        }
+        function toggle() {
+            if (document.body.classList.contains('sidebar-open')) close();
+            else open();
+        }
+
+        toggleBtn.addEventListener('click', toggle);
+        document.addEventListener('click', function(e){
+            if (e.target.closest('[data-nav-dismiss]')) close();
+        });
+        // Close when a nav link is followed.
+        sidebar.querySelectorAll('a').forEach(function(a){
+            a.addEventListener('click', close);
+        });
+        document.addEventListener('keydown', function(e){
+            if (e.key === 'Escape') close();
+        });
     })();
     </script>
 </body>
