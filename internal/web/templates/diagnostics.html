@@ -534,19 +534,19 @@ function diagInitials(text) {
     return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
+var diagLogoMap = {
+    plex:            '/static/plex.png',
+    emby:            '/static/emby.png',
+    jellyfin:        '/static/jellyfin.png',
+    abs:             '/static/audiobookshelf.png',
+    audiobookshelf:  '/static/audiobookshelf.png',
+};
+
 function diagDestinationGlyph(type, name) {
     const t = String(type || '').toLowerCase();
-    if (t === 'plex') {
-        return '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 4h4l6 8-6 8H8l6-8z"/></svg>';
-    }
-    if (t === 'emby') {
-        return '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5l11 7-11 7z"/></svg>';
-    }
-    if (t === 'jellyfin') {
-        return '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3 6 14h12z"/><path d="M12 11 7.5 19h9z" opacity=".7"/></svg>';
-    }
-    if (t === 'abs' || t === 'audiobookshelf') {
-        return '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>';
+    const src = diagLogoMap[t];
+    if (src) {
+        return '<img src="' + src + '" width="14" height="14" alt="" style="display:block;object-fit:contain">';
     }
     return '<span class="diag-presence-fallback">' + escapeHtml(diagInitials(name)) + '</span>';
 }
@@ -634,7 +634,7 @@ function renderIssues(items) {
             const issue = s.status === 'missing' || s.status === 'unknown';
             const tone = issue ? 'is-issue' : 'is-ok';
             const title = `${s.destination_name} - ${s.status}${s.match_method ? ' (' + s.match_method + ')' : ''}${s.reason ? ': ' + s.reason : ''}`;
-            return `<span class="diag-presence-chip ${tone}" title="${escapeHtml(title)}">${diagDestinationGlyph(s.destination_type, s.destination_name)}${issue ? '<span class="diag-presence-x" aria-hidden="true">x</span>' : ''}</span>`;
+            return `<span class="diag-presence-chip ${tone}" title="${escapeHtml(title)}">${diagDestinationGlyph(s.destination_type, s.destination_name)}${issue ? '<span class="diag-presence-x" aria-hidden="true"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="2" y1="2" x2="8" y2="8"/><line x1="8" y1="2" x2="2" y2="8"/></svg></span>' : ''}</span>`;
         }).join('');
 
         const missingDestinationIDs = getMissingDestinationIds(item);
@@ -893,21 +893,13 @@ document.addEventListener('DOMContentLoaded', () => {
 }
 .diag-presence-x {
     position: absolute;
-    top: -4px;
-    right: -4px;
-    width: 12px;
-    height: 12px;
-    border-radius: 999px;
-    display: inline-flex;
+    inset: 0;
+    border-radius: inherit;
+    display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 10px;
-    font-weight: 800;
-    line-height: 1;
-    color: #fff;
-    background: var(--error);
-    border: 1px solid color-mix(in srgb, var(--surface) 45%, var(--error));
-    text-transform: uppercase;
+    color: var(--error);
+    background: color-mix(in srgb, var(--surface-2) 52%, #4a1b1b);
 }
 .diag-presence-fallback {
     font-size: 9px;
