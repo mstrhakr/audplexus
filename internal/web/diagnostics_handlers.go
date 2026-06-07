@@ -47,15 +47,16 @@ type diagnosticsBookDestinationStatus struct {
 }
 
 type diagnosticsIssueItem struct {
-	ASIN                string                             `json:"asin"`
-	Title               string                             `json:"title"`
-	Author              string                             `json:"author"`
-	FilePath            string                             `json:"file_path,omitempty"`
-	OnDisk              bool                               `json:"on_disk"`
-	IssueSummary        string                             `json:"issue_summary"`
-	DestinationStatuses []diagnosticsBookDestinationStatus `json:"destination_statuses"`
-	CanTargetedScan     bool                               `json:"can_targeted_scan"`
-	CanRedownload       bool                               `json:"can_redownload"`
+	ASIN                  string                             `json:"asin"`
+	Title                 string                             `json:"title"`
+	Author                string                             `json:"author"`
+	FilePath              string                             `json:"file_path,omitempty"`
+	OnDisk                bool                               `json:"on_disk"`
+	IssueSummary          string                             `json:"issue_summary"`
+	DestinationStatuses   []diagnosticsBookDestinationStatus `json:"destination_statuses"`
+	MissingDestinationIDs []string                           `json:"missing_destination_ids,omitempty"`
+	CanTargetedScan       bool                               `json:"can_targeted_scan"`
+	CanRedownload         bool                               `json:"can_redownload"`
 }
 
 type diagnosticsCompareResponse struct {
@@ -190,6 +191,7 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 		}
 
 		missingNames := make([]string, 0)
+		missingIDs := make([]string, 0)
 		unknownNames := make([]string, 0)
 		for _, inv := range inventories {
 			status := diagnosticsBookDestinationStatus{
@@ -221,6 +223,7 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 				status.Reason = reason
 				if status.Status == "missing" {
 					missingNames = append(missingNames, status.DestinationName)
+					missingIDs = append(missingIDs, status.DestinationID)
 					destCards[cardIdx].Missing++
 				} else {
 					unknownNames = append(unknownNames, status.DestinationName)
@@ -237,6 +240,7 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 		if !onDisk {
 			item.IssueSummary = "File missing from disk"
 		} else if len(missingNames) > 0 {
+			item.MissingDestinationIDs = missingIDs
 			item.IssueSummary = "Missing in destinations: " + strings.Join(missingNames, ", ")
 		} else if len(unknownNames) > 0 {
 			item.IssueSummary = "Unknown in destinations: " + strings.Join(unknownNames, ", ")
@@ -326,8 +330,9 @@ func scanLocalASINAudioPaths(root string) map[string]string {
 func (s *Server) handleDiagnosticsTargetedScan(c *gin.Context) {
 	ctx := c.Request.Context()
 	var req struct {
-		ASIN          string `json:"asin"`
-		DestinationID string `json:"destination_id"`
+		ASIN           string   `json:"asin"`
+		DestinationID  string   `json:"destination_id"`
+		DestinationIDs []string `json:"destination_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.ASIN) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing asin"})
@@ -349,16 +354,26 @@ func (s *Server) handleDiagnosticsTargetedScan(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no enabled destinations configured"})
 		return
 	}
-	if strings.TrimSpace(req.DestinationID) != "" {
-		filtered := make([]database.LibraryDestination, 0, 1)
+	requestedIDs := map[string]struct{}{}
+	for _, id := range req.DestinationIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		requestedIDs[id] = struct{}{}
+	}
+	if len(requestedIDs) == 0 && strings.TrimSpace(req.DestinationID) != "" {
+		requestedIDs[strings.TrimSpace(req.DestinationID)] = struct{}{}
+	}
+	if len(requestedIDs) > 0 {
+		filtered := make([]database.LibraryDestination, 0, len(requestedIDs))
 		for _, d := range dests {
-			if d.ID == strings.TrimSpace(req.DestinationID) {
+			if _, ok := requestedIDs[d.ID]; ok {
 				filtered = append(filtered, d)
-				break
 			}
 		}
 		if len(filtered) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "destination not found or not enabled"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "requested destinations not found or not enabled"})
 			return
 		}
 		dests = filtered
