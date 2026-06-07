@@ -682,10 +682,13 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 	plexItems := 0
 	if mode == SyncModeFull && s.plexSyncFunc != nil {
 		s.setPhase(PhasePlexSync, "running", "Syncing with library destination (scan + query)...")
+		libraryScanStart := time.Now()
 		items, plexErr := s.plexSyncFunc(ctx, s.subPhaseFnFor(PhasePlexSync))
+		libraryScanMs := time.Since(libraryScanStart).Milliseconds()
+
 		if plexErr != nil {
 			s.setPhase(PhasePlexSync, "failed", plexErr.Error())
-			syncLog.Warn().Err(plexErr).Msg("library scan phase failed")
+			syncLog.Warn().Err(plexErr).Int("library_scan_ms", int(libraryScanMs)).Msg("library scan phase failed")
 		} else {
 			plexItems = items
 			s.mu.Lock()
@@ -694,27 +697,28 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 			s.emitLocked()
 			s.mu.Unlock()
 			s.setPhase(PhasePlexSync, "complete", fmt.Sprintf("%d items in library (scan complete)", plexItems))
-			syncLog.Info().Int("library_items", plexItems).Msg("library scan complete")
+			syncLog.Info().Int("library_items", plexItems).Int("library_scan_ms", int(libraryScanMs)).Msg("library scan complete")
 		}
 	}
-
-	// --- Phase 4: Collection Sync (full sync only) ---
 
 	// --- Phase 5: Collection Sync (full sync only) ---
 	if mode == SyncModeFull && s.plexReconcileFunc != nil {
 		s.setPhase(PhaseCollectionSync, "running", "Reconciling Plex collections...")
 		completeStatus := database.BookStatusComplete
 		_, completeCount, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
+		collectionSyncStart := time.Now()
 		reconcileErr := s.plexReconcileFunc(ctx, s.subPhaseFnFor(PhaseCollectionSync), func(current, total int) {
 			displayCurrent := scaleProgress(current, total, completeCount)
 			s.updatePhaseProgressWithDisplay(PhaseCollectionSync, current, total, false, displayCurrent, completeCount)
 		})
+		collectionSyncMs := time.Since(collectionSyncStart).Milliseconds()
+
 		if reconcileErr != nil {
 			s.setPhase(PhaseCollectionSync, "failed", reconcileErr.Error())
-			syncLog.Warn().Err(reconcileErr).Msg("collection sync phase failed")
+			syncLog.Warn().Err(reconcileErr).Int("collection_sync_ms", int(collectionSyncMs)).Msg("collection sync phase failed")
 		} else {
 			s.setPhase(PhaseCollectionSync, "complete", "Collections verified")
-			syncLog.Info().Msg("plex collection sync complete")
+			syncLog.Info().Int("collection_sync_ms", int(collectionSyncMs)).Msg("plex collection sync complete")
 		}
 	}
 
@@ -1053,7 +1057,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	dbWriteTimeMs := int64(0)
 	lastProgressEmit := 0
 
-	for idx, item := range books {
+	for _, item := range books {
 		select {
 		case <-ctx.Done():
 			syncLog.Warn().Int("scanned", scanned).Int("added", added).Msg("audible sync cancelled")
