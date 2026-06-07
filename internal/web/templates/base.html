@@ -374,10 +374,10 @@
             if (useThrobber) {
                 html += '<div class="phase-progress-track indeterminate"><div class="phase-progress-fill"></div></div>';
             } else if (p.status === 'running') {
-                var pct = Math.max(0, Math.min(100, Math.round((p.percent || 0) * 100)));
+                var pct = Math.max(0, Math.min(100, Math.floor((p.percent || 0) * 100)));
                 html += '<div class="phase-progress-track"><div class="phase-progress-fill" style="width:' + pct + '%"></div></div>';
             } else {
-                var pct = Math.max(0, Math.min(100, Math.round((p.percent || 0) * 100)));
+                var pct = Math.max(0, Math.min(100, Math.floor((p.percent || 0) * 100)));
                 html += '<div class="phase-progress-track"><div class="phase-progress-fill" style="width:' + pct + '%"></div></div>';
             }
 

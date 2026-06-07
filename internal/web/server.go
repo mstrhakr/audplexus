@@ -312,6 +312,15 @@ func (s *Server) setupTemplates() {
 		"mul": func(a float64, b float64) float64 {
 			return a * b
 		},
+		"pctFloor": func(p float64) int {
+			if p <= 0 {
+				return 0
+			}
+			if p >= 1 {
+				return 100
+			}
+			return int(math.Floor(p * 100))
+		},
 		"add": func(a, b int) int { return a + b },
 		"sub": func(a, b int) int { return a - b },
 		"deref": func(t *time.Time) time.Time {
