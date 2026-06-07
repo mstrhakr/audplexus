@@ -114,7 +114,7 @@ func NewServer(
 ) *Server {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
-	router.Use(ginLogger(), gin.Recovery())
+	router.Use(ginLogger())
 
 	s := &Server{
 		router:         router,
@@ -207,6 +207,16 @@ func NewServer(
 		}
 		return backend.ReconcileLibrary(ctx, progressFn)
 	})
+
+	// Error-handling middleware. Interceptor is OUTERMOST so it wraps
+	// c.Writer in a buffer before recovery runs — that way, when recovery
+	// catches a panic and renders the styled error page, the page lands in
+	// the buffer and the interceptor flushes it on the unwind. If recovery
+	// were outermost, the interceptor's buffer swap would happen inside
+	// it and the panic-rendered page would be stranded in a buffer that
+	// never gets flushed.
+	s.router.Use(s.errorPageInterceptor())
+	s.router.Use(s.recoveryMiddleware())
 
 	s.setupTemplates()
 	s.setupRoutes()
