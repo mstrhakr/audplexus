@@ -234,29 +234,28 @@ function diagCopyRow(ev, btn) {
     ev.stopPropagation();
     var row = btn.closest('.diag-log-row');
     if (!row) return;
-        var line = row.getAttribute('data-log-raw') || '';
+    var line = row.getAttribute('data-log-raw') || '';
     diagWriteClipboard(line).then(function(ok) {
-            btn.classList.toggle('is-ok', ok);
-            btn.classList.toggle('is-err', !ok);
-            setTimeout(function() {
-                btn.classList.remove('is-ok');
-                btn.classList.remove('is-err');
-            }, 1200);
-        });
-    }
- 
-    // diagToggleExpand opens/closes the details panel for a log entry.
-    function diagToggleExpand(ev, btn) {
-        ev.stopPropagation();
-        var row = btn.closest('.diag-log-row');
-        if (!row) return;
-        var rowId = row.getAttribute('id');
-        var details = document.getElementById(rowId + '-details');
-        if (!details) return;
-        var isOpen = !details.hidden;
-        details.hidden = isOpen;
-        btn.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
-    }
+        btn.classList.toggle('is-ok', ok);
+        btn.classList.toggle('is-err', !ok);
+        setTimeout(function() {
+            btn.classList.remove('is-ok');
+            btn.classList.remove('is-err');
+        }, 1200);
+    });
+}
+
+// diagToggleExpand opens/closes the details panel for a log entry.
+function diagToggleExpand(ev, btn) {
+    ev.stopPropagation();
+    var row = btn.closest('.diag-log-row');
+    if (!row) return;
+    var rowId = row.getAttribute('id');
+    var details = document.getElementById(rowId + '-details');
+    if (!details) return;
+    var isOpen = !details.hidden;
+    details.hidden = isOpen;
+    btn.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
 }
 
 // diagWriteClipboard wraps navigator.clipboard with a textarea fallback
