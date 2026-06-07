@@ -702,6 +702,12 @@ func (s *SQLiteDB) GetUserByID(ctx context.Context, id int64) (*User, error) {
 		 FROM users WHERE id = ?`, id))
 }
 
+func (s *SQLiteDB) GetFirstUser(ctx context.Context) (*User, error) {
+	return s.scanUser(s.db.QueryRowContext(ctx,
+		`SELECT id, username, password, salt, iterations, identifier, created_at, updated_at
+		 FROM users ORDER BY id ASC LIMIT 1`))
+}
+
 func (s *SQLiteDB) CountUsers(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)
@@ -721,6 +727,9 @@ func (s *SQLiteDB) UpsertUser(ctx context.Context, user *User) error {
 			user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
 			user.CreatedAt, user.UpdatedAt)
 		if err != nil {
+			if isSQLiteUniqueErr(err) {
+				return ErrDuplicateUser
+			}
 			return fmt.Errorf("insert user: %w", err)
 		}
 		user.ID, _ = res.LastInsertId()
@@ -733,9 +742,20 @@ func (s *SQLiteDB) UpsertUser(ctx context.Context, user *User) error {
 		user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
 		user.UpdatedAt, user.ID)
 	if err != nil {
+		if isSQLiteUniqueErr(err) {
+			return ErrDuplicateUser
+		}
 		return fmt.Errorf("update user: %w", err)
 	}
 	return nil
+}
+
+// isSQLiteUniqueErr reports whether err is the SQLite "UNIQUE constraint
+// failed" error. We match on the string because the modernc.org/sqlite driver
+// (the only one we use) doesn't expose a typed constraint error and pulling
+// in a vendor-specific dependency just for this is overkill.
+func isSQLiteUniqueErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
 func (s *SQLiteDB) RotateUserIdentifier(ctx context.Context, userID int64, newIdentifier string) error {

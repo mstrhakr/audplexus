@@ -661,6 +661,12 @@ func (p *PostgresDB) GetUserByID(ctx context.Context, id int64) (*User, error) {
 		 FROM users WHERE id = $1`, id))
 }
 
+func (p *PostgresDB) GetFirstUser(ctx context.Context) (*User, error) {
+	return p.scanUser(p.db.QueryRowContext(ctx,
+		`SELECT id, username, password, salt, iterations, identifier, created_at, updated_at
+		 FROM users ORDER BY id ASC LIMIT 1`))
+}
+
 func (p *PostgresDB) CountUsers(ctx context.Context) (int, error) {
 	var n int
 	err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)
@@ -680,6 +686,9 @@ func (p *PostgresDB) UpsertUser(ctx context.Context, user *User) error {
 			user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
 			user.CreatedAt, user.UpdatedAt).Scan(&user.ID)
 		if err != nil {
+			if isPostgresUniqueErr(err) {
+				return ErrDuplicateUser
+			}
 			return fmt.Errorf("insert user: %w", err)
 		}
 		return nil
@@ -691,9 +700,24 @@ func (p *PostgresDB) UpsertUser(ctx context.Context, user *User) error {
 		user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
 		user.UpdatedAt, user.ID)
 	if err != nil {
+		if isPostgresUniqueErr(err) {
+			return ErrDuplicateUser
+		}
 		return fmt.Errorf("update user: %w", err)
 	}
 	return nil
+}
+
+// isPostgresUniqueErr reports whether err carries Postgres SQLSTATE 23505
+// (unique_violation). We match on the error text rather than the driver's
+// typed error so this stays driver-agnostic — every Go pq driver wraps the
+// SQLSTATE into the error message.
+func isPostgresUniqueErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "23505") || strings.Contains(msg, "unique_violation") || strings.Contains(msg, "duplicate key value")
 }
 
 func (p *PostgresDB) RotateUserIdentifier(ctx context.Context, userID int64, newIdentifier string) error {

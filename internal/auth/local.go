@@ -14,6 +14,14 @@ import (
 // safe default for a single-binary install behind no proxy.
 const SettingKeyTrustedProxies = "trusted_proxies"
 
+// SettingKeyCookieDomain optionally constrains the Domain attribute on the
+// session + CSRF cookies. Leave empty to scope cookies to the exact host
+// that served the response (the safe default for a single-host install).
+// Set to e.g. "audplexus.example.com" to scope explicitly when the install
+// is reachable from multiple hostnames, or leave empty when running
+// alongside other apps on subdomains of a shared parent.
+const SettingKeyCookieDomain = "cookie_domain"
+
 // ParseTrustedProxies turns the comma-separated CIDR setting into prefixes.
 // Invalid entries are silently dropped — we don't want a typo in settings
 // to crash request handling.

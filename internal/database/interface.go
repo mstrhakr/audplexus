@@ -65,6 +65,10 @@ type Database interface {
 	// users row invalidates every session whose snapshot no longer matches.
 	GetUserByUsername(ctx context.Context, username string) (*User, error)
 	GetUserByID(ctx context.Context, id int64) (*User, error)
+	// GetFirstUser returns the oldest user row (lowest id), or nil when no
+	// users exist. Used by the single-admin UI to surface the admin without
+	// hardcoding id=1 (which breaks if the row was ever rotated).
+	GetFirstUser(ctx context.Context) (*User, error)
 	CountUsers(ctx context.Context) (int, error)
 	UpsertUser(ctx context.Context, user *User) error
 	RotateUserIdentifier(ctx context.Context, userID int64, newIdentifier string) error

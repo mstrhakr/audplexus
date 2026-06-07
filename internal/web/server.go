@@ -640,6 +640,13 @@ func (s *Server) Start() error {
 	return s.router.Run(addr)
 }
 
+// AuthManager exposes the auth manager so the main package can wire its
+// background goroutines (e.g. the login throttle GC sweep) to the same
+// lifecycle context the rest of the server uses.
+func (s *Server) AuthManager() *auth.Manager {
+	return s.authMgr
+}
+
 // ginLogger returns a gin middleware that logs via our logging package.
 func ginLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -2278,27 +2285,16 @@ func formatUptime(d time.Duration) string {
 
 // withSidebar merges the sidebar snapshot into the page data map. Use on
 // every full-page render so base.html can render the nav badges + footer.
-// Safe to call with a nil/empty map.
-func (s *Server) withSidebar(ctxOrC any, data gin.H) gin.H {
+// Plumbs the per-request CSRF token and current user from the gin context.
+// Safe to call with a nil/empty data map.
+func (s *Server) withSidebar(c *gin.Context, data gin.H) gin.H {
 	if data == nil {
 		data = gin.H{}
 	}
-	// Accept either a bare context.Context (legacy callers) or a *gin.Context
-	// so handlers can plumb the per-request CSRF token into the template
-	// data without touching every call site. When a gin.Context is passed,
-	// we also stash the current user so the nav can show "Sign out".
-	var ctx context.Context
-	switch v := ctxOrC.(type) {
-	case *gin.Context:
-		ctx = v.Request.Context()
-		data["CSRFToken"] = auth.CSRFToken(v)
-		if u := auth.CurrentUser(v); u != nil {
-			data["CurrentUser"] = u
-		}
-	case context.Context:
-		ctx = v
-	default:
-		ctx = context.Background()
+	ctx := c.Request.Context()
+	data["CSRFToken"] = auth.CSRFToken(c)
+	if u := auth.CurrentUser(c); u != nil {
+		data["CurrentUser"] = u
 	}
 	data["Sidebar"] = s.computeSidebar(ctx)
 	if s.authMgr != nil && s.authMgr.CurrentMethod(ctx) == auth.AuthMethodNone {

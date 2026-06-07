@@ -189,6 +189,11 @@ func main() {
 
 	// Start web server
 	webServer := web.NewServer(db, syncSvc, dlMgr, sched, anClient, org, audibleClient, ffmpeg, credPath, cfg.Server.Port, cfg.Paths.Audiobooks, cfg.Paths.Downloads, cfg.Paths.Config)
+
+	// Login throttle GC — drops expired (ip, username) buckets so the map
+	// doesn't grow unbounded during a username-enumeration attack. Sweeps
+	// every 5 minutes; entries naturally expire after the throttle window.
+	webServer.AuthManager().Throttle.StartGC(ctx, 0)
 	go func() {
 		if err := webServer.Start(); err != nil {
 			log.Fatal().Err(err).Msg("web server failed")

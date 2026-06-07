@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -71,6 +72,48 @@ func (t *LoginThrottle) Reset(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.attempts, key)
+}
+
+// sweep drops every key whose entries are all older than the window. Called
+// periodically by StartGC so a username-enumeration attack can't grow the map
+// unbounded — without this, every distinct (ip, username) tuple lives forever
+// even after its attempts expire.
+func (t *LoginThrottle) sweep(now time.Time) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	cutoff := now.Add(-t.window)
+	dropped := 0
+	for k, ts := range t.attempts {
+		pruned := prune(ts, cutoff)
+		if len(pruned) == 0 {
+			delete(t.attempts, k)
+			dropped++
+			continue
+		}
+		t.attempts[k] = pruned
+	}
+	return dropped
+}
+
+// StartGC kicks off a background goroutine that periodically sweeps expired
+// throttle entries. interval=0 picks a sane default (5 minutes). Exits when
+// ctx is canceled.
+func (t *LoginThrottle) StartGC(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	go func() {
+		tick := time.NewTicker(interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-tick.C:
+				t.sweep(now)
+			}
+		}
+	}()
 }
 
 func prune(ts []time.Time, cutoff time.Time) []time.Time {

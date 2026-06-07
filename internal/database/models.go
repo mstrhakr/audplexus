@@ -1,9 +1,15 @@
 package database
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
+
+// ErrDuplicateUser is returned by UpsertUser when a concurrent insert wins
+// the race for the same username. Handlers surface this as a friendly 409
+// instead of leaking the driver-specific "UNIQUE constraint failed" message.
+var ErrDuplicateUser = errors.New("user with that username already exists")
 
 // Book represents an audiobook in the local database.
 type Book struct {

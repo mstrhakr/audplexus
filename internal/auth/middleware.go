@@ -81,6 +81,13 @@ func (m *Manager) trustedProxies(ctx context.Context) []*net.IPNet {
 	return ParseTrustedProxies(v)
 }
 
+// cookieDomain returns the configured Domain attribute for session/CSRF cookies.
+// Empty string = default (host-only cookie scoped to the responding origin).
+func (m *Manager) cookieDomain(ctx context.Context) string {
+	v, _ := m.DB.GetSetting(ctx, SettingKeyCookieDomain)
+	return strings.TrimSpace(v)
+}
+
 // localBypass reports whether the request should skip auth because of the
 // AuthRequired knob.
 func (m *Manager) localBypass(c *gin.Context, mode AuthRequired) bool {
@@ -93,9 +100,20 @@ func (m *Manager) localBypass(c *gin.Context, mode AuthRequired) bool {
 	return false
 }
 
-// extractAPIKey returns the API key from the request and a bool indicating
-// where it came from. We accept header, query, and Bearer for parity with
-// Sonarr.
+// IsLocalRequest reports whether the request originated from a local-only
+// network (loopback / RFC1918 / link-local / ULA), evaluated against the
+// configured trusted_proxies CIDR list. Use this from handlers that need to
+// gate a sensitive bootstrap action (e.g. initial-password creation when
+// auth_method=none) on the request being trusted regardless of the
+// AuthRequired knob.
+func (m *Manager) IsLocalRequest(c *gin.Context) bool {
+	return IsLocalAddress(c.Request, m.trustedProxies(c.Request.Context()))
+}
+
+// extractAPIKey returns the API key from the request. Accepts X-Api-Key and
+// ?apikey= globally; Authorization: Bearer is only honored on /api/* paths so
+// it doesn't collide with future OIDC/JWT integrations that might post Bearer
+// tokens to UI routes.
 func extractAPIKey(c *gin.Context) string {
 	if v := c.GetHeader(APIKeyHeaderName); v != "" {
 		return v
@@ -103,8 +121,10 @@ func extractAPIKey(c *gin.Context) string {
 	if v := c.Query(APIKeyQueryName); v != "" {
 		return v
 	}
-	if v := c.GetHeader("Authorization"); strings.HasPrefix(v, "Bearer ") {
-		return strings.TrimPrefix(v, "Bearer ")
+	if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+		if v := c.GetHeader("Authorization"); strings.HasPrefix(v, "Bearer ") {
+			return strings.TrimPrefix(v, "Bearer ")
+		}
 	}
 	return ""
 }
@@ -235,7 +255,7 @@ func (m *Manager) CSRF(exempt func(path string) bool) gin.HandlerFunc {
 			t, err := newCSRFToken()
 			if err == nil {
 				token = t
-				setCSRFCookie(c, token)
+				m.setCSRFCookie(c, token)
 			}
 		}
 		c.Set(ctxKeyCSRF, token)
@@ -286,30 +306,48 @@ func newCSRFToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-func setCSRFCookie(c *gin.Context, token string) {
+func (m *Manager) setCSRFCookie(c *gin.Context, token string) {
 	// Not HttpOnly: the htmx hook reads it from JS to set the header.
 	// SameSite=Lax + same-origin + the header check is the actual CSRF
 	// defense; this cookie just carries the bound token.
-	secure := isHTTPS(c)
+	secure := m.isHTTPS(c)
+	domain := m.cookieDomain(c.Request.Context())
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(CSRFCookieName, token, int(SessionTTL.Seconds()), "/", "", secure, false)
+	c.SetCookie(CSRFCookieName, token, int(SessionTTL.Seconds()), "/", domain, secure, false)
 }
 
 // SetSessionCookie writes the audplexusAuth cookie with the right security
 // flags for the request scheme. HttpOnly so JS can't read it; SameSite=Lax
 // so cross-site POSTs are blocked but normal link clicks still log you in;
 // Secure when TLS is in use.
-func SetSessionCookie(c *gin.Context, token string, ttl int) {
-	secure := isHTTPS(c)
+func (m *Manager) SetSessionCookie(c *gin.Context, token string, ttl int) {
+	secure := m.isHTTPS(c)
+	domain := m.cookieDomain(c.Request.Context())
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(SessionCookieName, token, ttl, "/", "", secure, true)
+	c.SetCookie(SessionCookieName, token, ttl, "/", domain, secure, true)
 }
 
 // ClearSessionCookie expires the session cookie. Gin/net.http uses MaxAge<0
 // to indicate deletion.
-func ClearSessionCookie(c *gin.Context) {
+func (m *Manager) ClearSessionCookie(c *gin.Context) {
+	domain := m.cookieDomain(c.Request.Context())
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(SessionCookieName, "", -1, "/", "", isHTTPS(c), true)
+	c.SetCookie(SessionCookieName, "", -1, "/", domain, m.isHTTPS(c), true)
+}
+
+// RotateCSRFToken mints a fresh CSRF token, replaces the cookie, and updates
+// the context entry so the rest of the request renders templates with the new
+// value. Call after every auth-state transition (login success, login failure,
+// logout) so an attacker who pre-captured a token by visiting /login can't
+// reuse it once the victim authenticates.
+func (m *Manager) RotateCSRFToken(c *gin.Context) string {
+	t, err := newCSRFToken()
+	if err != nil {
+		return ""
+	}
+	m.setCSRFCookie(c, t)
+	c.Set(ctxKeyCSRF, t)
+	return t
 }
 
 // CSRFToken returns the bound CSRF token for the current request (or "" if
@@ -346,14 +384,23 @@ func IsAPIKeyAuth(c *gin.Context) bool {
 	return ok
 }
 
-func isHTTPS(c *gin.Context) bool {
+// isHTTPS reports whether the request reached the server over TLS. Direct
+// TLS termination wins outright; X-Forwarded-Proto is only honored when the
+// immediate peer matches the trusted_proxies CIDR list. This matches the
+// trust model used for X-Forwarded-For in local.go — an unauthenticated LAN
+// attacker can't spoof Secure-cookie-suppression by setting their own XFP.
+// (Manager method so it can read trusted_proxies from settings.)
+func (m *Manager) isHTTPS(c *gin.Context) bool {
 	if c.Request.TLS != nil {
 		return true
 	}
-	// X-Forwarded-Proto only trusted when caller sets a Forwarded-Proto
-	// header that came from a trusted proxy. Since we don't have proxy
-	// trust wired into Gin here, conservatively check the header. This is
-	// only used for the Secure cookie flag, which is "fail-open" — worst
-	// case the cookie is sent over HTTPS without Secure, which is fine.
+	trusted := m.trustedProxies(c.Request.Context())
+	if len(trusted) == 0 {
+		return false
+	}
+	peer := requestIP(c.Request)
+	if peer == nil || !ipIn(peer, trusted) {
+		return false
+	}
 	return strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
 }

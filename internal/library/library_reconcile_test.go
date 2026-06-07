@@ -574,6 +574,7 @@ func (m *reconcileMockDB) ListBookDestinationsBy(ctx context.Context, destID str
 // Auth interface stubs — reconcile never touches them.
 func (m *reconcileMockDB) GetUserByUsername(ctx context.Context, u string) (*database.User, error) { return nil, nil }
 func (m *reconcileMockDB) GetUserByID(ctx context.Context, id int64) (*database.User, error)      { return nil, nil }
+func (m *reconcileMockDB) GetFirstUser(ctx context.Context) (*database.User, error)               { return nil, nil }
 func (m *reconcileMockDB) CountUsers(ctx context.Context) (int, error)                            { return 0, nil }
 func (m *reconcileMockDB) UpsertUser(ctx context.Context, u *database.User) error                 { return nil }
 func (m *reconcileMockDB) RotateUserIdentifier(ctx context.Context, id int64, ident string) error { return nil }

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -270,11 +271,34 @@ func (s *Server) firstRunGate(c *gin.Context) {
 	c.Next()
 }
 
+// refuseIfOnboarded bails out with 403 when the install has already finished
+// onboarding. The wizard endpoints are auth-exempt so a first-run visitor can
+// bootstrap; once that's done, those same endpoints must not be reachable
+// without auth (otherwise an anonymous LAN visitor could re-bootstrap and
+// reset the admin). Returns true when the caller already wrote a response —
+// the handler must not continue.
+func (s *Server) refuseIfOnboarded(c *gin.Context) bool {
+	if s.onboarded.Load() {
+		authLog.Warn().
+			Str("ip", c.ClientIP()).
+			Str("path", c.Request.URL.Path).
+			Msg("setup wizard endpoint hit after onboarding — refusing")
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error": "setup is already complete; use Settings → Security to manage the admin account",
+		})
+		return true
+	}
+	return false
+}
+
 // handleSetupAdminPost creates the initial admin user (or updates the
 // existing one's password if the operator re-enters the wizard) and bounces
 // the user forward to the Audible step. Posted from the Admin panel of the
 // wizard.
 func (s *Server) handleSetupAdminPost(c *gin.Context) {
+	if s.refuseIfOnboarded(c) {
+		return
+	}
 	ctx := c.Request.Context()
 	username := strings.TrimSpace(c.PostForm("username"))
 	password := c.PostForm("password")
@@ -289,6 +313,10 @@ func (s *Server) handleSetupAdminPost(c *gin.Context) {
 
 	user, err := auth.CreateOrUpdateAdmin(ctx, s.db, username, password)
 	if err != nil {
+		if errors.Is(err, database.ErrDuplicateUser) {
+			s.renderSetupWithError(c, stepKindAdmin, "A user with that username already exists. Pick a different username.")
+			return
+		}
 		s.renderSetupWithError(c, stepKindAdmin, "Could not create account: "+err.Error())
 		return
 	}
@@ -301,7 +329,7 @@ func (s *Server) handleSetupAdminPost(c *gin.Context) {
 
 	sess, err := auth.IssueSession(ctx, s.db, user, c.Request.UserAgent(), c.ClientIP())
 	if err == nil {
-		auth.SetSessionCookie(c, sess.Token, int(auth.SessionTTL.Seconds()))
+		s.authMgr.SetSessionCookie(c, sess.Token, int(auth.SessionTTL.Seconds()))
 	}
 	authLog.Info().Str("ip", c.ClientIP()).Str("username", user.Username).Msg("admin account created")
 	c.Redirect(http.StatusSeeOther, s.setupURLFor(ctx, stepKindAudible))
@@ -312,6 +340,9 @@ func (s *Server) handleSetupAdminPost(c *gin.Context) {
 // unauthenticated; the dashboard nag banner then pushes them toward
 // Settings → Security. They land on the Audible step to continue setup.
 func (s *Server) handleSetupAdminSkip(c *gin.Context) {
+	if s.refuseIfOnboarded(c) {
+		return
+	}
 	ctx := c.Request.Context()
 	_ = s.db.SetSetting(ctx, auth.SettingKeyAuthMethod, string(auth.AuthMethodNone))
 	authLog.Warn().Str("ip", c.ClientIP()).Msg("admin creation skipped — server is unauthenticated")
