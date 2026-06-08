@@ -173,6 +173,9 @@ var diagLogRenderTimer = null;
 var diagLogRenderScrollPending = false;
 var diagLogLastRendered = '';
 var diagExpandedLogKeys = {};
+var diagLogAppendQueue = [];
+var diagLogRowSeq = 0;
+var diagLogForceFullRender = true;
 
 function diagShouldAutoScroll(stream) {
     if (!stream) return false;
@@ -184,6 +187,82 @@ function diagLogKey(e) {
     var t = String(e.time || '');
     var raw = String(e.raw_line || e.line || '');
     return t + '|' + raw;
+}
+
+
+function diagLogLevelMatchesFilter(entryLevel, selectedLevel) {
+    if (selectedLevel === 'all') return true;
+    return entryLevel === selectedLevel;
+}
+
+function diagBuildLogEntryHTML(e, rowId) {
+    var lvl = (e.level || 'info').toLowerCase();
+    var color = ({info:'#6ab6ff', warn:'#ffb547', error:'#ff7c7c', debug:'#9aa9b3'})[lvl] || 'var(--text-muted)';
+    var ts = new Date(e.time).toLocaleTimeString();
+    var hasDetails = e.component || (e.fields && Object.keys(e.fields).length > 0);
+    var key = diagLogKey(e);
+    var isExpanded = !!diagExpandedLogKeys[key];
+    var msg = escDiag(e.message || e.raw_line || '');
+    var html = '<div class="diag-log-entry">';
+    html += '<div class="diag-log-row" id="' + rowId + '" data-log-key="' + escDiag(key) + '" data-log-raw="' + escDiag(e.raw_line) + '" data-log-ts="' + escDiag(ts) + '">' +
+        '<span class="diag-log-ts">' + escDiag(ts) + '</span>' +
+        '<span class="diag-log-level" style="color:' + color + '">[' + escDiag(lvl.toUpperCase()) + ']</span>' +
+        '<span class="diag-log-msg">' + msg + '</span>';
+    if (hasDetails) {
+        html += '<button type="button" class="diag-log-expand" title="Show details" aria-label="Show details" style="width:22px;height:22px;min-width:22px;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:0 0 22px" onclick="diagToggleExpand(event, this)" aria-expanded="' + (isExpanded ? 'true' : 'false') + '"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>';
+    }
+    html += '<button type="button" class="diag-log-copy" title="Copy line" aria-label="Copy line" style="width:22px;height:22px;min-width:22px;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:0 0 22px" onclick="diagCopyRow(event, this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>';
+    if (hasDetails) {
+        html += '<div class="diag-log-details" id="' + rowId + '-details"' + (isExpanded ? '' : ' hidden') + '><div class="diag-log-detail-section">';
+        if (e.component) {
+            html += '<div class="diag-log-detail-row"><span class="diag-log-detail-key">Component:</span> <span class="diag-log-detail-val">' + escDiag(e.component) + '</span></div>';
+        }
+        if (e.fields) {
+            for (var key in e.fields) {
+                if (e.fields.hasOwnProperty(key)) {
+                    html += '<div class="diag-log-detail-row"><span class="diag-log-detail-key">' + escDiag(key) + ':</span> <span class="diag-log-detail-val">' + escDiag(String(e.fields[key])) + '</span></div>';
+                }
+            }
+        }
+        html += '<div class="diag-log-detail-row diag-log-detail-raw"><span class="diag-log-detail-key">Raw:</span> <span class="diag-log-detail-val">' + escDiag(e.raw_line) + '</span></div></div></div>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function diagTrimRenderedLogEntries(stream) {
+    var nodes = stream.querySelectorAll('.diag-log-entry');
+    while (nodes.length > diagLogRenderLimit) {
+        nodes[0].remove();
+        nodes = stream.querySelectorAll('.diag-log-entry');
+    }
+}
+
+function diagAppendQueuedLogs(scrollToBottom) {
+    if (!diagLogAppendQueue.length) return;
+    var levelSel = document.getElementById('diag-log-level');
+    var level = levelSel ? levelSel.value : 'all';
+    if (level !== 'all') {
+        diagLogForceFullRender = true;
+        return;
+    }
+    var stream = document.getElementById('diag-log-stream');
+    if (!stream) return;
+    if (!stream.querySelector('.diag-log-entry')) {
+        stream.innerHTML = '';
+    }
+    var html = '';
+    for (var i = 0; i < diagLogAppendQueue.length; i++) {
+        var e = diagLogAppendQueue[i];
+        var rowId = 'diag-log-row-' + (++diagLogRowSeq);
+        html += diagBuildLogEntryHTML(e, rowId);
+    }
+    diagLogAppendQueue = [];
+    if (html) {
+        stream.insertAdjacentHTML('beforeend', html);
+        diagTrimRenderedLogEntries(stream);
+    }
+    if (scrollToBottom) stream.scrollTop = stream.scrollHeight;
 }
 
 function diagCanRenderLogs() {
@@ -205,39 +284,12 @@ function diagRenderLogs(scrollToBottom) {
         entries = entries.slice(entries.length - diagLogRenderLimit);
     }
 
-    var rows = entries.map(function(e, idx) {
+    diagLogRowSeq = 0;
+    var rows = entries.map(function(e) {
         var lvl = (e.level || 'info').toLowerCase();
-        if (level !== 'all' && lvl !== level) return '';
-        var color = ({info:'#6ab6ff', warn:'#ffb547', error:'#ff7c7c', debug:'#9aa9b3'})[lvl] || 'var(--text-muted)';
-        var ts = new Date(e.time).toLocaleTimeString();
-        var hasDetails = e.component || (e.fields && Object.keys(e.fields).length > 0);
-        var rowId = 'diag-log-row-' + idx;
-        var key = diagLogKey(e);
-        var isExpanded = !!diagExpandedLogKeys[key];
-        var msg = escDiag(e.message || e.raw_line || '');
-        var html = '<div class="diag-log-row" id="' + rowId + '" data-log-key="' + escDiag(key) + '" data-log-raw="' + escDiag(e.raw_line) + '" data-log-ts="' + escDiag(ts) + '">' +
-            '<span class="diag-log-ts">' + escDiag(ts) + '</span>' +
-            '<span class="diag-log-level" style="color:' + color + '">[' + escDiag(lvl.toUpperCase()) + ']</span>' +
-            '<span class="diag-log-msg">' + msg + '</span>';
-        if (hasDetails) {
-            html += '<button type="button" class="diag-log-expand" title="Show details" aria-label="Show details" style="width:22px;height:22px;min-width:22px;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:0 0 22px" onclick="diagToggleExpand(event, this)" aria-expanded="' + (isExpanded ? 'true' : 'false') + '"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>';
-        }
-        html += '<button type="button" class="diag-log-copy" title="Copy line" aria-label="Copy line" style="width:22px;height:22px;min-width:22px;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:0 0 22px" onclick="diagCopyRow(event, this)"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>';
-        if (hasDetails) {
-            html += '<div class="diag-log-details" id="' + rowId + '-details"' + (isExpanded ? '' : ' hidden') + '><div class="diag-log-detail-section">';
-            if (e.component) {
-                html += '<div class="diag-log-detail-row"><span class="diag-log-detail-key">Component:</span> <span class="diag-log-detail-val">' + escDiag(e.component) + '</span></div>';
-            }
-            if (e.fields) {
-                for (var key in e.fields) {
-                    if (e.fields.hasOwnProperty(key)) {
-                        html += '<div class="diag-log-detail-row"><span class="diag-log-detail-key">' + escDiag(key) + ':</span> <span class="diag-log-detail-val">' + escDiag(String(e.fields[key])) + '</span></div>';
-                    }
-                }
-            }
-            html += '<div class="diag-log-detail-row diag-log-detail-raw"><span class="diag-log-detail-key">Raw:</span> <span class="diag-log-detail-val">' + escDiag(e.raw_line) + '</span></div></div></div>';
-        }
-        return html;
+        if (!diagLogLevelMatchesFilter(lvl, level)) return '';
+        var rowId = 'diag-log-row-' + (++diagLogRowSeq);
+        return diagBuildLogEntryHTML(e, rowId);
     }).filter(Boolean).join('');
 
     var rendered = rows || '<div class="muted">No log lines in buffer yet.</div>';
@@ -247,6 +299,7 @@ function diagRenderLogs(scrollToBottom) {
     }
     stream.innerHTML = rendered;
     diagLogLastRendered = rendered;
+    diagLogAppendQueue = [];
     if (scrollToBottom) stream.scrollTop = stream.scrollHeight;
 }
 
@@ -256,7 +309,12 @@ function diagFlushLogRender() {
         diagLogPendingRender = true;
         return;
     }
-    diagRenderLogs(diagLogRenderScrollPending);
+    if (diagLogForceFullRender) {
+        diagRenderLogs(diagLogRenderScrollPending);
+        diagLogForceFullRender = false;
+    } else {
+        diagAppendQueuedLogs(diagLogRenderScrollPending);
+    }
     diagLogRenderScrollPending = false;
     diagLogPendingRender = false;
 }
@@ -290,6 +348,8 @@ function diagConnectLogStream() {
             var payload = JSON.parse(ev.data || '{}');
             var entries = payload.entries || [];
             diagLogEntries = entries.slice(-diagLogMaxEntries);
+            diagLogAppendQueue = [];
+            diagLogForceFullRender = true;
             diagRequestLogRender(true);
         } catch (e) {
             if (stream) stream.innerHTML = '<div class="muted">Failed to parse bootstrap logs.</div>';
@@ -303,6 +363,7 @@ function diagConnectLogStream() {
             if (diagLogEntries.length > diagLogMaxEntries) {
                 diagLogEntries = diagLogEntries.slice(diagLogEntries.length - diagLogMaxEntries);
             }
+            diagLogAppendQueue.push(entry);
             var streamEl = document.getElementById('diag-log-stream');
             diagRequestLogRender(diagShouldAutoScroll(streamEl));
         } catch (e) {
@@ -323,6 +384,7 @@ function diagStartLogStream() {
 }
 
 function diagRefreshLogs(scrollToBottom) {
+    diagLogForceFullRender = true;
     var streamEl = document.getElementById('diag-log-stream');
     diagRequestLogRender(!!scrollToBottom || diagShouldAutoScroll(streamEl));
 }
@@ -343,6 +405,7 @@ window.addEventListener('beforeunload', function() {
 var diagLogLevelSelect = document.getElementById('diag-log-level');
 if (diagLogLevelSelect) {
     diagLogLevelSelect.addEventListener('change', function() {
+        diagLogForceFullRender = true;
         diagRequestLogRender(false);
     });
 }
@@ -351,6 +414,7 @@ var diagLogPausedToggle = document.getElementById('diag-log-paused');
 if (diagLogPausedToggle) {
     diagLogPausedToggle.addEventListener('change', function() {
         if (!diagLogPausedToggle.checked) {
+            diagLogForceFullRender = true;
             diagRequestLogRender(true);
         }
     });
