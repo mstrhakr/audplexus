@@ -166,8 +166,19 @@ function diagRefreshEnv() {
 var diagLogSource = null;
 var diagLogEntries = [];
 var diagLogMaxEntries = 1024;
+var diagLogRenderLimit = 300;
+var diagLogRenderIntervalMs = 120;
 var diagLogPendingRender = false;
+var diagLogRenderTimer = null;
+var diagLogRenderScrollPending = false;
+var diagLogLastRendered = '';
 var diagExpandedLogKeys = {};
+
+function diagShouldAutoScroll(stream) {
+    if (!stream) return false;
+    // Only auto-follow when the user is already near the bottom.
+    return (stream.scrollTop + stream.clientHeight) >= (stream.scrollHeight - 36);
+}
 
 function diagLogKey(e) {
     var t = String(e.time || '');
@@ -189,7 +200,12 @@ function diagRenderLogs(scrollToBottom) {
     var stream = document.getElementById('diag-log-stream');
     if (!stream) return;
 
-    var rows = diagLogEntries.map(function(e, idx) {
+    var entries = diagLogEntries;
+    if (entries.length > diagLogRenderLimit) {
+        entries = entries.slice(entries.length - diagLogRenderLimit);
+    }
+
+    var rows = entries.map(function(e, idx) {
         var lvl = (e.level || 'info').toLowerCase();
         if (level !== 'all' && lvl !== level) return '';
         var color = ({info:'#6ab6ff', warn:'#ffb547', error:'#ff7c7c', debug:'#9aa9b3'})[lvl] || 'var(--text-muted)';
@@ -225,22 +241,38 @@ function diagRenderLogs(scrollToBottom) {
     }).filter(Boolean).join('');
 
     var rendered = rows || '<div class="muted">No log lines in buffer yet.</div>';
-    if (stream.dataset.lastRendered === rendered) {
+    if (diagLogLastRendered === rendered) {
         if (scrollToBottom) stream.scrollTop = stream.scrollHeight;
         return;
     }
     stream.innerHTML = rendered;
-    stream.dataset.lastRendered = rendered;
+    diagLogLastRendered = rendered;
     if (scrollToBottom) stream.scrollTop = stream.scrollHeight;
+}
+
+function diagFlushLogRender() {
+    diagLogRenderTimer = null;
+    if (!diagCanRenderLogs()) {
+        diagLogPendingRender = true;
+        return;
+    }
+    diagRenderLogs(diagLogRenderScrollPending);
+    diagLogRenderScrollPending = false;
+    diagLogPendingRender = false;
 }
 
 function diagRequestLogRender(scrollToBottom) {
     if (!diagCanRenderLogs()) {
         diagLogPendingRender = true;
+        diagLogRenderScrollPending = diagLogRenderScrollPending || !!scrollToBottom;
         return;
     }
-    diagRenderLogs(scrollToBottom);
-    diagLogPendingRender = false;
+    diagLogRenderScrollPending = diagLogRenderScrollPending || !!scrollToBottom;
+    if (diagLogRenderTimer) {
+        diagLogPendingRender = true;
+        return;
+    }
+    diagLogRenderTimer = setTimeout(diagFlushLogRender, diagLogRenderIntervalMs);
 }
 
 function diagConnectLogStream() {
@@ -248,7 +280,7 @@ function diagConnectLogStream() {
     var stream = document.getElementById('diag-log-stream');
     if (stream) {
         stream.innerHTML = '<div class="muted">Connecting log stream…</div>';
-        stream.dataset.lastRendered = '';
+        diagLogLastRendered = '';
     }
     var source = new EventSource('/api/diagnostics/logs/stream?n=300');
     diagLogSource = source;
@@ -271,7 +303,8 @@ function diagConnectLogStream() {
             if (diagLogEntries.length > diagLogMaxEntries) {
                 diagLogEntries = diagLogEntries.slice(diagLogEntries.length - diagLogMaxEntries);
             }
-            diagRequestLogRender(true);
+            var streamEl = document.getElementById('diag-log-stream');
+            diagRequestLogRender(diagShouldAutoScroll(streamEl));
         } catch (e) {
             // Ignore malformed event and keep stream alive.
         }
@@ -280,7 +313,7 @@ function diagConnectLogStream() {
     source.onerror = function() {
         if (stream) {
             stream.innerHTML = '<div class="muted">Log stream disconnected. Reconnecting…</div>';
-            stream.dataset.lastRendered = '';
+            diagLogLastRendered = '';
         }
     };
 }
@@ -290,7 +323,8 @@ function diagStartLogStream() {
 }
 
 function diagRefreshLogs(scrollToBottom) {
-    diagRequestLogRender(!!scrollToBottom);
+    var streamEl = document.getElementById('diag-log-stream');
+    diagRequestLogRender(!!scrollToBottom || diagShouldAutoScroll(streamEl));
 }
 
 document.addEventListener('visibilitychange', function() {
