@@ -41,7 +41,7 @@ func (s *SQLiteDB) Close() error {
 }
 
 func (s *SQLiteDB) Reset(ctx context.Context) error {
-	tables := []string{"sessions", "users", "download_queue", "sync_history", "settings", "devices", "books"}
+	tables := []string{"sessions", "users", "download_queue", "sync_history", "settings", "devices", "audible_accounts", "books"}
 	for _, t := range tables {
 		if _, err := s.db.ExecContext(ctx, "DELETE FROM "+t); err != nil {
 			return fmt.Errorf("reset table %s: %w", t, err)
@@ -563,6 +563,110 @@ func (s *SQLiteDB) ListDevices(ctx context.Context) ([]Device, error) {
 func (s *SQLiteDB) DeleteDevice(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM devices WHERE id = ?`, id)
 	return err
+}
+
+// --- Audible accounts ---
+
+const audibleAccountColumns = `id, display_name, marketplace, customer_id, credentials, enabled, created_at, updated_at`
+
+func (s *SQLiteDB) CreateAudibleAccount(ctx context.Context, a *AudibleAccount) error {
+	now := time.Now()
+	a.UpdatedAt = now
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = now
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO audible_accounts (`+audibleAccountColumns+`)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.DisplayName, a.Marketplace, a.CustomerID, a.Credentials, a.Enabled, a.CreatedAt, a.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("insert audible account: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteDB) GetAudibleAccount(ctx context.Context, id string) (*AudibleAccount, error) {
+	return s.scanAudibleAccount(s.db.QueryRowContext(ctx,
+		`SELECT `+audibleAccountColumns+` FROM audible_accounts WHERE id = ?`, id))
+}
+
+func (s *SQLiteDB) GetAudibleAccountByCustomerID(ctx context.Context, customerID string) (*AudibleAccount, error) {
+	if strings.TrimSpace(customerID) == "" {
+		return nil, nil
+	}
+	return s.scanAudibleAccount(s.db.QueryRowContext(ctx,
+		`SELECT `+audibleAccountColumns+` FROM audible_accounts WHERE customer_id = ? LIMIT 1`, customerID))
+}
+
+func (s *SQLiteDB) ListAudibleAccounts(ctx context.Context) ([]AudibleAccount, error) {
+	return s.queryAudibleAccounts(ctx, `SELECT `+audibleAccountColumns+` FROM audible_accounts ORDER BY created_at`)
+}
+
+func (s *SQLiteDB) ListEnabledAudibleAccounts(ctx context.Context) ([]AudibleAccount, error) {
+	return s.queryAudibleAccounts(ctx, `SELECT `+audibleAccountColumns+` FROM audible_accounts WHERE enabled = 1 ORDER BY created_at`)
+}
+
+func (s *SQLiteDB) UpdateAudibleAccount(ctx context.Context, a *AudibleAccount) error {
+	a.UpdatedAt = time.Now()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE audible_accounts SET display_name = ?, marketplace = ?, customer_id = ?,
+		    credentials = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+		a.DisplayName, a.Marketplace, a.CustomerID, a.Credentials, a.Enabled, a.UpdatedAt, a.ID)
+	if err != nil {
+		return fmt.Errorf("update audible account: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteDB) DeleteAudibleAccount(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM audible_accounts WHERE id = ?`, id)
+	return err
+}
+
+func (s *SQLiteDB) SetBookAccount(ctx context.Context, asin, accountID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE books SET account_id = ? WHERE asin = ?`, accountID, asin)
+	return err
+}
+
+func (s *SQLiteDB) GetBookAccount(ctx context.Context, asin string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT account_id FROM books WHERE asin = ?`, asin).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
+func (s *SQLiteDB) queryAudibleAccounts(ctx context.Context, query string, args ...any) ([]AudibleAccount, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list audible accounts: %w", err)
+	}
+	defer rows.Close()
+	var out []AudibleAccount
+	for rows.Next() {
+		var a AudibleAccount
+		if err := rows.Scan(&a.ID, &a.DisplayName, &a.Marketplace, &a.CustomerID,
+			&a.Credentials, &a.Enabled, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan audible account: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteDB) scanAudibleAccount(row *sql.Row) (*AudibleAccount, error) {
+	var a AudibleAccount
+	err := row.Scan(&a.ID, &a.DisplayName, &a.Marketplace, &a.CustomerID,
+		&a.Credentials, &a.Enabled, &a.CreatedAt, &a.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan audible account: %w", err)
+	}
+	return &a, nil
 }
 
 // --- Helpers ---

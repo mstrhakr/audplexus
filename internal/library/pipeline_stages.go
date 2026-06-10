@@ -230,7 +230,7 @@ func (dm *DownloadManager) handleDownloadStage(ctx context.Context, item *databa
 		},
 	}
 
-	bytesWritten, err := dm.client.DownloadBook(itemCtx, item.ASIN, writer)
+	bytesWritten, err := dm.clientForASIN(itemCtx, item.ASIN).DownloadBook(itemCtx, item.ASIN, writer)
 	// Watchdog goroutine winds down once itemCtx is done; wait so it's
 	// fully gone before we exit and cancelItem fires from the deferred
 	// cleanup (avoids a brief leak window if the worker keeps churning).

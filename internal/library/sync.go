@@ -177,6 +177,12 @@ type SyncService struct {
 	db     database.Database
 	client *audible.Client
 
+	// accounts, when set, drives multi-account "sync all, merge" behaviour:
+	// the sync iterates every enabled+authenticated account and merges their
+	// libraries. When nil, the service falls back to the single client above
+	// (tests / legacy embedded use).
+	accounts *AccountManager
+
 	libraryDir string
 
 	// ffmpeg and audnexus are optional dependencies used by the
@@ -278,6 +284,21 @@ func (s *SyncService) subPhaseFnFor(phase SyncPhase) SubPhaseFn {
 // Optional — when nil, the repair phase fails with a clear message.
 func (s *SyncService) SetFFmpeg(ff *audio.FFmpeg) {
 	s.ffmpeg = ff
+}
+
+// SetAccountManager wires the multi-account manager. When set, doAudibleSync
+// merges every enabled+authenticated account's library. Safe to leave unset.
+func (s *SyncService) SetAccountManager(m *AccountManager) { s.accounts = m }
+
+// stampBookAccount records the owning account for a book after upsert. No-op
+// for the legacy single-account path (empty account id).
+func (s *SyncService) stampBookAccount(ctx context.Context, asin, accountID string) {
+	if accountID == "" {
+		return
+	}
+	if err := s.db.SetBookAccount(ctx, asin, accountID); err != nil {
+		syncLog.Warn().Err(err).Str("asin", asin).Str("account_id", accountID).Msg("failed to stamp book account")
+	}
 }
 
 // SetAudnexusClient wires the audnexus client used by Metadata Repair
@@ -1015,6 +1036,37 @@ func phaseRunsInMode(mode SyncMode, phase SyncPhase) bool {
 	return phase == PhaseAudibleSync
 }
 
+// accountItem pairs a fetched library item with the account (client + id) it
+// came from, so the merge-all sync can route entitlement checks to the right
+// client and stamp each book with its owning account.
+type accountItem struct {
+	client    *audible.Client
+	accountID string
+	item      audible.Book
+}
+
+// syncTargets returns the (client, accountID) pairs to sync. With an
+// AccountManager wired it returns every enabled, authenticated account; without
+// one (tests / legacy embedded use) it falls back to the single s.client with
+// an empty account id.
+func (s *SyncService) syncTargets() []EnabledAccount {
+	if s.accounts != nil {
+		var out []EnabledAccount
+		for _, a := range s.accounts.EnabledAccounts() {
+			if a.Client != nil && a.Client.IsAuthenticated() {
+				out = append(out, a)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	if s.client != nil {
+		return []EnabledAccount{{ID: "", Client: s.client}}
+	}
+	return nil
+}
+
 func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.SyncHistory) (int, error) {
 	startTime := time.Now()
 	syncLog.Info().Msg("starting audible library sync")
@@ -1027,28 +1079,52 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	fetchStart := time.Now()
 	libraryGroups := append([]string{}, audible.DefaultResponseGroups...)
 	libraryGroups = append(libraryGroups, "relationships")
-	books, err := s.client.GetAllLibrary(ctx, audible.WithResponseGroups(libraryGroups...))
+	// Fetch every account's library and merge into one work list. A book owned
+	// by multiple accounts is attributed to the FIRST account that reports it
+	// (stable creation order); whichever owns it can download it.
+	targets := s.syncTargets()
+	if len(targets) == 0 {
+		return 0, fmt.Errorf("no authenticated audible account to sync")
+	}
+	var entries []accountItem
+	seenASIN := make(map[string]struct{})
+	for _, t := range targets {
+		accBooks, err := t.Client.GetAllLibrary(ctx, audible.WithResponseGroups(libraryGroups...))
+		if err != nil {
+			syncLog.Error().Err(err).Str("account_id", t.ID).Msg("failed to fetch audible library for account")
+			// One account failing shouldn't abort the whole merge — skip it and
+			// keep syncing the others. If ALL fail, entries stays empty and we
+			// return an error below.
+			continue
+		}
+		syncLog.Info().Str("account_id", t.ID).Int("books", len(accBooks)).Msg("fetched account library")
+		for _, item := range accBooks {
+			if _, dup := seenASIN[item.ASIN]; dup {
+				continue
+			}
+			seenASIN[item.ASIN] = struct{}{}
+			entries = append(entries, accountItem{client: t.Client, accountID: t.ID, item: item})
+		}
+	}
+	if len(entries) == 0 {
+		return 0, fmt.Errorf("audible library fetch failed for all accounts")
+	}
 	fetchMs := time.Since(fetchStart).Milliseconds()
 
-	if err != nil {
-		syncLog.Error().Err(err).Int("fetch_ms", int(fetchMs)).Msg("failed to fetch audible library")
-		return 0, err
-	}
-
-	syncLog.Info().Int("total_books", len(books)).Int("fetch_ms", int(fetchMs)).Msg("fetched audible library")
-
-	syncRecord.BooksFound = len(books)
+	total := len(entries)
+	syncRecord.BooksFound = total
 	s.mu.Lock()
-	s.progress.BooksFound = len(books)
+	s.progress.BooksFound = total
 	for i := range s.progress.Phases {
 		if s.progress.Phases[i].Name == PhaseAudibleSync {
-			setPhaseProgress(&s.progress.Phases[i], 0, len(books), false, s.progress.Phases[i].Status)
+			setPhaseProgress(&s.progress.Phases[i], 0, total, false, s.progress.Phases[i].Status)
 			break
 		}
 	}
 	s.emitLocked()
 	s.mu.Unlock()
 	_ = s.db.UpdateSync(ctx, syncRecord)
+	syncLog.Info().Int("total_books", total).Int("fetch_ms", int(fetchMs)).Int("accounts", len(targets)).Msg("fetched merged audible library")
 
 	added := 0
 	scanned := 0
@@ -1057,14 +1133,15 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	dbWriteTimeMs := int64(0)
 	lastProgressEmit := 0
 
-	for _, item := range books {
+	for _, entry := range entries {
+		client := entry.client
+		item := entry.item
 		select {
 		case <-ctx.Done():
 			syncLog.Warn().Int("scanned", scanned).Int("added", added).Msg("audible sync cancelled")
 			return added, ctx.Err()
 		default:
 		}
-
 		book := convertBook(item)
 		syncLog.Trace().Str("asin", book.ASIN).Str("title", book.Title).Msg("processing book")
 
@@ -1072,11 +1149,11 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		if scanned > 0 && scanned%500 == 0 {
 			elapsed := time.Since(startTime)
 			avgMs := elapsed.Milliseconds() / int64(scanned)
-			eta := time.Duration((int64(len(books))-int64(scanned))*avgMs) * time.Millisecond
+			eta := time.Duration((int64(total)-int64(scanned))*avgMs) * time.Millisecond
 			syncLog.Info().
 				Int("scanned", scanned).
 				Int("added", added).
-				Int("total", len(books)).
+				Int("total", total).
 				Int("elapsed_sec", int(elapsed.Seconds())).
 				Int("eta_sec", int(eta.Seconds())).
 				Msg("audible sync batch progress")
@@ -1091,7 +1168,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			s.progress.BooksAdded = added
 			for i := range s.progress.Phases {
 				if s.progress.Phases[i].Name == PhaseAudibleSync {
-					setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
+					setPhaseProgress(&s.progress.Phases[i], scanned, total, false, s.progress.Phases[i].Status)
 					break
 				}
 			}
@@ -1114,7 +1191,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			s.progress.BooksAdded = added
 			for i := range s.progress.Phases {
 				if s.progress.Phases[i].Name == PhaseAudibleSync {
-					setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
+					setPhaseProgress(&s.progress.Phases[i], scanned, total, false, s.progress.Phases[i].Status)
 					break
 				}
 			}
@@ -1129,10 +1206,9 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		// (e.g. once-Plus-catalog titles the user no longer has access to).
 		if existing == nil {
 			entitleStart := time.Now()
-			canDownload, cdErr := s.client.CanDownload(ctx, item)
+			canDownload, cdErr := client.CanDownload(ctx, item)
 			entitleMs := time.Since(entitleStart).Milliseconds()
 			entitlementCheckTimeMs += entitleMs
-
 			if cdErr != nil || !canDownload {
 				reason := "Audible entitlement denied"
 				if cdErr != nil {
@@ -1144,6 +1220,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 				if err := s.db.UpsertBook(ctx, &book); err != nil {
 					syncLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to upsert unavailable book")
 				} else {
+					s.stampBookAccount(ctx, book.ASIN, entry.accountID)
 					keepASIN[book.ASIN] = struct{}{}
 					added++
 				}
@@ -1153,7 +1230,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 				s.progress.BooksAdded = added
 				for i := range s.progress.Phases {
 					if s.progress.Phases[i].Name == PhaseAudibleSync {
-						setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
+						setPhaseProgress(&s.progress.Phases[i], scanned, total, false, s.progress.Phases[i].Status)
 						break
 					}
 				}
@@ -1169,10 +1246,9 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		} else if existing.Status == database.BookStatusUnavailable {
 			// User may have regained access (Plus added title back). Re-check.
 			entitleStart := time.Now()
-			canDownload, cdErr := s.client.CanDownload(ctx, item)
+			canDownload, cdErr := client.CanDownload(ctx, item)
 			entitleMs := time.Since(entitleStart).Milliseconds()
 			entitlementCheckTimeMs += entitleMs
-
 			if cdErr == nil && canDownload {
 				syncLog.Info().Str("asin", book.ASIN).Int("entitle_ms", int(entitleMs)).Msg("previously-unavailable book is now accessible")
 				book.Status = database.BookStatusNew
@@ -1215,7 +1291,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			s.progress.BooksAdded = added
 			for i := range s.progress.Phases {
 				if s.progress.Phases[i].Name == PhaseAudibleSync {
-					setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
+					setPhaseProgress(&s.progress.Phases[i], scanned, total, false, s.progress.Phases[i].Status)
 					break
 				}
 			}
@@ -1230,6 +1306,8 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		upsertMs := time.Since(upsertStart).Milliseconds()
 		dbWriteTimeMs += upsertMs
 
+		s.stampBookAccount(ctx, book.ASIN, entry.accountID)
+
 		scanned++
 		if scanned-lastProgressEmit >= 20 {
 			s.mu.Lock()
@@ -1237,7 +1315,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			s.progress.BooksAdded = added
 			for i := range s.progress.Phases {
 				if s.progress.Phases[i].Name == PhaseAudibleSync {
-					setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
+					setPhaseProgress(&s.progress.Phases[i], scanned, total, false, s.progress.Phases[i].Status)
 					break
 				}
 			}
@@ -1271,7 +1349,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 
 	// Adjust progress/book counts to reflect kept items only.
 	eligibleCount := len(keepASIN)
-	if len(books) > 0 {
+	if total > 0 {
 		s.mu.Lock()
 		s.progress.BooksFound = eligibleCount
 		s.progress.BooksScanned = scanned
@@ -1285,7 +1363,10 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	}
 
 	totalElapsed := time.Since(startTime)
-	avgDbMs := dbWriteTimeMs / int64(scanned)
+	avgDbMs := int64(0)
+	if scanned > 0 {
+		avgDbMs = dbWriteTimeMs / int64(scanned)
+	}
 	avgEntitleMs := int64(0)
 	if added > 0 {
 		// Only new books trigger entitlement checks

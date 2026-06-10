@@ -131,6 +131,31 @@ func (s *settingsOnlyStubDB) ListDevices(ctx context.Context) ([]database.Device
 	return nil, nil
 }
 func (s *settingsOnlyStubDB) DeleteDevice(ctx context.Context, id int64) error { return nil }
+func (s *settingsOnlyStubDB) CreateAudibleAccount(ctx context.Context, a *database.AudibleAccount) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) GetAudibleAccount(ctx context.Context, id string) (*database.AudibleAccount, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) GetAudibleAccountByCustomerID(ctx context.Context, customerID string) (*database.AudibleAccount, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) ListAudibleAccounts(ctx context.Context) ([]database.AudibleAccount, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) ListEnabledAudibleAccounts(ctx context.Context) ([]database.AudibleAccount, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) UpdateAudibleAccount(ctx context.Context, a *database.AudibleAccount) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) DeleteAudibleAccount(ctx context.Context, id string) error { return nil }
+func (s *settingsOnlyStubDB) SetBookAccount(ctx context.Context, asin, accountID string) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) GetBookAccount(ctx context.Context, asin string) (string, error) {
+	return "", nil
+}
 
 // Library destinations + book destinations (PR-B). Stub returns zero values.
 func (s *settingsOnlyStubDB) CreateLibraryDestination(ctx context.Context, d *database.LibraryDestination) error {

@@ -26,6 +26,23 @@ import (
 
 var dlLog = logging.Component("download")
 
+// clientForASIN resolves the Audible client that owns a book by ASIN. With an
+// AccountManager wired it routes to the owning account's client (falling back
+// to the primary account for legacy/unstamped books); without one it returns
+// the single configured client.
+func (dm *DownloadManager) clientForASIN(ctx context.Context, asin string) *audible.Client {
+	if dm.accounts != nil {
+		if c := dm.accounts.ClientForBook(ctx, asin); c != nil {
+			return c
+		}
+	}
+	return dm.client
+}
+
+// SetAccountManager wires the multi-account manager for per-book download
+// routing. Safe to leave unset.
+func (dm *DownloadManager) SetAccountManager(m *AccountManager) { dm.accounts = m }
+
 // DownloadManager handles the full audiobook pipeline:
 // download → decrypt → enrich metadata → organize into library.
 type DownloadManager struct {
@@ -50,6 +67,11 @@ type DownloadManager struct {
 	// from PR-0 in pipeline_stages.go. May be nil during early app boot
 	// before destinations are wired; pipeline guards on nil.
 	destinations *DestinationManager
+
+	// accounts, when set, routes each book's download/decrypt to the Audible
+	// client of its owning account. When nil, every book uses the single
+	// `client` above (tests / legacy single-account installs).
+	accounts *AccountManager
 
 	// Pipeline concurrency settings
 	downloadConcurrency int
@@ -1057,8 +1079,8 @@ func (dm *DownloadManager) decryptBook(ctx context.Context, item *pipelineItem, 
 			return "", err
 		}
 	} else {
-		// Need activation bytes for AAX
-		activationResp, err := dm.client.GetActivationBytes(ctx)
+		// Need activation bytes for AAX — use the book's owning account.
+		activationResp, err := dm.clientForASIN(ctx, asin).GetActivationBytes(ctx)
 		if err != nil {
 			return "", fmt.Errorf("get activation bytes: %w", err)
 		}

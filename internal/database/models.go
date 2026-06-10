@@ -35,6 +35,12 @@ type Book struct {
 	FileSize           int64      `json:"file_size"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+
+	// AccountID is the Audible account this book was synced from. It is NOT
+	// populated by the normal book scans (to keep those hot paths untouched);
+	// resolve it on demand via GetBookAccount. Empty means "legacy /
+	// single-account" and download routing falls back to the default account.
+	AccountID string `json:"account_id,omitempty"`
 }
 
 // BookStatus represents the processing state of a book.
@@ -116,6 +122,27 @@ type Device struct {
 	IsActive    bool      `json:"is_active"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// AudibleAccount is one connected Audible account. Mirrors the
+// LibraryDestination model: most installs have exactly one, but the schema and
+// UI support several. Credentials holds the full audible.Credentials JSON blob
+// (same shape as the legacy credentials.json file).
+type AudibleAccount struct {
+	ID          string    `json:"id"`
+	DisplayName string    `json:"display_name"`
+	Marketplace string    `json:"marketplace"`
+	CustomerID  string    `json:"customer_id"`
+	Credentials []byte    `json:"-"` // sensitive; never marshal
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// HasCredentials reports whether the account has a stored credential blob,
+// without exposing it. Used by the Settings UI to show auth status.
+func (a *AudibleAccount) HasCredentials() bool {
+	return len(a.Credentials) > 0
 }
 
 // LibraryDestinationType identifies a destination kind. Matches the `type`

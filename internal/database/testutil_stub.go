@@ -80,6 +80,23 @@ func (s *StubDB) SaveDevice(ctx context.Context, d *Device) error        { retur
 func (s *StubDB) ListDevices(ctx context.Context) ([]Device, error)      { return nil, nil }
 func (s *StubDB) DeleteDevice(ctx context.Context, id int64) error       { return nil }
 
+// --- Audible accounts ---
+func (s *StubDB) CreateAudibleAccount(ctx context.Context, a *AudibleAccount) error { return nil }
+func (s *StubDB) GetAudibleAccount(ctx context.Context, id string) (*AudibleAccount, error) {
+	return nil, nil
+}
+func (s *StubDB) GetAudibleAccountByCustomerID(ctx context.Context, customerID string) (*AudibleAccount, error) {
+	return nil, nil
+}
+func (s *StubDB) ListAudibleAccounts(ctx context.Context) ([]AudibleAccount, error) { return nil, nil }
+func (s *StubDB) ListEnabledAudibleAccounts(ctx context.Context) ([]AudibleAccount, error) {
+	return nil, nil
+}
+func (s *StubDB) UpdateAudibleAccount(ctx context.Context, a *AudibleAccount) error { return nil }
+func (s *StubDB) DeleteAudibleAccount(ctx context.Context, id string) error         { return nil }
+func (s *StubDB) SetBookAccount(ctx context.Context, asin, accountID string) error  { return nil }
+func (s *StubDB) GetBookAccount(ctx context.Context, asin string) (string, error)   { return "", nil }
+
 // --- Library destinations ---
 func (s *StubDB) CreateLibraryDestination(ctx context.Context, d *LibraryDestination) error {
 	return nil

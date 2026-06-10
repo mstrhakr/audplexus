@@ -50,6 +50,22 @@ type Database interface {
 	ListDevices(ctx context.Context) ([]Device, error)
 	DeleteDevice(ctx context.Context, id int64) error
 
+	// Audible accounts (multi-account model). Most installs have one; the
+	// schema + UI support several, each with its own credentials/marketplace.
+	CreateAudibleAccount(ctx context.Context, a *AudibleAccount) error
+	GetAudibleAccount(ctx context.Context, id string) (*AudibleAccount, error)
+	GetAudibleAccountByCustomerID(ctx context.Context, customerID string) (*AudibleAccount, error)
+	ListAudibleAccounts(ctx context.Context) ([]AudibleAccount, error)
+	ListEnabledAudibleAccounts(ctx context.Context) ([]AudibleAccount, error)
+	UpdateAudibleAccount(ctx context.Context, a *AudibleAccount) error
+	DeleteAudibleAccount(ctx context.Context, id string) error
+
+	// Per-book owning account. Kept off the hot book-scan paths; resolve on
+	// demand. SetBookAccount stamps the owning account during sync;
+	// GetBookAccount resolves it for download routing.
+	SetBookAccount(ctx context.Context, asin, accountID string) error
+	GetBookAccount(ctx context.Context, asin string) (string, error)
+
 	// Library destinations (multi-destination model — replaces single-active
 	// MEDIA_SERVER selector). Multiple destinations of the same type are
 	// allowed.

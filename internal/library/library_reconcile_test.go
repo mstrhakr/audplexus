@@ -536,6 +536,31 @@ func (m *reconcileMockDB) ListDevices(ctx context.Context) ([]database.Device, e
 	return nil, nil
 }
 func (m *reconcileMockDB) DeleteDevice(ctx context.Context, id int64) error { return nil }
+func (m *reconcileMockDB) CreateAudibleAccount(ctx context.Context, a *database.AudibleAccount) error {
+	return nil
+}
+func (m *reconcileMockDB) GetAudibleAccount(ctx context.Context, id string) (*database.AudibleAccount, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) GetAudibleAccountByCustomerID(ctx context.Context, customerID string) (*database.AudibleAccount, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) ListAudibleAccounts(ctx context.Context) ([]database.AudibleAccount, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) ListEnabledAudibleAccounts(ctx context.Context) ([]database.AudibleAccount, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) UpdateAudibleAccount(ctx context.Context, a *database.AudibleAccount) error {
+	return nil
+}
+func (m *reconcileMockDB) DeleteAudibleAccount(ctx context.Context, id string) error { return nil }
+func (m *reconcileMockDB) SetBookAccount(ctx context.Context, asin, accountID string) error {
+	return nil
+}
+func (m *reconcileMockDB) GetBookAccount(ctx context.Context, asin string) (string, error) {
+	return "", nil
+}
 
 // Library destinations + book destinations (introduced PR-B). Test mock
 // returns zero values; tests that exercise these methods will replace the

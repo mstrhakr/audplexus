@@ -98,6 +98,7 @@
             <form method="POST" action="/auth/callback">
                 <input type="hidden" name="code_verifier" value="{{.CodeVerifier}}">
                 <input type="hidden" name="device_serial" value="{{.DeviceSerial}}">
+                <input type="hidden" name="account_id" value="{{.AuthAccountID}}">
                 <div class="form-row">
                     <label for="redirect_url">Redirect URL</label>
                     <input class="input" type="text" id="redirect_url" name="redirect_url"
@@ -119,6 +120,70 @@
             {{end}}
             </div>
         </div>
+
+        {{/* ── Connected accounts ───────────────────────────────────────
+             Multiple Audible accounts. Hidden for the common single-account
+             case (the card above already manages that account); appears once
+             a second account is connected. The "Add another account" control
+             below is always available via the collapsible. */}}
+        {{if .MultiAccount}}
+        <div class="card" style="margin-top:1rem">
+            <div class="card-head"><h3>Connected accounts</h3>
+                <span class="muted" style="font-size:.8rem">{{.AccountCount}} accounts — libraries are merged</span>
+            </div>
+            <div class="account-list">
+                {{range .Accounts}}
+                <div class="account-row" style="display:flex;align-items:center;gap:.75rem;padding:.6rem 0;border-bottom:1px solid var(--border)">
+                    <div style="flex:1">
+                        <strong>{{.DisplayName}}</strong>
+                        {{if .IsPrimary}}<span class="badge" style="font-size:.7rem">primary</span>{{end}}
+                        <div class="muted" style="font-size:.8rem">
+                            Region: {{.Marketplace}} ·
+                            {{if .Authenticated}}<span style="color:var(--success)">✓ connected</span>
+                            {{else}}<span style="color:var(--warning)">not connected</span>{{end}}
+                        </div>
+                    </div>
+                    <form method="POST" action="/auth/start" style="margin:0">
+                        <input type="hidden" name="account_id" value="{{.ID}}">
+                        <input type="hidden" name="marketplace" value="{{.Marketplace}}">
+                        <button type="submit" class="btn btn-secondary btn-sm">Re-authenticate</button>
+                    </form>
+                    <form method="POST" action="/accounts/remove" style="margin:0"
+                          onsubmit="return confirm('Remove this Audible account? Books synced from it stay in your library.')">
+                        <input type="hidden" name="account_id" value="{{.ID}}">
+                        <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+                    </form>
+                </div>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+
+        {{/* Add another account — collapsible so it doesn't clutter the
+             single-account view, but always reachable post-setup. */}}
+        <details class="card" style="margin-top:1rem" {{if .MultiAccount}}open{{end}}>
+            <summary style="cursor:pointer;font-weight:600">+ Add another Audible account</summary>
+            <p class="muted" style="font-size:.85rem;margin:.5rem 0">
+                Connect a second Audible account. Its library is merged with your existing
+                one; each book downloads using the account that owns it.
+            </p>
+            <form method="POST" action="/accounts/add">
+                <div class="form-row">
+                    <label for="add_display_name">Account name</label>
+                    <input class="input" type="text" id="add_display_name" name="display_name"
+                           placeholder="e.g. Family account">
+                </div>
+                <div class="form-row">
+                    <label for="add_marketplace">Audible region</label>
+                    <select id="add_marketplace" name="marketplace" class="select">
+                        {{range .Marketplaces}}
+                        <option value="{{.CountryCode}}"{{if eq .CountryCode "us"}} selected{{end}}>{{.Name}} ({{.CountryCode}})</option>
+                        {{end}}
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary">Connect account →</button>
+            </form>
+        </details>
 
     </section>
 

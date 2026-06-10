@@ -15,6 +15,7 @@ import (
 	"github.com/mstrhakr/audplexus/internal/audnexus"
 	"github.com/mstrhakr/audplexus/internal/auth"
 	"github.com/mstrhakr/audplexus/internal/config"
+	appcrypto "github.com/mstrhakr/audplexus/internal/crypto"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
 	"github.com/mstrhakr/audplexus/internal/logging"
@@ -127,6 +128,32 @@ func main() {
 		log.Warn().Err(err).Msg("first-boot library_destinations synthesis failed; continuing")
 	}
 
+	// Per-install encryption key for credentials at rest. Generated on first
+	// boot; losing it means re-authenticating each account (tokens become
+	// undecryptable), so it lives next to the DB in the config dir.
+	encKey, err := appcrypto.LoadOrCreateKey(filepath.Join(cfg.Paths.Config, "audplexus.key"))
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load/create encryption key")
+	}
+	credBox, err := appcrypto.NewBox(encKey)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to initialize credential encryption")
+	}
+
+	// First-boot synthesis for multiple Audible accounts: if audible_accounts
+	// is empty AND a legacy credentials.json exists, create one account row
+	// from it (encrypted) so single-account installs upgrade seamlessly.
+	// No-op once any account exists.
+	if err := library.SynthesizeAudibleAccountIfEmpty(context.Background(), db, credPath, credBox); err != nil {
+		log.Warn().Err(err).Msg("first-boot audible account synthesis failed; continuing")
+	}
+
+	// AccountManager owns one Audible client per connected account and is the
+	// source of truth for download/sync routing. Built after synthesis so it
+	// picks up the migrated account.
+	accountMgr := library.NewAccountManager(context.Background(), db, credBox)
+	syncSvc.SetAccountManager(accountMgr)
+
 	// Legacy single-backend selection — still used by Settings UI rendering,
 	// reconcile, and diagnostics until those paths read from
 	// library_destinations directly. The DOWNLOAD pipeline, however, fans
@@ -159,6 +186,7 @@ func main() {
 		mediaSvr,
 		destinations,
 	)
+	dlMgr.SetAccountManager(accountMgr)
 
 	// Start download manager
 	ctx, cancel := context.WithCancel(context.Background())
@@ -188,7 +216,7 @@ func main() {
 	log.Info().Bool("enabled", cfg.Sync.Enabled).Str("schedule", cfg.Sync.Schedule).Msg("scheduler started")
 
 	// Start web server
-	webServer := web.NewServer(db, syncSvc, dlMgr, sched, anClient, org, audibleClient, ffmpeg, credPath, cfg.Server.Port, cfg.Paths.Audiobooks, cfg.Paths.Downloads, cfg.Paths.Config)
+	webServer := web.NewServer(db, syncSvc, dlMgr, sched, anClient, org, audibleClient, accountMgr, ffmpeg, credPath, cfg.Server.Port, cfg.Paths.Audiobooks, cfg.Paths.Downloads, cfg.Paths.Config)
 
 	// Login throttle GC — drops expired (ip, username) buckets so the map
 	// doesn't grow unbounded during a username-enumeration attack. Sweeps

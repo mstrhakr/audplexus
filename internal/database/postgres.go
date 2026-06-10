@@ -538,6 +538,114 @@ func (p *PostgresDB) DeleteDevice(ctx context.Context, id int64) error {
 	return err
 }
 
+// --- Audible accounts ---
+
+func (p *PostgresDB) CreateAudibleAccount(ctx context.Context, a *AudibleAccount) error {
+	now := time.Now()
+	a.UpdatedAt = now
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = now
+	}
+	_, err := p.db.ExecContext(ctx,
+		`INSERT INTO audible_accounts (id, display_name, marketplace, customer_id, credentials, enabled, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		a.ID, a.DisplayName, a.Marketplace, a.CustomerID, a.Credentials, a.Enabled, a.CreatedAt, a.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("insert audible account: %w", err)
+	}
+	return nil
+}
+
+func (p *PostgresDB) GetAudibleAccount(ctx context.Context, id string) (*AudibleAccount, error) {
+	return p.scanAudibleAccount(p.db.QueryRowContext(ctx,
+		`SELECT id, display_name, marketplace, customer_id, credentials, enabled, created_at, updated_at
+		 FROM audible_accounts WHERE id = $1`, id))
+}
+
+func (p *PostgresDB) GetAudibleAccountByCustomerID(ctx context.Context, customerID string) (*AudibleAccount, error) {
+	if strings.TrimSpace(customerID) == "" {
+		return nil, nil
+	}
+	return p.scanAudibleAccount(p.db.QueryRowContext(ctx,
+		`SELECT id, display_name, marketplace, customer_id, credentials, enabled, created_at, updated_at
+		 FROM audible_accounts WHERE customer_id = $1 LIMIT 1`, customerID))
+}
+
+func (p *PostgresDB) ListAudibleAccounts(ctx context.Context) ([]AudibleAccount, error) {
+	return p.queryAudibleAccounts(ctx,
+		`SELECT id, display_name, marketplace, customer_id, credentials, enabled, created_at, updated_at
+		 FROM audible_accounts ORDER BY created_at`)
+}
+
+func (p *PostgresDB) ListEnabledAudibleAccounts(ctx context.Context) ([]AudibleAccount, error) {
+	return p.queryAudibleAccounts(ctx,
+		`SELECT id, display_name, marketplace, customer_id, credentials, enabled, created_at, updated_at
+		 FROM audible_accounts WHERE enabled = TRUE ORDER BY created_at`)
+}
+
+func (p *PostgresDB) UpdateAudibleAccount(ctx context.Context, a *AudibleAccount) error {
+	a.UpdatedAt = time.Now()
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE audible_accounts SET display_name = $1, marketplace = $2, customer_id = $3,
+		    credentials = $4, enabled = $5, updated_at = $6 WHERE id = $7`,
+		a.DisplayName, a.Marketplace, a.CustomerID, a.Credentials, a.Enabled, a.UpdatedAt, a.ID)
+	if err != nil {
+		return fmt.Errorf("update audible account: %w", err)
+	}
+	return nil
+}
+
+func (p *PostgresDB) DeleteAudibleAccount(ctx context.Context, id string) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM audible_accounts WHERE id = $1`, id)
+	return err
+}
+
+func (p *PostgresDB) SetBookAccount(ctx context.Context, asin, accountID string) error {
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE books SET account_id = $1 WHERE asin = $2`, accountID, asin)
+	return err
+}
+
+func (p *PostgresDB) GetBookAccount(ctx context.Context, asin string) (string, error) {
+	var id string
+	err := p.db.QueryRowContext(ctx, `SELECT account_id FROM books WHERE asin = $1`, asin).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
+func (p *PostgresDB) queryAudibleAccounts(ctx context.Context, query string, args ...any) ([]AudibleAccount, error) {
+	rows, err := p.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list audible accounts: %w", err)
+	}
+	defer rows.Close()
+	var out []AudibleAccount
+	for rows.Next() {
+		var a AudibleAccount
+		if err := rows.Scan(&a.ID, &a.DisplayName, &a.Marketplace, &a.CustomerID,
+			&a.Credentials, &a.Enabled, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan audible account: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (p *PostgresDB) scanAudibleAccount(row *sql.Row) (*AudibleAccount, error) {
+	var a AudibleAccount
+	err := row.Scan(&a.ID, &a.DisplayName, &a.Marketplace, &a.CustomerID,
+		&a.Credentials, &a.Enabled, &a.CreatedAt, &a.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan audible account: %w", err)
+	}
+	return &a, nil
+}
+
 // --- Helpers ---
 
 func (p *PostgresDB) scanBook(row *sql.Row) (*Book, error) {

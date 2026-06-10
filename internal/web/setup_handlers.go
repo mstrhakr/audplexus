@@ -11,6 +11,7 @@ import (
 	"github.com/mstrhakr/audplexus/internal/auth"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
+	audible "github.com/mstrhakr/go-audible"
 )
 
 // settingKeyOnboarded marks the setup wizard as completed. Stored as "1"
@@ -156,11 +157,22 @@ func (s *Server) handleSetupWizard(c *gin.Context) {
 	// On the Audible step, if the user has already picked a marketplace
 	// but isn't authenticated yet, generate the auth URL so the panel can
 	// render the "Open Amazon sign-in" button without a separate POST.
-	if steps[step].Kind == stepKindAudible && !s.audible.IsAuthenticated() {
-		if authURL, err := s.audible.GetAuthURL(); err == nil {
+	if steps[step].Kind == stepKindAudible && !s.audibleAuthenticated() {
+		// Resolve (creating if needed) the primary account so the wizard's
+		// inline "Open Amazon sign-in" button targets a real account row that
+		// the callback can store credentials against.
+		accountID := s.ensurePrimaryAccount(ctx)
+		mp, _ := s.db.GetSetting(ctx, "audible_marketplace")
+		market := audible.MarketplaceUS
+		if found, ok := audible.GetMarketplace(strings.ToLower(strings.TrimSpace(mp))); ok {
+			market = found
+		}
+		if authURL, err := audible.NewClient(market).GetAuthURL(); err == nil {
+			s.rememberPendingAuth(accountID, authURL.CodeVerifier, authURL.DeviceSerial)
 			data["AuthURL"] = authURL.URL
 			data["CodeVerifier"] = authURL.CodeVerifier
 			data["DeviceSerial"] = authURL.DeviceSerial
+			data["AuthAccountID"] = accountID
 		}
 	}
 
@@ -198,6 +210,15 @@ func (s *Server) handleSetupMarketplace(c *gin.Context) {
 	mp := strings.ToLower(strings.TrimSpace(c.PostForm("marketplace")))
 	if mp != "" {
 		_ = s.db.SetSetting(ctx, "audible_marketplace", mp)
+		// Reflect the region onto the primary account row so the inline auth
+		// URL the wizard renders next uses the right marketplace.
+		if id := s.ensurePrimaryAccount(ctx); id != "" {
+			if acct, _ := s.db.GetAudibleAccount(ctx, id); acct != nil {
+				acct.Marketplace = mp
+				_ = s.db.UpdateAudibleAccount(ctx, acct)
+				s.reloadAccounts(ctx)
+			}
+		}
 	}
 	// Bounce back to whichever index the Audible panel currently occupies
 	// (depends on whether the Admin panel is in the flow).
@@ -232,7 +253,7 @@ func (s *Server) handleSetupFinish(c *gin.Context) {
 		s.sched.SetAutoQueueNew(autoDownload)
 	}
 
-	if s.audible.IsAuthenticated() {
+	if s.audibleAuthenticated() {
 		// Fire-and-forget — sync runs asynchronously; UI will show progress
 		// via the existing /api/sync/status polling on the dashboard.
 		go func() {

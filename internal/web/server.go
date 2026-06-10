@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -60,9 +59,14 @@ type Server struct {
 	sched          *scheduler.Scheduler
 	audnexus       *audnexus.Client
 	organizer      *organizer.PlexOrganizer
-	audible        *audible.Client
-	ffmpeg         *audio.FFmpeg
-	credPath       string
+	// audible is the PRIMARY account's client, kept in sync with accounts by
+	// refreshPrimaryAudible(). Legacy single-client call sites (health badges,
+	// activation bytes, marketplace display) read this; it may be nil before
+	// any account is connected, so those sites nil-guard.
+	audible  *audible.Client
+	accounts *library.AccountManager
+	ffmpeg   *audio.FFmpeg
+	credPath string
 	port           int
 	audiobooksPath string
 	downloadsPath  string
@@ -89,6 +93,20 @@ type Server struct {
 		mu      sync.Mutex
 		entries map[string]destCountEntry
 	}
+
+	// pendingAuth holds in-flight OAuth state (PKCE verifier + device serial)
+	// keyed by account id, so the callback can complete even when the browser
+	// returns via a GET redirect from Amazon (wizard flow) that can't carry the
+	// values in a POST body. Populated whenever an auth URL is generated.
+	pendingAuth struct {
+		mu      sync.Mutex
+		entries map[string]pendingAuthState
+	}
+}
+
+type pendingAuthState struct {
+	codeVerifier string
+	deviceSerial string
 }
 
 type destCountEntry struct {
@@ -106,6 +124,7 @@ func NewServer(
 	anClient *audnexus.Client,
 	org *organizer.PlexOrganizer,
 	audibleClient *audible.Client,
+	accounts *library.AccountManager,
 	ffmpeg *audio.FFmpeg,
 	credPath string,
 	port int,
@@ -126,6 +145,7 @@ func NewServer(
 		audnexus:       anClient,
 		organizer:      org,
 		audible:        audibleClient,
+		accounts:       accounts,
 		ffmpeg:         ffmpeg,
 		credPath:       credPath,
 		port:           port,
@@ -142,6 +162,10 @@ func NewServer(
 	if v, err := db.GetSetting(context.Background(), settingKeyOnboarded); err == nil && (v == "true" || v == "1") {
 		s.onboarded.Store(true)
 	}
+
+	// Point the legacy single-client field at the primary account so the
+	// health/marketplace call sites keep working in the multi-account world.
+	s.refreshPrimaryAudible()
 
 	// Wire up the media-server sync callbacks. With multi-destination, the
 	// Library Scan phase fans out to every enabled destination instead of
@@ -561,6 +585,13 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/auth/marketplace", s.handleAudibleMarketplaceSelect)
 	s.router.POST("/auth/start", s.handleAuthStart)
 	s.router.POST("/auth/callback", s.handleAuthCallback)
+
+	// Multiple Audible accounts. Single-account installs keep using the
+	// /auth/* forms above (which target the primary account); these add the
+	// management affordances for connecting / re-authing / removing extras.
+	s.router.POST("/accounts/add", s.handleAccountAdd)
+	s.router.POST("/accounts/remove", s.handleAccountRemove)
+	s.router.POST("/accounts/region", s.handleAccountRegion)
 	// Legacy /auth/plex/*, /auth/emby/* and /auth/media-server/select removed:
 	// the UI surfaces that posted to them (Plex PIN sign-in panel, dedicated
 	// Emby panel, Active Media Server radio) are gone in favor of
@@ -2325,7 +2356,7 @@ func (s *Server) computeSidebar(ctx context.Context) sidebarData {
 		}
 	}
 
-	out.Healthy = out.FailedDestAlert == 0 && s.audible.IsAuthenticated()
+	out.Healthy = out.FailedDestAlert == 0 && s.audibleAuthenticated()
 	return out
 }
 
@@ -2499,7 +2530,7 @@ func (s *Server) handleSyncRetry(c *gin.Context) {
 }
 
 func (s *Server) triggerSync(c *gin.Context, mode library.SyncMode) {
-	if !s.audible.IsAuthenticated() {
+	if !s.audibleAuthenticated() {
 		msg := "Not authenticated — please sign in on the Settings page first."
 		if c.GetHeader("HX-Request") == "true" {
 			c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(library.SyncProgress{
@@ -2694,7 +2725,7 @@ func (s *Server) handleRunPhase(c *gin.Context) {
 	}
 
 	// Audible sync requires authentication
-	if phase == library.PhaseAudibleSync && !s.audible.IsAuthenticated() {
+	if phase == library.PhaseAudibleSync && !s.audibleAuthenticated() {
 		msg := "Not authenticated \u2014 please sign in on the Settings page first."
 		if c.GetHeader("HX-Request") == "true" {
 			c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(library.SyncProgress{
@@ -3507,6 +3538,10 @@ func (s *Server) handleFactoryReset(c *gin.Context) {
 		webLog.Error().Err(err).Msg("post-reset migration failed")
 	}
 
+	// db.Reset() wiped the audible_accounts table — drop the in-memory clients
+	// so a fresh connect starts clean.
+	s.reloadAccounts(ctx)
+
 	// Restart the download pipeline with a fresh context.
 	s.downloads.Start(context.Background())
 	webLog.Info().Msg("factory reset complete — database wiped, downloads cleared, credentials removed, pipeline restarted")
@@ -3560,8 +3595,19 @@ func (s *Server) authBaseData(ctx context.Context) gin.H {
 		currentMarketplace = creds.Marketplace
 	}
 
+	accounts := s.accountsForView(ctx)
+	authenticated := false
+	if s.accounts != nil {
+		authenticated = s.accounts.IsAuthenticated()
+	} else if s.audible != nil {
+		authenticated = s.audible.IsAuthenticated()
+	}
+
 	data := gin.H{
-		"Authenticated":         s.audible.IsAuthenticated(),
+		"Authenticated":         authenticated,
+		"Accounts":              accounts,
+		"AccountCount":          len(accounts),
+		"MultiAccount":          len(accounts) > 1,
 		"PlexURL":               plexURL,
 		"PlexTokenSet":          plexToken != "",
 		"PlexConfigured":        plexConfigured,
@@ -3623,44 +3669,61 @@ func (s *Server) handleAudibleMarketplaceSelect(c *gin.Context) {
 		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to save Audible region: " + err.Error()})
 		return
 	}
+	// Reflect the region onto the primary account row (multi-account source of
+	// truth) so a later re-auth uses the right marketplace.
+	if id := s.ensurePrimaryAccount(ctx); id != "" {
+		if acct, _ := s.db.GetAudibleAccount(ctx, id); acct != nil {
+			acct.Marketplace = mp
+			_ = s.db.UpdateAudibleAccount(ctx, acct)
+			s.reloadAccounts(ctx)
+		}
+	}
 
 	s.renderAuthPage(c, http.StatusOK, gin.H{
 		"Success": "Audible region updated to " + strings.ToUpper(mp) + ".",
 	})
 }
 
-// handleAuthStart generates an OAuth URL and shows it to the user.
+// handleAuthStart generates an OAuth URL and shows it to the user. Account-
+// scoped: operates on the account identified by account_id (or the primary
+// account for the legacy single-account forms that omit it). If no account row
+// exists yet (very first connect during setup), it creates one.
 func (s *Server) handleAuthStart(c *gin.Context) {
+	ctx := c.Request.Context()
 	mp := strings.ToLower(strings.TrimSpace(c.PostForm("marketplace")))
 	if mp == "" {
-		mp, _ = s.db.GetSetting(c.Request.Context(), "audible_marketplace")
+		mp, _ = s.db.GetSetting(ctx, "audible_marketplace")
 		mp = strings.ToLower(strings.TrimSpace(mp))
 	}
-	if mp != "" {
-		if market, ok := audible.GetMarketplace(mp); ok {
-			s.audible.SetMarketplace(market)
-			_ = s.db.SetSetting(c.Request.Context(), "audible_marketplace", mp)
-			webLog.Info().Str("marketplace", mp).Msg("marketplace set for auth flow")
-		} else {
-			webLog.Warn().Str("marketplace", mp).Msg("unknown marketplace code, using current")
+	if mp == "" {
+		mp = "us"
+	}
+
+	accountID := s.resolveAccountID(c)
+	if accountID == "" {
+		// First-ever connect (fresh install, no synthesized row): create the
+		// primary account now so the callback has somewhere to store creds.
+		account := &database.AudibleAccount{
+			ID:          library.NewAccountID(),
+			DisplayName: "Audible Account",
+			Marketplace: mp,
+			Enabled:     true,
 		}
-	}
-	authURL, err := s.audible.GetAuthURL()
-	if err != nil {
-		webLog.Error().Err(err).Msg("failed to generate auth URL")
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{
-			"Error": "Failed to generate login URL: " + err.Error(),
-		})
-		return
+		if err := s.db.CreateAudibleAccount(ctx, account); err != nil {
+			s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to create account: " + err.Error()})
+			return
+		}
+		_ = s.db.SetSetting(ctx, "audible_marketplace", mp)
+		s.reloadAccounts(ctx)
+		accountID = account.ID
+	} else if acct, _ := s.db.GetAudibleAccount(ctx, accountID); acct != nil && acct.Marketplace != mp {
+		// Honor a region change made in the same form submission.
+		acct.Marketplace = mp
+		_ = s.db.UpdateAudibleAccount(ctx, acct)
 	}
 
-	webLog.Info().Msg("auth URL generated")
-
-	s.renderAuthPage(c, http.StatusOK, gin.H{
-		"AuthURL":      authURL.URL,
-		"CodeVerifier": authURL.CodeVerifier,
-		"DeviceSerial": authURL.DeviceSerial,
-	})
+	webLog.Info().Str("account_id", accountID).Str("marketplace", mp).Msg("auth URL generated")
+	s.startAuthForAccount(c, accountID, mp)
 }
 
 // handleAuthCallback receives the authorization code (via GET redirect from Amazon
@@ -3692,14 +3755,46 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 
 	webLog.Info().Msg("authorization code received, registering device")
 
-	// Authenticate (device registration + token exchange)
 	ctx := c.Request.Context()
-	err := s.audible.Authenticate(ctx, audible.DeviceRegistrationRequest{
+	accountID := s.resolveAccountID(c)
+	if accountID == "" {
+		s.renderAuthPage(c, http.StatusBadRequest, gin.H{
+			"Error": "No account to authenticate. Please restart the connect flow.",
+		})
+		return
+	}
+
+	// Build a client scoped to the account's marketplace. Authenticate uses the
+	// code_verifier/device_serial carried in the form, so a fresh client (no
+	// retained OAuth state) is sufficient.
+	acct, _ := s.db.GetAudibleAccount(ctx, accountID)
+	mp := audible.MarketplaceUS
+	if acct != nil {
+		if found, ok := audible.GetMarketplace(acct.Marketplace); ok {
+			mp = found
+		}
+	}
+	// Prefer the verifier/serial posted with the form; fall back to the
+	// server-side pending-auth state for the GET-redirect (wizard) flow that
+	// can't carry them in a POST body.
+	verifier := c.PostForm("code_verifier")
+	serial := c.PostForm("device_serial")
+	if verifier == "" || serial == "" {
+		pv, ps := s.takePendingAuth(accountID)
+		if verifier == "" {
+			verifier = pv
+		}
+		if serial == "" {
+			serial = ps
+		}
+	}
+
+	client := audible.NewClient(mp)
+	if err := client.Authenticate(ctx, audible.DeviceRegistrationRequest{
 		AuthorizationCode: code,
-		CodeVerifier:      c.PostForm("code_verifier"),
-		DeviceSerial:      c.PostForm("device_serial"),
-	})
-	if err != nil {
+		CodeVerifier:      verifier,
+		DeviceSerial:      serial,
+	}); err != nil {
 		webLog.Error().Err(err).Msg("authentication failed")
 		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{
 			"Error": "Authentication failed: " + err.Error(),
@@ -3707,20 +3802,21 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 		return
 	}
 
-	// Save credentials to disk
-	creds := s.audible.GetCredentials()
-	if creds != nil && s.credPath != "" {
-		data, err := json.MarshalIndent(creds, "", "  ")
-		if err == nil {
-			if err := os.WriteFile(s.credPath, data, 0600); err != nil {
-				webLog.Error().Err(err).Msg("failed to save credentials")
-			} else {
-				webLog.Info().Str("path", s.credPath).Msg("credentials saved")
-			}
-		}
+	// Persist credentials to the account row (source of truth for the client
+	// set) and reload so the new client goes live immediately.
+	if err := s.persistAccountCredentials(ctx, accountID, client); err != nil {
+		webLog.Error().Err(err).Str("account_id", accountID).Msg("failed to persist account credentials")
+		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{
+			"Error": "Authenticated, but failed to save credentials: " + err.Error(),
+		})
+		return
 	}
 
-	webLog.Info().Msg("authentication successful")
+	// No plaintext credentials.json mirror: the encrypted DB row is the only
+	// copy of fresh tokens. A legacy credentials.json (pre-multi-account) is
+	// still read once by first-boot synthesis, but never written anew.
+
+	webLog.Info().Str("account_id", accountID).Msg("authentication successful")
 
 	// If the user is still in onboarding, bounce back into the wizard at
 	// the Destinations step rather than dropping them on Settings — the

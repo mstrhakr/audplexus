@@ -65,6 +65,15 @@ func (d *destinationIDsStubDB) GetActiveDevice(ctx context.Context) (*database.D
 func (d *destinationIDsStubDB) SaveDevice(ctx context.Context, device *database.Device) error { return nil }
 func (d *destinationIDsStubDB) ListDevices(ctx context.Context) ([]database.Device, error) { return nil, nil }
 func (d *destinationIDsStubDB) DeleteDevice(ctx context.Context, id int64) error { return nil }
+func (d *destinationIDsStubDB) CreateAudibleAccount(ctx context.Context, a *database.AudibleAccount) error { return nil }
+func (d *destinationIDsStubDB) GetAudibleAccount(ctx context.Context, id string) (*database.AudibleAccount, error) { return nil, nil }
+func (d *destinationIDsStubDB) GetAudibleAccountByCustomerID(ctx context.Context, customerID string) (*database.AudibleAccount, error) { return nil, nil }
+func (d *destinationIDsStubDB) ListAudibleAccounts(ctx context.Context) ([]database.AudibleAccount, error) { return nil, nil }
+func (d *destinationIDsStubDB) ListEnabledAudibleAccounts(ctx context.Context) ([]database.AudibleAccount, error) { return nil, nil }
+func (d *destinationIDsStubDB) UpdateAudibleAccount(ctx context.Context, a *database.AudibleAccount) error { return nil }
+func (d *destinationIDsStubDB) DeleteAudibleAccount(ctx context.Context, id string) error { return nil }
+func (d *destinationIDsStubDB) SetBookAccount(ctx context.Context, asin, accountID string) error { return nil }
+func (d *destinationIDsStubDB) GetBookAccount(ctx context.Context, asin string) (string, error) { return "", nil }
 func (d *destinationIDsStubDB) CreateLibraryDestination(ctx context.Context, d2 *database.LibraryDestination) error { return nil }
 func (d *destinationIDsStubDB) GetLibraryDestination(ctx context.Context, id string) (*database.LibraryDestination, error) { return nil, nil }
 func (d *destinationIDsStubDB) ListLibraryDestinations(ctx context.Context) ([]database.LibraryDestination, error) { return nil, nil }
