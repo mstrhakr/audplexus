@@ -61,15 +61,14 @@
             </form>
 
             <div style="margin-top:1rem">
-            {{if .Authenticated}}
-            <div class="alert ok" role="status">
-                <span class="ico">✓</span>
-                <div><strong>Authenticated</strong> — connected to Audible.</div>
-            </div>
-            {{else if .AuthURL}}
+            {{/* An in-flight auth flow (AuthURL set) must take priority over
+                 the "already authenticated" badge — when adding or re-authing
+                 a SECOND account, the primary is authenticated, and checking
+                 Authenticated first swallowed the sign-in panel entirely. */}}
+            {{if .AuthURL}}
             <div class="alert" role="status" style="margin-bottom:1rem">
                 <div>
-                    <strong>Sign in with Amazon</strong>
+                    <strong>Sign in with Amazon</strong>{{if .AuthAccountName}} — connecting <strong>{{.AuthAccountName}}</strong>{{end}}
                     <ol style="margin:.5rem 0 .25rem 1.1rem;font-size:.85rem;line-height:1.6">
                         <li>Open Amazon login in a new tab.</li>
                         <li>Sign in and finish any prompts.</li>
@@ -108,6 +107,11 @@
                 </div>
                 <button type="submit" class="btn btn-primary">Complete authentication</button>
             </form>
+            {{else if .Authenticated}}
+            <div class="alert ok" role="status">
+                <span class="ico">✓</span>
+                <div><strong>Authenticated</strong> — connected to Audible.</div>
+            </div>
             {{else}}
             <p class="muted" style="font-size:.85rem;margin-bottom:.5rem">
                 You need to authenticate with Amazon/Audible to sync and download your library.

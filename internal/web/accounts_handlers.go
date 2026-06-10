@@ -264,11 +264,20 @@ func (s *Server) startAuthForAccount(c *gin.Context, accountID, marketplace stri
 		return
 	}
 	s.rememberPendingAuth(accountID, authURL.CodeVerifier, authURL.DeviceSerial)
+
+	// Name the account in the sign-in panel so it's obvious which one this
+	// Amazon login is for (matters once there's more than one).
+	accountName := ""
+	if acct, _ := s.db.GetAudibleAccount(c.Request.Context(), accountID); acct != nil {
+		accountName = accountDisplayName(acct)
+	}
+
 	s.renderAuthPage(c, http.StatusOK, gin.H{
 		"AuthURL":          authURL.URL,
 		"CodeVerifier":     authURL.CodeVerifier,
 		"DeviceSerial":     authURL.DeviceSerial,
 		"AuthAccountID":    accountID,
+		"AuthAccountName":  accountName,
 		"AuthAccountStart": true,
 	})
 }
