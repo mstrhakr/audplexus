@@ -21,6 +21,24 @@
             var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
             if (m) evt.detail.headers['X-CSRF-Token'] = decodeURIComponent(m[1]);
         });
+        // Same token, but for plain <form method="POST"> submissions (no HTMX
+        // involved, so the hook above never fires). Inject a csrf_token hidden
+        // input into any non-GET form that doesn't already carry one. Capture
+        // phase so the field exists before the browser serializes the form.
+        document.addEventListener('submit', function (evt) {
+            var form = evt.target;
+            if (!(form instanceof HTMLFormElement)) return;
+            var method = (form.getAttribute('method') || 'get').toUpperCase();
+            if (method === 'GET') return;
+            if (form.querySelector('input[name="csrf_token"]')) return;
+            var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+            if (!m) return;
+            var input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'csrf_token';
+            input.value = decodeURIComponent(m[1]);
+            form.appendChild(input);
+        }, true);
         // When the session expires mid-page, Authenticate emits HX-Redirect; HTMX
         // honors that header automatically. We also catch the HTTP-level 401 as a
         // belt-and-suspenders so plain fetch()-style flows redirect too.

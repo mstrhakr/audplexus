@@ -431,24 +431,44 @@
                  data-auth-admin-subcard
                  style="margin:.75rem 0 1rem 1.5rem;padding:1rem;border:1px solid var(--border, #2a2a2a);border-radius:6px;background:rgba(255,255,255,.02);{{if ne .AuthMethod "forms"}}display:none;{{end}}">
                 <h4 style="margin:0 0 .25rem;font-size:.95rem">Admin Account</h4>
-                <p class="hint" style="margin:0 0 .75rem">Credentials for the Forms login.</p>
-                <form method="POST" action="/settings/security/password">
+                <p class="hint" style="margin:0 0 .5rem">Credentials for the Forms login.</p>
+                {{if .PasswordSet}}
+                <p class="hint" style="margin:0 0 .75rem;color:var(--success,#5cb85c)">
+                    ✓ Password is set{{if .PasswordChangedAt}} — last changed {{.PasswordChangedAt}}{{end}}.
+                </p>
+                {{else}}
+                <p class="hint" style="margin:0 0 .75rem;color:var(--warning,#e0a800)">
+                    No admin password set yet — create one below.
+                </p>
+                {{end}}
+                <form method="POST" action="/settings/security/password" data-admin-password-form>
                     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    {{/* Mirrors the Method dropdown (synced by the toggle JS
+                         below). Saving the password while Forms is selected
+                         also enables Forms auth — without this, None → Forms
+                         needed two saves in the right order, and the method
+                         silently reverted when only the password was saved. */}}
+                    <input type="hidden" name="intended_auth_method" value="{{.AuthMethod}}" data-intended-auth-method>
                     <div class="form-row">
                         <label for="username">Username</label>
                         <input class="input" type="text" id="username" name="username" value="{{.Username}}" autocomplete="username" required>
                     </div>
+                    {{if .PasswordSet}}
                     <div class="form-row">
                         <label for="current_password">Current password</label>
-                        <input class="input" type="password" id="current_password" name="current_password" autocomplete="current-password">
-                        <div class="hint">Leave blank when setting an initial password. Required when changing an existing one.</div>
+                        <input class="input" type="password" id="current_password" name="current_password" autocomplete="current-password" required>
+                        <div class="hint">Required to change the password.</div>
                     </div>
+                    {{end}}
                     <div class="form-row">
-                        <label for="new_password">New password</label>
+                        <label for="new_password">{{if .PasswordSet}}New password{{else}}Password{{end}}</label>
                         <input class="input" type="password" id="new_password" name="new_password" autocomplete="new-password" minlength="8" required>
                     </div>
-                    <div class="form-actions">
-                        <button type="submit" class="btn btn-primary">Save password</button>
+                    {{/* Hidden until the form is actually dirty (something
+                         typed / username edited) so the resting state reads
+                         as status, not as a pending action. */}}
+                    <div class="form-actions" data-password-actions style="display:none">
+                        <button type="submit" class="btn btn-primary">{{if .PasswordSet}}Change password{{else}}Set password{{end}}</button>
                     </div>
                 </form>
             </div>
@@ -479,11 +499,39 @@
             var sel = document.querySelector('[data-auth-method-toggle]');
             var sub = document.querySelector('[data-auth-admin-subcard]');
             if (!sel || !sub) return;
+            var intended = document.querySelector('[data-intended-auth-method]');
             function apply() {
                 sub.style.display = (sel.value === 'forms') ? '' : 'none';
+                if (intended) intended.value = sel.value;
             }
             sel.addEventListener('change', apply);
             apply();
+        })();
+
+        (function() {
+            // Admin password form: keep the submit button hidden until the
+            // form is dirty (a password field has content or the username was
+            // edited), so the resting state reads as status, not a pending
+            // action. Server-side validation is unchanged — this is display
+            // only.
+            var form = document.querySelector('[data-admin-password-form]');
+            if (!form) return;
+            var actions = form.querySelector('[data-password-actions]');
+            if (!actions) return;
+            function dirty() {
+                var np = form.querySelector('#new_password');
+                if (np && np.value) return true;
+                var cp = form.querySelector('#current_password');
+                if (cp && cp.value) return true;
+                var un = form.querySelector('#username');
+                if (un && un.value !== un.defaultValue) return true;
+                return false;
+            }
+            function toggle() {
+                actions.style.display = dirty() ? '' : 'none';
+            }
+            form.addEventListener('input', toggle);
+            toggle();
         })();
 
         // Copy-to-clipboard with a fallback for non-secure contexts.

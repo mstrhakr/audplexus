@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/mstrhakr/audplexus/internal/auth"
@@ -161,22 +162,37 @@ func (s *Server) securityPageData(ctx context.Context, c *gin.Context) gin.H {
 	// from having to retype it in the password form.
 	var username string
 	user := auth.CurrentUser(c)
-	if user != nil {
-		username = user.Username
-	} else if u, _ := s.firstUser(ctx); u != nil {
-		username = u.Username
+	adminUser := user
+	if adminUser == nil {
+		adminUser, _ = s.firstUser(ctx)
+	}
+	if adminUser != nil {
+		username = adminUser.Username
+	}
+
+	// Password status indicator. PasswordSet drives whether the form is in
+	// "create" or "change" mode (current password required); the timestamp is
+	// the dedicated setting, absent on installs that predate it.
+	passwordSet := adminUser != nil
+	passwordChangedAt := ""
+	if v, _ := s.db.GetSetting(ctx, auth.SettingKeyPasswordChangedAt); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			passwordChangedAt = t.Local().Format("Jan 2, 2006 at 3:04 PM")
+		}
 	}
 
 	return gin.H{
-		"Page":           "security",
-		"CSRFToken":      auth.CSRFToken(c),
-		"APIKey":         apiKey,
-		"AuthMethod":     method,
-		"AuthRequired":   required,
-		"TrustedProxies": trustedProxies,
-		"CookieDomain":   cookieDomain,
-		"Username":       username,
-		"User":           user,
+		"Page":              "security",
+		"CSRFToken":         auth.CSRFToken(c),
+		"APIKey":            apiKey,
+		"AuthMethod":        method,
+		"AuthRequired":      required,
+		"TrustedProxies":    trustedProxies,
+		"CookieDomain":      cookieDomain,
+		"Username":          username,
+		"User":              user,
+		"PasswordSet":       passwordSet,
+		"PasswordChangedAt": passwordChangedAt,
 	}
 }
 
@@ -326,7 +342,26 @@ func (s *Server) handleSecurityPassword(c *gin.Context) {
 		s.authMgr.SetSessionCookie(c, sess.Token, int(auth.SessionTTL.Seconds()))
 	}
 	authLog.Info().Str("ip", c.ClientIP()).Str("username", user.Username).Msg("password changed")
-	s.renderSecurityPage(c, http.StatusOK, gin.H{"Success": "Password updated. Other browser sessions have been signed out."})
+
+	// If the Method dropdown was sitting on "forms" when the user saved the
+	// password, enable Forms auth in the same action. Without this the
+	// None → Forms flow needed two saves in a specific order: the auth-method
+	// handler refuses Forms while no user exists, and the dropdown silently
+	// reverted when only the password form was submitted. The admin user is
+	// guaranteed to exist at this point, so the lockout guard is satisfied.
+	success := "Password updated. Other browser sessions have been signed out."
+	intended := auth.AuthMethod(strings.TrimSpace(c.PostForm("intended_auth_method")))
+	if intended == auth.AuthMethodForms && s.authMgr.CurrentMethod(ctx) != auth.AuthMethodForms {
+		if err := s.db.SetSetting(ctx, auth.SettingKeyAuthMethod, string(auth.AuthMethodForms)); err != nil {
+			s.renderSecurityPage(c, http.StatusInternalServerError, gin.H{
+				"Error": "Password saved, but enabling Forms authentication failed: " + err.Error(),
+			})
+			return
+		}
+		authLog.Info().Str("ip", c.ClientIP()).Msg("forms auth enabled alongside password save")
+		success = "Password saved and Forms authentication enabled. Other browser sessions have been signed out."
+	}
+	s.renderSecurityPage(c, http.StatusOK, gin.H{"Success": success})
 }
 
 // handleSecurityRevokeAllSessions rotates the user identifier (invalidating

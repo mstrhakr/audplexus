@@ -4,10 +4,17 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/mstrhakr/audplexus/internal/database"
 )
+
+// SettingKeyPasswordChangedAt records when the admin password was last set,
+// RFC3339. Kept as its own setting (not users.updated_at) because identifier
+// rotation — e.g. "sign out all sessions" — also bumps updated_at, which would
+// make a "password last changed" indicator lie.
+const SettingKeyPasswordChangedAt = "admin_password_changed_at"
 
 // CreateOrUpdateAdmin creates the single admin user (or updates the existing
 // one's password / username). Called from the setup wizard and from the
@@ -48,6 +55,9 @@ func CreateOrUpdateAdmin(ctx context.Context, db database.Database, username, pa
 	if err := db.UpsertUser(ctx, u); err != nil {
 		return nil, fmt.Errorf("save user: %w", err)
 	}
+	// Best-effort: the indicator on the Security page degrades to "password
+	// set" without a date if this write fails.
+	_ = db.SetSetting(ctx, SettingKeyPasswordChangedAt, time.Now().Format(time.RFC3339))
 	return u, nil
 }
 
