@@ -579,6 +579,21 @@ func (s *Server) setupRoutes() {
 		c.Redirect(http.StatusMovedPermanently, "/settings#section-security")
 	})
 
+	// The form POST targets below render the settings page directly in the
+	// POST response, which leaves the browser's address bar on the POST URL.
+	// Refreshing then GETs a route that only exists as POST → 404. Bounce
+	// those GETs back to the section the form lives in. 303 (not 301) so
+	// browsers don't cache the redirect against a future route change.
+	settingsGETFallback := func(path, section string) {
+		s.router.GET(path, func(c *gin.Context) {
+			c.Redirect(http.StatusSeeOther, "/settings#"+section)
+		})
+	}
+	settingsGETFallback("/settings/security/auth-method", "section-security")
+	settingsGETFallback("/settings/security/api-key/rotate", "section-security")
+	settingsGETFallback("/settings/security/password", "section-security")
+	settingsGETFallback("/settings/security/sessions/revoke-all", "section-security")
+
 	// Audible OAuth flow — distinct from app auth above. Kept under
 	// /auth/* for backwards compatibility with the URL the existing
 	// settings page POSTs to.
@@ -592,12 +607,21 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/accounts/add", s.handleAccountAdd)
 	s.router.POST("/accounts/remove", s.handleAccountRemove)
 	s.router.POST("/accounts/region", s.handleAccountRegion)
+	// Refresh-after-POST fallbacks for the Audible forms (same 404 fix as the
+	// security section above).
+	settingsGETFallback("/auth/marketplace", "section-audible")
+	settingsGETFallback("/auth/start", "section-audible")
+	settingsGETFallback("/auth/callback", "section-audible")
+	settingsGETFallback("/accounts/add", "section-audible")
+	settingsGETFallback("/accounts/remove", "section-audible")
+	settingsGETFallback("/accounts/region", "section-audible")
 	// Legacy /auth/plex/*, /auth/emby/* and /auth/media-server/select removed:
 	// the UI surfaces that posted to them (Plex PIN sign-in panel, dedicated
 	// Emby panel, Active Media Server radio) are gone in favor of
 	// /destinations/* CRUD. Plex sign-in is re-introduced as a per-
 	// destination affordance — see /destinations/plex/* below.
 	s.router.POST("/settings/tag-profile", s.handleTagProfileSelect)
+	settingsGETFallback("/settings/tag-profile", "section-library")
 
 	// Library destinations CRUD (multi-destination model). Modal-only —
 	// New / Edit / Delete all open inside the global #dest-modal-content
