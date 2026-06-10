@@ -150,9 +150,8 @@ func (s *Server) handleSetupWizard(c *gin.Context) {
 
 	// Destinations summary for the Destinations and Done panels. Rich
 	// summary shape so the picker-list shows type + display name + URL.
-	completeStatus := database.BookStatusComplete
-	_, completeBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
-	data["Destinations"] = s.destinationSummaries(ctx, completeBooks)
+	counts := s.libraryStatusCounts(ctx)
+	data["Destinations"] = s.destinationSummaries(ctx, s.coverageDenominator(ctx, counts))
 
 	// On the Audible step, if the user has already picked a marketplace
 	// but isn't authenticated yet, generate the auth URL so the panel can
@@ -229,13 +228,25 @@ func (s *Server) handleSetupFinish(c *gin.Context) {
 	// step. An unchecked toggle submits nothing, so absence means off.
 	autoDownload := c.PostForm("auto_queue_new") == "true"
 	_ = s.db.SetSetting(ctx, library.SettingKeyAutoQueueNewBooks, strconv.FormatBool(autoDownload))
+	if s.sched != nil {
+		s.sched.SetAutoQueueNew(autoDownload)
+	}
 
 	if s.audible.IsAuthenticated() {
 		// Fire-and-forget — sync runs asynchronously; UI will show progress
 		// via the existing /api/sync/status polling on the dashboard.
 		go func() {
-			if _, err := s.sync.QuickSync(context.Background()); err != nil {
+			added, err := s.sync.QuickSync(context.Background())
+			if err != nil {
 				webLog.Warn().Err(err).Msg("setup: first quick sync failed")
+				return
+			}
+			if autoDownload && added > 0 {
+				if queued, qErr := s.downloads.QueueNewBooks(context.Background()); qErr != nil {
+					webLog.Warn().Err(qErr).Int("added", added).Msg("setup: failed to auto-queue new books after first quick sync")
+				} else {
+					webLog.Info().Int("added", added).Int("queued", queued).Msg("setup: auto-queued new books after first quick sync")
+				}
 			}
 		}()
 	}

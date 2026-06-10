@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mstrhakr/audplexus/internal/database"
 )
@@ -58,6 +59,9 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 		return 0, nil
 	}
 
+	startTime := time.Now()
+	syncLog.Info().Msg("fs_scan: starting file reconciliation")
+
 	// Phase 1: Discover all audio files in the library.
 	// Mirrors Audnexus.bundle: the full path (folder names + filename) is searched
 	// for an ASIN so files under folders like "Title B0XXXXXXXXXX [us]/" are found.
@@ -68,6 +72,8 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 	statErrors := 0
 	discoveredByExt := make(map[string]int)
 	skippedByExt := make(map[string]int)
+
+	discoverStart := time.Now()
 	err := walkDir(libraryRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			walkErrors++
@@ -113,6 +119,8 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 		}
 		return nil
 	})
+	discoverMs := time.Since(discoverStart).Milliseconds()
+
 	if err != nil {
 		return 0, err
 	}
@@ -124,6 +132,7 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 		Int("non_audio_skipped", nonAudioSkipped).
 		Int("walk_errors", walkErrors).
 		Int("stat_errors", statErrors).
+		Int("discovery_ms", int(discoverMs)).
 		Msg("fs_scan: audio discovery complete")
 	syncLog.Debug().
 		Str("audio_by_ext", formatCountMap(discoveredByExt)).
@@ -132,14 +141,20 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 
 	// Build an index of ASIN -> file path. Searches filename AND all parent directory
 	// components, matching the Audnexus.bundle behaviour.
+	indexStart := time.Now()
 	asinFileIndex := buildASINFileIndex(discoveredFiles)
+	indexMs := time.Since(indexStart).Milliseconds()
 
 	syncLog.Debug().
 		Int("asin_index_entries", len(asinFileIndex)).
+		Int("index_ms", int(indexMs)).
 		Msg("fs_scan: ASIN index built")
 
 	// Phase 2: Load all books from the database
+	dbLoadStart := time.Now()
 	books, _, err := db.ListBooks(ctx, database.BookFilter{})
+	dbLoadMs := time.Since(dbLoadStart).Milliseconds()
+
 	if err != nil {
 		return 0, err
 	}
@@ -157,6 +172,8 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 
 	totalWork := len(books) // progress counters should represent books only
 	processed := 0
+	matchTimeMs := int64(0)
+	lastProgressEmit := 0
 
 	// For each book, find its best matching file on disk
 	for i := range books {
@@ -166,7 +183,25 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 		default:
 		}
 
+		// Log progress every 1000 books
+		if processed > 0 && processed%1000 == 0 {
+			elapsed := time.Since(startTime)
+			avgMs := elapsed.Milliseconds() / int64(processed)
+			eta := time.Duration((int64(totalWork)-int64(processed))*avgMs) * time.Millisecond
+			syncLog.Info().
+				Int("processed", processed).
+				Int("updated", updated).
+				Int("total", totalWork).
+				Int("elapsed_sec", int(elapsed.Seconds())).
+				Int("eta_sec", int(eta.Seconds())).
+				Msg("fs_scan: book reconciliation batch progress")
+		}
+
+		matchStart := time.Now()
 		matchedFile, matchedSize, matchMethod := findBestFileForBook(ctx, &books[i], libraryRoot, discoveredFiles, asinFileIndex)
+		matchMs := time.Since(matchStart).Milliseconds()
+		matchTimeMs += matchMs
+
 		matchMethodCounts[matchMethod]++
 		if matchedFile != "" {
 			matchedFiles[matchedFile] = struct{}{}
@@ -177,6 +212,7 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 					Str("asin", books[i].ASIN).
 					Str("file", matchedFile).
 					Str("match_method", matchMethod).
+					Int("match_ms", int(matchMs)).
 					Msg("fs_scan: reconciling book to file")
 				books[i].FilePath = matchedFile
 				books[i].FileSize = matchedSize
@@ -204,9 +240,15 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 		}
 
 		processed++
-		if onProgress != nil {
+		if processed-lastProgressEmit >= 100 && onProgress != nil {
 			onProgress(processed, totalWork)
+			lastProgressEmit = processed
 		}
+	}
+
+	// Final progress update
+	if onProgress != nil {
+		onProgress(processed, totalWork)
 	}
 
 	// Phase 4: Report on unmatched files (files on disk with no matching database book)
@@ -217,6 +259,12 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 		}
 	}
 
+	totalElapsed := time.Since(startTime)
+	avgMatchMs := int64(0)
+	if totalWork > 0 {
+		avgMatchMs = matchTimeMs / int64(totalWork)
+	}
+
 	syncLog.Info().
 		Int("books_in_db", len(books)).
 		Int("audio_files_on_disk", len(discoveredFiles)).
@@ -224,6 +272,13 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 		Int("files_unmatched", len(unmatchedFiles)).
 		Int("complete_books_missing_file", missingCompleteBooks).
 		Int("books_updated", updated).
+		Int("discovery_ms", int(discoverMs)).
+		Int("index_ms", int(indexMs)).
+		Int("db_load_ms", int(dbLoadMs)).
+		Int("match_total_ms", int(matchTimeMs)).
+		Int("avg_match_ms", int(avgMatchMs)).
+		Int("elapsed_ms", int(totalElapsed.Milliseconds())).
+		Int("elapsed_sec", int(totalElapsed.Seconds())).
 		Msg("fs_scan: reconciliation complete")
 	syncLog.Debug().
 		Str("match_methods", formatCountMap(matchMethodCounts)).
@@ -668,4 +723,3 @@ func sanitizeLibraryPath(name string) string {
 	}
 	return s
 }
-

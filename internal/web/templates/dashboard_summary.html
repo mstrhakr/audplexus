@@ -9,7 +9,7 @@
     <a class="stat-card stat-card-link" href="/library?status=complete">
         <div class="label">Downloaded</div>
         <div class="value" id="stat-complete">{{.CompleteBooks}}</div>
-        <div class="delta {{if gt .TotalBooks 0}}up{{end}}">{{if gt .TotalBooks 0}}{{coveragePct .CompleteBooks .TotalBooks}}% of library{{else}}—{{end}}</div>
+        <div class="delta {{if or (and (eq .CoverageBasis "available") (gt .AvailableBooks 0)) (and (ne .CoverageBasis "available") (gt .TotalBooks 0))}}up{{end}}">{{if eq .CoverageBasis "available"}}{{if gt .AvailableBooks 0}}{{coveragePct .CompleteBooks .AvailableBooks}}% of available books{{else}}—{{end}}{{else}}{{if gt .TotalBooks 0}}{{coveragePct .CompleteBooks .TotalBooks}}% of library{{else}}—{{end}}{{end}}</div>
     </a>
     <a class="stat-card stat-card-link" href="/library?status=new">
         <div class="label">New</div>

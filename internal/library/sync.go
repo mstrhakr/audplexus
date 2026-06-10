@@ -43,12 +43,12 @@ const (
 type SyncPhase string
 
 const (
-	PhaseAudibleSync     SyncPhase = "audible_sync"
-	PhaseFileScan        SyncPhase = "file_scan"
-	PhaseMetadataRepair  SyncPhase = "metadata_repair"
-	PhasePlexSync        SyncPhase = "plex_sync"
-	PhaseCollectionSync  SyncPhase = "collection_sync"
-	PhaseDownloadQueue   SyncPhase = "download_queue"
+	PhaseAudibleSync    SyncPhase = "audible_sync"
+	PhaseFileScan       SyncPhase = "file_scan"
+	PhaseMetadataRepair SyncPhase = "metadata_repair"
+	PhasePlexSync       SyncPhase = "plex_sync"
+	PhaseCollectionSync SyncPhase = "collection_sync"
+	PhaseDownloadQueue  SyncPhase = "download_queue"
 )
 
 // DefaultFullPhases returns the standard set of sync phases in idle state.
@@ -89,19 +89,19 @@ type SubPhaseStatus struct {
 
 // PhaseStatus tracks the state of a single sync phase.
 type PhaseStatus struct {
-	Name           SyncPhase       `json:"name"`
-	Label          string          `json:"label"`
-	Status         string          `json:"status"` // "pending", "running", "complete", "failed", "skipped"
-	Message        string          `json:"message,omitempty"`
-	Error          string          `json:"error,omitempty"`
-	Current        int             `json:"current,omitempty"`
-	Total          int             `json:"total,omitempty"`
-	DisplayCurrent int             `json:"display_current,omitempty"`
-	DisplayTotal   int             `json:"display_total,omitempty"`
-	Percent        float64         `json:"percent,omitempty"`
-	Indeterminate  bool            `json:"indeterminate,omitempty"`
-	StartedAt      time.Time       `json:"started_at,omitempty"`
-	EndedAt        time.Time       `json:"ended_at,omitempty"`
+	Name           SyncPhase        `json:"name"`
+	Label          string           `json:"label"`
+	Status         string           `json:"status"` // "pending", "running", "complete", "failed", "skipped"
+	Message        string           `json:"message,omitempty"`
+	Error          string           `json:"error,omitempty"`
+	Current        int              `json:"current,omitempty"`
+	Total          int              `json:"total,omitempty"`
+	DisplayCurrent int              `json:"display_current,omitempty"`
+	DisplayTotal   int              `json:"display_total,omitempty"`
+	Percent        float64          `json:"percent,omitempty"`
+	Indeterminate  bool             `json:"indeterminate,omitempty"`
+	StartedAt      time.Time        `json:"started_at,omitempty"`
+	EndedAt        time.Time        `json:"ended_at,omitempty"`
 	SubPhases      []SubPhaseStatus `json:"sub_phases,omitempty"`
 }
 
@@ -682,10 +682,13 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 	plexItems := 0
 	if mode == SyncModeFull && s.plexSyncFunc != nil {
 		s.setPhase(PhasePlexSync, "running", "Syncing with library destination (scan + query)...")
+		libraryScanStart := time.Now()
 		items, plexErr := s.plexSyncFunc(ctx, s.subPhaseFnFor(PhasePlexSync))
+		libraryScanMs := time.Since(libraryScanStart).Milliseconds()
+
 		if plexErr != nil {
 			s.setPhase(PhasePlexSync, "failed", plexErr.Error())
-			syncLog.Warn().Err(plexErr).Msg("library scan phase failed")
+			syncLog.Warn().Err(plexErr).Int("library_scan_ms", int(libraryScanMs)).Msg("library scan phase failed")
 		} else {
 			plexItems = items
 			s.mu.Lock()
@@ -694,27 +697,28 @@ func (s *SyncService) runSync(ctx context.Context, mode SyncMode) (int, error) {
 			s.emitLocked()
 			s.mu.Unlock()
 			s.setPhase(PhasePlexSync, "complete", fmt.Sprintf("%d items in library (scan complete)", plexItems))
-			syncLog.Info().Int("library_items", plexItems).Msg("library scan complete")
+			syncLog.Info().Int("library_items", plexItems).Int("library_scan_ms", int(libraryScanMs)).Msg("library scan complete")
 		}
 	}
-
-	// --- Phase 4: Collection Sync (full sync only) ---
 
 	// --- Phase 5: Collection Sync (full sync only) ---
 	if mode == SyncModeFull && s.plexReconcileFunc != nil {
 		s.setPhase(PhaseCollectionSync, "running", "Reconciling Plex collections...")
 		completeStatus := database.BookStatusComplete
 		_, completeCount, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
+		collectionSyncStart := time.Now()
 		reconcileErr := s.plexReconcileFunc(ctx, s.subPhaseFnFor(PhaseCollectionSync), func(current, total int) {
 			displayCurrent := scaleProgress(current, total, completeCount)
 			s.updatePhaseProgressWithDisplay(PhaseCollectionSync, current, total, false, displayCurrent, completeCount)
 		})
+		collectionSyncMs := time.Since(collectionSyncStart).Milliseconds()
+
 		if reconcileErr != nil {
 			s.setPhase(PhaseCollectionSync, "failed", reconcileErr.Error())
-			syncLog.Warn().Err(reconcileErr).Msg("collection sync phase failed")
+			syncLog.Warn().Err(reconcileErr).Int("collection_sync_ms", int(collectionSyncMs)).Msg("collection sync phase failed")
 		} else {
 			s.setPhase(PhaseCollectionSync, "complete", "Collections verified")
-			syncLog.Info().Msg("plex collection sync complete")
+			syncLog.Info().Int("collection_sync_ms", int(collectionSyncMs)).Msg("plex collection sync complete")
 		}
 	}
 
@@ -1012,6 +1016,7 @@ func phaseRunsInMode(mode SyncMode, phase SyncPhase) bool {
 }
 
 func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.SyncHistory) (int, error) {
+	startTime := time.Now()
 	syncLog.Info().Msg("starting audible library sync")
 
 	// Audible's /library endpoint only returns purchase_date when the
@@ -1019,14 +1024,18 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	// user↔asset relationship payload, not the product itself. The SDK's
 	// DefaultResponseGroups omits it, so without this override the
 	// Library page renders Purchased as blank for every row.
+	fetchStart := time.Now()
 	libraryGroups := append([]string{}, audible.DefaultResponseGroups...)
 	libraryGroups = append(libraryGroups, "relationships")
 	books, err := s.client.GetAllLibrary(ctx, audible.WithResponseGroups(libraryGroups...))
+	fetchMs := time.Since(fetchStart).Milliseconds()
+
 	if err != nil {
-		syncLog.Error().Err(err).Msg("failed to fetch audible library")
+		syncLog.Error().Err(err).Int("fetch_ms", int(fetchMs)).Msg("failed to fetch audible library")
 		return 0, err
 	}
 
+	syncLog.Info().Int("total_books", len(books)).Int("fetch_ms", int(fetchMs)).Msg("fetched audible library")
 
 	syncRecord.BooksFound = len(books)
 	s.mu.Lock()
@@ -1040,19 +1049,42 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	s.emitLocked()
 	s.mu.Unlock()
 	_ = s.db.UpdateSync(ctx, syncRecord)
-	syncLog.Info().Int("total_books", len(books)).Msg("fetched audible library")
 
 	added := 0
 	scanned := 0
 	keepASIN := make(map[string]struct{})
+	entitlementCheckTimeMs := int64(0)
+	dbWriteTimeMs := int64(0)
+	lastProgressEmit := 0
 
 	for _, item := range books {
+		select {
+		case <-ctx.Done():
+			syncLog.Warn().Int("scanned", scanned).Int("added", added).Msg("audible sync cancelled")
+			return added, ctx.Err()
+		default:
+		}
+
 		book := convertBook(item)
 		syncLog.Trace().Str("asin", book.ASIN).Str("title", book.Title).Msg("processing book")
 
+		// Log progress every 500 books
+		if scanned > 0 && scanned%500 == 0 {
+			elapsed := time.Since(startTime)
+			avgMs := elapsed.Milliseconds() / int64(scanned)
+			eta := time.Duration((int64(len(books))-int64(scanned))*avgMs) * time.Millisecond
+			syncLog.Info().
+				Int("scanned", scanned).
+				Int("added", added).
+				Int("total", len(books)).
+				Int("elapsed_sec", int(elapsed.Seconds())).
+				Int("eta_sec", int(eta.Seconds())).
+				Msg("audible sync batch progress")
+		}
+
 		// Skip items not eligible for local download (e.g. ebook-only or non-owned).
 		if !item.Downloadable() {
-			syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Str("content_type", item.ContentType).Bool("is_downloadable", item.IsDownloadable).Msg("skipping non-downloadable item")
+			syncLog.Trace().Str("asin", book.ASIN).Str("content_type", item.ContentType).Msg("skipping non-downloadable item")
 			scanned++
 			s.mu.Lock()
 			s.progress.BooksScanned = scanned
@@ -1069,9 +1101,13 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		}
 
 		// Check DB first — known books skip the entitlement network call entirely.
+		dbCheckStart := time.Now()
 		existing, err := s.db.GetBookByASIN(ctx, book.ASIN)
+		dbCheckMs := time.Since(dbCheckStart).Milliseconds()
+		dbWriteTimeMs += dbCheckMs
+
 		if err != nil {
-			syncLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to check existing book")
+			syncLog.Error().Err(err).Str("asin", book.ASIN).Int("db_ms", int(dbCheckMs)).Msg("failed to check existing book")
 			scanned++
 			s.mu.Lock()
 			s.progress.BooksScanned = scanned
@@ -1092,13 +1128,17 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		// UI can show it under the "Unavailable" tab with the denial reason
 		// (e.g. once-Plus-catalog titles the user no longer has access to).
 		if existing == nil {
+			entitleStart := time.Now()
 			canDownload, cdErr := s.client.CanDownload(ctx, item)
+			entitleMs := time.Since(entitleStart).Milliseconds()
+			entitlementCheckTimeMs += entitleMs
+
 			if cdErr != nil || !canDownload {
 				reason := "Audible entitlement denied"
 				if cdErr != nil {
 					reason = errs.CleanEntitlementReason(cdErr.Error())
 				}
-				syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Str("reason", reason).Msg("marking new item as unavailable: entitlement denied")
+				syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Str("reason", reason).Int("entitle_ms", int(entitleMs)).Msg("marking new item as unavailable: entitlement denied")
 				book.Status = database.BookStatusUnavailable
 				book.UnavailableReason = reason
 				if err := s.db.UpsertBook(ctx, &book); err != nil {
@@ -1119,13 +1159,22 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 				}
 				s.emitLocked()
 				s.mu.Unlock()
+				if scanned%20 == 0 {
+					syncRecord.BooksAdded = added
+					_ = s.db.UpdateSync(ctx, syncRecord)
+				}
 				continue
 			}
+			syncLog.Debug().Str("asin", book.ASIN).Int("entitle_ms", int(entitleMs)).Msg("audible sync: entitlement check passed")
 		} else if existing.Status == database.BookStatusUnavailable {
 			// User may have regained access (Plus added title back). Re-check.
+			entitleStart := time.Now()
 			canDownload, cdErr := s.client.CanDownload(ctx, item)
+			entitleMs := time.Since(entitleStart).Milliseconds()
+			entitlementCheckTimeMs += entitleMs
+
 			if cdErr == nil && canDownload {
-				syncLog.Info().Str("asin", book.ASIN).Msg("previously-unavailable book is now accessible")
+				syncLog.Info().Str("asin", book.ASIN).Int("entitle_ms", int(entitleMs)).Msg("previously-unavailable book is now accessible")
 				book.Status = database.BookStatusNew
 				book.UnavailableReason = ""
 			} else {
@@ -1155,8 +1204,11 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Msg("new book discovered")
 		}
 
+		upsertStart := time.Now()
 		if err := s.db.UpsertBook(ctx, &book); err != nil {
-			syncLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to upsert book")
+			upsertMs := time.Since(upsertStart).Milliseconds()
+			dbWriteTimeMs += upsertMs
+			syncLog.Error().Err(err).Str("asin", book.ASIN).Int("upsert_ms", int(upsertMs)).Msg("failed to upsert book")
 			scanned++
 			s.mu.Lock()
 			s.progress.BooksScanned = scanned
@@ -1175,19 +1227,24 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			}
 			continue
 		}
+		upsertMs := time.Since(upsertStart).Milliseconds()
+		dbWriteTimeMs += upsertMs
 
 		scanned++
-		s.mu.Lock()
-		s.progress.BooksScanned = scanned
-		s.progress.BooksAdded = added
-		for i := range s.progress.Phases {
-			if s.progress.Phases[i].Name == PhaseAudibleSync {
-				setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
-				break
+		if scanned-lastProgressEmit >= 20 {
+			s.mu.Lock()
+			s.progress.BooksScanned = scanned
+			s.progress.BooksAdded = added
+			for i := range s.progress.Phases {
+				if s.progress.Phases[i].Name == PhaseAudibleSync {
+					setPhaseProgress(&s.progress.Phases[i], scanned, len(books), false, s.progress.Phases[i].Status)
+					break
+				}
 			}
+			s.emitLocked()
+			s.mu.Unlock()
+			lastProgressEmit = scanned
 		}
-		s.emitLocked()
-		s.mu.Unlock()
 		if scanned%20 == 0 {
 			syncRecord.BooksAdded = added
 			_ = s.db.UpdateSync(ctx, syncRecord)
@@ -1227,7 +1284,26 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		_ = s.db.UpdateSync(ctx, syncRecord)
 	}
 
-	syncLog.Info().Int("added", added).Int("eligible", eligibleCount).Int("removed", removed).Msg("audible library sync complete")
+	totalElapsed := time.Since(startTime)
+	avgDbMs := dbWriteTimeMs / int64(scanned)
+	avgEntitleMs := int64(0)
+	if added > 0 {
+		// Only new books trigger entitlement checks
+		avgEntitleMs = entitlementCheckTimeMs / int64(added)
+	}
+
+	syncLog.Info().
+		Int("added", added).
+		Int("eligible", eligibleCount).
+		Int("removed", removed).
+		Int("fetch_ms", int(fetchMs)).
+		Int("db_total_ms", int(dbWriteTimeMs)).
+		Int("avg_db_ms", int(avgDbMs)).
+		Int("entitle_total_ms", int(entitlementCheckTimeMs)).
+		Int("avg_entitle_ms", int(avgEntitleMs)).
+		Int("elapsed_ms", int(totalElapsed.Milliseconds())).
+		Int("elapsed_sec", int(totalElapsed.Seconds())).
+		Msg("audible library sync complete")
 	return added, nil
 }
 
@@ -1343,4 +1419,3 @@ func convertBook(b audible.Book) database.Book {
 		DRMType:        drmType,
 	}
 }
-

@@ -604,6 +604,15 @@ func buildBookWherePostgres(filter BookFilter) (string, []interface{}) {
 		args = append(args, *filter.Status)
 		paramIdx++
 	}
+	if len(filter.ExcludeStatuses) > 0 {
+		placeholders := make([]string, 0, len(filter.ExcludeStatuses))
+		for _, status := range filter.ExcludeStatuses {
+			placeholders = append(placeholders, fmt.Sprintf("$%d", paramIdx))
+			args = append(args, status)
+			paramIdx++
+		}
+		clauses = append(clauses, "status NOT IN ("+strings.Join(placeholders, ",")+")")
+	}
 	if filter.Search != "" {
 		clauses = append(clauses, fmt.Sprintf("(title ILIKE $%d OR author ILIKE $%d OR series ILIKE $%d OR asin ILIKE $%d)", paramIdx, paramIdx+1, paramIdx+2, paramIdx+3))
 		search := "%" + filter.Search + "%"

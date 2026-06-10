@@ -3329,52 +3329,34 @@ body.sidebar-open .sidebar-backdrop {
     box-shadow: 0 0 0 3px rgba(244, 67, 54, 0.18);
 }
 
-/* ── Diagnostics: Live logs row + copy affordance ───────────────────
-   Layout stays as a clean 2-column grid (timestamp · message). The
-   copy button is absolute-positioned on the right edge so it never
-   reserves layout space — it materializes only when the row is hovered
-   or keyboard-focused. A short gradient feather behind it bleeds the
-   message into surface so long lines don't render visibly under the
-   icon. */
+/* ── Diagnostics: Live logs row + controls ────────────────────────── */
 .diag-log-row {
     display: grid;
-    grid-template-columns: 80px 1fr;
-    gap: 0.6rem;
+    grid-template-columns: 84px 58px minmax(0, 1fr) auto auto;
+    gap: 0.55rem;
     align-items: start;
-    padding: 1px 0;
+    padding: 0.35rem 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-    position: relative;
 }
+
 .diag-log-row .diag-log-ts {
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
 }
+
+.diag-log-row .diag-log-level {
+    font-weight: 600;
+    font-size: 0.75rem;
+}
+
 .diag-log-row .diag-log-msg {
-    white-space: pre-wrap;
+    white-space: normal;
     word-break: break-word;
     min-width: 0;
 }
 
-/* Gradient feather under the floating button — only visible on hover.
-   Fades the last ~60px of the row to the panel surface so the copy
-   icon never sits visually on top of message text. */
-.diag-log-row::after {
-    content: "";
-    position: absolute;
-    inset: 0 0 0 auto;
-    width: 64px;
-    background: linear-gradient(to right, transparent, var(--surface) 70%);
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.12s ease;
-}
-.diag-log-row:hover::after,
-.diag-log-row:focus-within::after { opacity: 1; }
-
+.diag-log-row .diag-log-expand,
 .diag-log-row .diag-log-copy {
-    position: absolute;
-    top: 1px;
-    right: 4px;
     width: 22px;
     height: 22px;
     padding: 0;
@@ -3390,20 +3372,32 @@ body.sidebar-open .sidebar-backdrop {
     transform: translateX(4px);
     transition: opacity 0.12s ease, transform 0.12s ease,
                 color 0.12s, border-color 0.12s, background 0.12s;
-    z-index: 1;
 }
+
+.diag-log-row:hover .diag-log-expand,
+.diag-log-row:focus-within .diag-log-expand,
+.diag-log-expand:focus-visible,
 .diag-log-row:hover .diag-log-copy,
 .diag-log-row:focus-within .diag-log-copy,
 .diag-log-copy:focus-visible {
     opacity: 1;
     transform: translateX(0);
 }
+
+.diag-log-expand:hover,
 .diag-log-copy:hover {
     color: var(--plex-cyan);
     border-color: var(--plex-cyan);
     background: var(--surface-2);
 }
-.diag-log-copy:active { transform: translateX(0) scale(0.94); }
+
+.diag-log-expand[aria-expanded="true"] svg {
+    transform: rotate(180deg);
+}
+
+.diag-log-copy:active {
+    transform: translateX(0) scale(0.94);
+}
 
 /* Transient feedback after the JS copies. is-ok / is-err are sticky
    for ~1.2s so the user catches the outcome even if their cursor has
@@ -3423,7 +3417,58 @@ body.sidebar-open .sidebar-backdrop {
     border-color: var(--error);
     background: rgba(244, 67, 54, 0.14);
 }
-.diag-log-copy svg { display: block; }
+
+/* Expanded details panel */
+.diag-log-details {
+    background: var(--surface-2);
+    border-left: 2px solid var(--border);
+    margin: 0.6rem 0 0 2.6rem;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    animation: slideDown 0.15s ease-out;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.diag-log-detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.diag-log-detail-row {
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-start;
+}
+
+.diag-log-detail-key {
+    font-weight: 600;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.diag-log-detail-val {
+    color: var(--text);
+    word-break: break-word;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.diag-log-detail-raw {
+    margin-top: 0.4rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
+}
 
 /* Diagnostics: Connection tests list */
 #diag-conn-list {

@@ -330,6 +330,15 @@ func (s *Server) setupTemplates() {
 		"mul": func(a float64, b float64) float64 {
 			return a * b
 		},
+		"pctFloor": func(p float64) int {
+			if p <= 0 {
+				return 0
+			}
+			if p >= 1 {
+				return 100
+			}
+			return int(math.Floor(p * 100))
+		},
 		"add": func(a, b int) int { return a + b },
 		"sub": func(a, b int) int { return a - b },
 		"deref": func(t *time.Time) time.Time {
@@ -352,7 +361,7 @@ func (s *Server) setupTemplates() {
 		// destination health detail) are raw, so templates pipe through
 		// this helper to keep the render uniform.
 		"cleanError": cleanErrorForDisplay,
-		"hasSuffix": strings.HasSuffix,
+		"hasSuffix":  strings.HasSuffix,
 		"coveragePct": func(part, total int) int {
 			if total <= 0 {
 				return 0
@@ -468,7 +477,14 @@ func (s *Server) setupRoutes() {
 	staticSub, _ := fs.Sub(staticFS, "static")
 	static := s.router.Group("/static")
 	static.Use(func(c *gin.Context) {
-		c.Header("Cache-Control", "public, max-age=604800")
+		path := c.Request.URL.Path
+		// Keep logos/cacheable images hot, but force stylesheet/script revalidation
+		// so UI changes (like diagnostics styling) show immediately after deploy.
+		if strings.HasSuffix(path, ".png") || strings.HasSuffix(path, ".svg") || strings.HasSuffix(path, ".jpg") || strings.HasSuffix(path, ".jpeg") || strings.HasSuffix(path, ".webp") {
+			c.Header("Cache-Control", "public, max-age=604800")
+		} else {
+			c.Header("Cache-Control", "no-cache")
+		}
 		c.Next()
 	})
 	static.StaticFS("/", http.FS(staticSub))
@@ -637,7 +653,7 @@ func (s *Server) setupRoutes() {
 		// browser can pretty-render in the diagnostics page.
 		api.GET("/diagnostics/env", s.handleDiagnosticsEnv)
 		api.GET("/diagnostics/destinations", s.handleDiagnosticsDestinations)
-		api.GET("/diagnostics/logs/tail", s.handleDiagnosticsLogsTail)
+		api.GET("/diagnostics/logs/stream", s.handleDiagnosticsLogsSSE)
 		api.POST("/downloads/redownload/:asin", s.handleRedownload)
 
 		// Per-book conversion between m4b and chapter-split mp3.
@@ -687,6 +703,12 @@ func ginLogger() gin.HandlerFunc {
 				Str("from", realIP).
 				Dur("stream_duration", latency).
 				Msg("sse stream closed")
+			return
+		}
+
+		// Diagnostics logs stream is consumed by the log viewer itself.
+		// Suppress per-request access logs to avoid feedback noise.
+		if path == "/api/diagnostics/logs/stream" {
 			return
 		}
 
@@ -753,11 +775,12 @@ func (s *Server) getDashboardData(ctx context.Context) gin.H {
 }
 
 func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
-	_, totalBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Limit: 1})
-	completeStatus := database.BookStatusComplete
-	_, completeBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &completeStatus, Limit: 1})
-	newStatus := database.BookStatusNew
-	_, newBooks, _ := s.db.ListBooks(ctx, database.BookFilter{Status: &newStatus, Limit: 1})
+	counts := s.libraryStatusCounts(ctx)
+	totalBooks := counts["all"]
+	availableBooks := counts["available"]
+	completeBooks := counts["complete"]
+	newBooks := counts["new"]
+	coverageBooks := s.coverageDenominator(ctx, counts)
 
 	activeStatus := database.DownloadStatusActive
 	activeDownloads, _ := s.db.ListDownloads(ctx, &activeStatus)
@@ -770,22 +793,22 @@ func (s *Server) getDashboardSummaryData(ctx context.Context) gin.H {
 	lastSync, _ := s.db.GetLastSync(ctx)
 
 	return gin.H{
-		"TotalBooks":    totalBooks,
-		"CompleteBooks": completeBooks,
-		"NewBooks":      newBooks,
-		"ActiveDL":      len(activeDownloads),
-		"PendingDL":     len(pendingDownloads),
-		"FailedDL":      len(failedDownloads),
-		"LastSync":      lastSync,
+		"TotalBooks":     totalBooks,
+		"AvailableBooks": availableBooks,
+		"CompleteBooks":  completeBooks,
+		"NewBooks":       newBooks,
+		"CoverageBasis":  s.coverageBasis(ctx),
+		"ActiveDL":       len(activeDownloads),
+		"PendingDL":      len(pendingDownloads),
+		"FailedDL":       len(failedDownloads),
+		"LastSync":       lastSync,
 
 		// Per-destination summary cards. Replaces the legacy
 		// single-active-backend stat cards. Empty slice means "no
 		// destinations configured yet" — template shows a CTA.
-		// Coverage % uses totalBooks (Audible library size) as the
-		// denominator so it represents "fraction of the library present
-		// in this destination" — stable across status transitions and
-		// matches the user's mental model.
-		"DestinationSummaries": s.destinationSummaries(ctx, totalBooks),
+		// Coverage % uses the selected denominator so it can represent
+		// either the full library or only available titles.
+		"DestinationSummaries": s.destinationSummaries(ctx, coverageBooks),
 	}
 }
 
@@ -809,7 +832,7 @@ type destinationSummaryView struct {
 	TypeLabel       string
 	Enabled         bool
 	Configured      bool
-	HasCredential   bool   // API key for Emby/Jellyfin/ABS, token for Plex
+	HasCredential   bool // API key for Emby/Jellyfin/ABS, token for Plex
 	URL             string
 	PlexSectionID   string // plex-only
 	LibraryID       string // emby/jellyfin/abs
@@ -819,6 +842,7 @@ type destinationSummaryView struct {
 	ItemCountSet    bool
 	Coverage        int
 	CoverageSet     bool
+	CoverageBasis   string // "all" | "available"
 	Health          string // "healthy" | "failed" | "never" | "not_configured"
 	HealthDetail    string // for failed: shorter human message
 	LastError       string
@@ -843,10 +867,11 @@ func (s *Server) destinationSummaries(ctx context.Context, libraryTotal int) []d
 		return nil
 	}
 
+	basis := s.coverageBasis(ctx)
 	out := make([]destinationSummaryView, 0, len(rows))
 	for _, r := range rows {
 		row := r
-		out = append(out, s.buildDestinationSummary(ctx, &row, libraryTotal))
+		out = append(out, s.buildDestinationSummary(ctx, &row, libraryTotal, basis))
 	}
 	return out
 }
@@ -861,11 +886,8 @@ func (s *Server) singleDestinationSummary(ctx context.Context, id string) *desti
 	if err != nil || row == nil {
 		return nil
 	}
-	// Coverage % uses the total library size as the denominator so the
-	// meter renders the same as it does on the full grid. Cheap
-	// LIMIT-1 count.
-	_, libraryTotal, _ := s.db.ListBooks(ctx, database.BookFilter{Limit: 1})
-	v := s.buildDestinationSummary(ctx, row, libraryTotal)
+	counts := s.libraryStatusCounts(ctx)
+	v := s.buildDestinationSummary(ctx, row, s.coverageDenominator(ctx, counts), s.coverageBasis(ctx))
 	return &v
 }
 
@@ -873,7 +895,7 @@ func (s *Server) singleDestinationSummary(ctx context.Context, id string) *desti
 // builder and the single-row swap path. Probes LibraryItemCount (with
 // the 30s cache) only for enabled+configured destinations so toggling
 // a disabled row stays cheap.
-func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, libraryTotal int) destinationSummaryView {
+func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, libraryTotal int, basis string) destinationSummaryView {
 	hasCred := row.APIKey != "" || row.PlexToken != ""
 	v := destinationSummaryView{
 		ID:              row.ID,
@@ -893,6 +915,7 @@ func (s *Server) buildDestinationSummary(ctx context.Context, row *database.Libr
 		LastCheckedAt:   row.LastHealthCheckAt,
 		CreatedAt:       row.CreatedAt,
 		UpdatedAt:       row.UpdatedAt,
+		CoverageBasis:   basis,
 	}
 
 	if !v.Enabled || !v.Configured {
@@ -926,6 +949,21 @@ func (s *Server) buildDestinationSummary(ctx context.Context, row *database.Libr
 		v.CoverageSet = true
 	}
 	return v
+}
+
+func (s *Server) coverageBasis(ctx context.Context) string {
+	basis := s.settingString(ctx, library.SettingKeyCoverageBasis, library.CoverageBasisAll)
+	if basis == library.CoverageBasisAvailable {
+		return basis
+	}
+	return library.CoverageBasisAll
+}
+
+func (s *Server) coverageDenominator(ctx context.Context, counts map[string]int) int {
+	if s.coverageBasis(ctx) == library.CoverageBasisAvailable {
+		return counts["available"]
+	}
+	return counts["all"]
 }
 
 // buildDestinationBackend delegates to DestinationManager.BuildBackend
@@ -975,7 +1013,6 @@ func (s *Server) getCachedDestinationItemCount(ctx context.Context, destID strin
 	s.destItemCountCache.mu.Unlock()
 	return items, err
 }
-
 
 func (s *Server) getDashboardDownloadsData(ctx context.Context) gin.H {
 	failedStatus := database.DownloadStatusFailed
@@ -1079,8 +1116,13 @@ func (s *Server) handleLibrary(c *gin.Context) {
 
 	statusStr := c.Query("status")
 	if statusStr != "" {
-		status := database.BookStatus(statusStr)
-		filter.Status = &status
+		switch statusStr {
+		case "available":
+			filter.ExcludeStatuses = []database.BookStatus{database.BookStatusUnavailable}
+		default:
+			status := database.BookStatus(statusStr)
+			filter.Status = &status
+		}
 	}
 
 	// Presence filters. on_disk is a tri-state: missing/empty = any,
@@ -1119,6 +1161,7 @@ func (s *Server) handleLibrary(c *gin.Context) {
 	}
 
 	counts := s.libraryStatusCounts(ctx)
+	coverageBasis := s.coverageBasis(ctx)
 
 	totalPages := (total + pageSize - 1) / pageSize
 	if totalPages < 1 {
@@ -1132,22 +1175,23 @@ func (s *Server) handleLibrary(c *gin.Context) {
 	}
 
 	data := gin.H{
-		"Books":             books,
-		"Total":             total,
-		"Filter":            filter,
-		"Page":              "library",
-		"BookActions":       buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
-		"BookPresence":      s.computeBookPresence(ctx, books),
-		"StatusCounts":      counts,
-		"ActiveStatus":      statusStr,
-		"PresenceFilters":   s.libraryPresenceFilterOpts(ctx, destFilterState),
-		"OnDiskFilter":      c.Query("on_disk"),
-		"PageNum":           pageNum,
-		"TotalPages":        totalPages,
-		"PageSize":          pageSize,
-		"PageFrom":          from,
-		"PageTo":            to,
-		"PageNums":          paginationNumbers(pageNum, totalPages),
+		"Books":           books,
+		"Total":           total,
+		"Filter":          filter,
+		"Page":            "library",
+		"BookActions":     buildLibraryBookActions(books, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)),
+		"BookPresence":    s.computeBookPresence(ctx, books),
+		"StatusCounts":    counts,
+		"ActiveStatus":    statusStr,
+		"CoverageBasis":   coverageBasis,
+		"PresenceFilters": s.libraryPresenceFilterOpts(ctx, destFilterState),
+		"OnDiskFilter":    c.Query("on_disk"),
+		"PageNum":         pageNum,
+		"TotalPages":      totalPages,
+		"PageSize":        pageSize,
+		"PageFrom":        from,
+		"PageTo":          to,
+		"PageNums":        paginationNumbers(pageNum, totalPages),
 	}
 
 	// For HTMX partial requests, render only the table body
@@ -1199,6 +1243,7 @@ func (s *Server) libraryPresenceFilterOpts(ctx context.Context, state map[string
 func (s *Server) libraryStatusCounts(ctx context.Context) map[string]int {
 	out := map[string]int{
 		"all":         0,
+		"available":   0,
 		"new":         0,
 		"in_progress": 0,
 		"waiting":     0,
@@ -1230,6 +1275,10 @@ func (s *Server) libraryStatusCounts(ctx context.Context) map[string]int {
 		// Other statuses (skipped) contribute to "all" but not to any
 		// filter tab; that matches the legacy behaviour where skipped
 		// was implicitly counted via the unfiltered total only.
+	}
+	out["available"] = out["all"] - out["unavailable"]
+	if out["available"] < 0 {
+		out["available"] = 0
 	}
 	return out
 }
@@ -1372,13 +1421,13 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 	fileInfo := s.buildBookFileInfo(ctx, book)
 
 	data := gin.H{
-		"Book":          book,
-		"Page":          "library",
-		"BookFolderPath": folderPath,
-		"BookFiles":     files,
-		"BookFileCount": len(files),
-		"BookFileInfo":  fileInfo,
-		"BookAction":    buildLibraryBookActions([]database.Book{*book}, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false))[book.ID],
+		"Book":                    book,
+		"Page":                    "library",
+		"BookFolderPath":          folderPath,
+		"BookFiles":               files,
+		"BookFileCount":           len(files),
+		"BookFileInfo":            fileInfo,
+		"BookAction":              buildLibraryBookActions([]database.Book{*book}, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false))[book.ID],
 		"BookDestinationStatuses": s.bookDestinationStatuses(ctx, book.ID),
 	}
 
@@ -1975,6 +2024,7 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 	syncEnabled := s.settingBool(ctx, "sync_enabled", true)
 	syncMode := s.settingString(ctx, "sync_mode", "full")
 	syncAutoQueueNew := s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false)
+	coverageBasis := s.coverageBasis(ctx)
 	outputFormat, _ := s.db.GetSetting(ctx, "output_format")
 	if outputFormat == "" {
 		outputFormat = "m4b"
@@ -2028,6 +2078,7 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 		"SyncEnabled":          syncEnabled,
 		"SyncMode":             syncMode,
 		"SyncAutoQueueNew":     syncAutoQueueNew,
+		"CoverageBasis":        coverageBasis,
 		"OutputFormat":         outputFormat,
 		"NativeAudiobooksPath": hostPath,
 		"PlexSectionPath":      plexSectionPath,
@@ -2037,9 +2088,9 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 		"DownloadConcurrency":  downloadConcurrency,
 		"DecryptConcurrency":   decryptConcurrency,
 		"ProcessConcurrency":   processConcurrency,
-		"AuthorDirTemplate":   authorDirTemplate,
-		"BookDirTemplate":     bookDirTemplate,
-		"FileNameTemplate":    fileNameTemplate,
+		"AuthorDirTemplate":    authorDirTemplate,
+		"BookDirTemplate":      bookDirTemplate,
+		"FileNameTemplate":     fileNameTemplate,
 		"LogLevel":             logLevel,
 		"Devices":              devices,
 		"Page":                 "settings",
@@ -2233,12 +2284,12 @@ func destinationLogoPath(t string) string {
 // page render (a handful of LIMIT 1 / len() queries) — for HTMX fragment
 // responses the value is omitted since base.html isn't part of the swap.
 type sidebarData struct {
-	NewBooks       int
-	ActiveDL       int
+	NewBooks        int
+	ActiveDL        int
 	FailedDestAlert int
-	Version        string
-	Uptime         string
-	Healthy        bool // true when no failed destinations and Audible auth is good
+	Version         string
+	Uptime          string
+	Healthy         bool // true when no failed destinations and Audible auth is good
 }
 
 // computeSidebar gathers the fields the sidebar template renders. Cheap
@@ -3091,6 +3142,13 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 		if setSetting("sync_mode", mode) && s.sched != nil {
 			s.sched.SetSyncMode(mode)
 		}
+	}
+	if raw := strings.TrimSpace(c.PostForm("coverage_basis")); raw != "" {
+		basis := library.CoverageBasisAll
+		if raw == library.CoverageBasisAvailable {
+			basis = raw
+		}
+		_ = setSetting(library.SettingKeyCoverageBasis, basis)
 	}
 	if scheduleChanged && s.sched != nil {
 		enabled := s.settingBool(ctx, "sync_enabled", true)
@@ -3974,5 +4032,3 @@ func (s *Server) handleReorganizeLibrary(c *gin.Context) {
 		"failed":  failed,
 	})
 }
-
-

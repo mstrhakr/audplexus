@@ -187,16 +187,16 @@
                         </dd>
                     </dl>
                 </div>
-                <div class="form-row inline" style="margin-top:1rem;display:flex;align-items:center;gap:.75rem;justify-content:space-between">
+                <label class="form-row inline" for="auto_queue_new" style="margin-top:1rem;display:flex;align-items:center;gap:.75rem;justify-content:space-between">
                     <span class="row-label">
                         Automatically download new books
                         <div class="hint" style="margin:0">When a sync finds a new book, add it to the download queue right away. You can change this later in Settings.</div>
                     </span>
                     <span class="toggle">
-                        <input type="checkbox" name="auto_queue_new" value="true" form="setup-finish-form" checked>
+                        <input type="checkbox" id="auto_queue_new" name="auto_queue_new" value="true" form="setup-finish-form" checked>
                         <span class="toggle-slider"></span>
                     </span>
-                </div>
+                </label>
 
                 {{if .Authenticated}}
                 <div class="alert ok" style="margin-top:1rem"><span class="ico">✓</span><div><b>First sync will start automatically.</b> Expect 1–3 minutes for a typical library.</div></div>

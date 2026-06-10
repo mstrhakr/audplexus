@@ -3,8 +3,8 @@ package web
 import (
 	"context"
 	"encoding/json"
-	"html"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -47,26 +47,27 @@ type diagnosticsBookDestinationStatus struct {
 }
 
 type diagnosticsIssueItem struct {
-	ASIN                string                            `json:"asin"`
-	Title               string                            `json:"title"`
-	Author              string                            `json:"author"`
-	FilePath            string                            `json:"file_path,omitempty"`
-	OnDisk              bool                              `json:"on_disk"`
-	IssueSummary        string                            `json:"issue_summary"`
-	DestinationStatuses []diagnosticsBookDestinationStatus `json:"destination_statuses"`
-	CanTargetedScan     bool                              `json:"can_targeted_scan"`
-	CanRedownload       bool                              `json:"can_redownload"`
+	ASIN                  string                             `json:"asin"`
+	Title                 string                             `json:"title"`
+	Author                string                             `json:"author"`
+	FilePath              string                             `json:"file_path,omitempty"`
+	OnDisk                bool                               `json:"on_disk"`
+	IssueSummary          string                             `json:"issue_summary"`
+	DestinationStatuses   []diagnosticsBookDestinationStatus `json:"destination_statuses"`
+	MissingDestinationIDs []string                           `json:"missing_destination_ids,omitempty"`
+	CanTargetedScan       bool                               `json:"can_targeted_scan"`
+	CanRedownload         bool                               `json:"can_redownload"`
 }
 
 type diagnosticsCompareResponse struct {
-	GeneratedAt       time.Time                  `json:"generated_at"`
-	TotalBooks        int                        `json:"total_books"`
-	CompleteBooks     int                        `json:"complete_books"`
-	IssueBooks        int                        `json:"issue_books"`
-	DiskMissing       int                        `json:"disk_missing"`
-	Destinations      []diagnosticsDestinationCard `json:"destinations"`
-	Items             []diagnosticsIssueItem     `json:"items"`
-	UserMarketplace   string                     `json:"user_marketplace"`
+	GeneratedAt     time.Time                    `json:"generated_at"`
+	TotalBooks      int                          `json:"total_books"`
+	CompleteBooks   int                          `json:"complete_books"`
+	IssueBooks      int                          `json:"issue_books"`
+	DiskMissing     int                          `json:"disk_missing"`
+	Destinations    []diagnosticsDestinationCard `json:"destinations"`
+	Items           []diagnosticsIssueItem       `json:"items"`
+	UserMarketplace string                       `json:"user_marketplace"`
 }
 
 type diagnosticsRemoteItem struct {
@@ -189,6 +190,7 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 		}
 
 		missingNames := make([]string, 0)
+		missingIDs := make([]string, 0)
 		unknownNames := make([]string, 0)
 		for _, inv := range inventories {
 			status := diagnosticsBookDestinationStatus{
@@ -220,6 +222,7 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 				status.Reason = reason
 				if status.Status == "missing" {
 					missingNames = append(missingNames, status.DestinationName)
+					missingIDs = append(missingIDs, status.DestinationID)
 					destCards[cardIdx].Missing++
 				} else {
 					unknownNames = append(unknownNames, status.DestinationName)
@@ -236,6 +239,7 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 		if !onDisk {
 			item.IssueSummary = "File missing from disk"
 		} else if len(missingNames) > 0 {
+			item.MissingDestinationIDs = missingIDs
 			item.IssueSummary = "Missing in destinations: " + strings.Join(missingNames, ", ")
 		} else if len(unknownNames) > 0 {
 			item.IssueSummary = "Unknown in destinations: " + strings.Join(unknownNames, ", ")
@@ -325,8 +329,9 @@ func scanLocalASINAudioPaths(root string) map[string]string {
 func (s *Server) handleDiagnosticsTargetedScan(c *gin.Context) {
 	ctx := c.Request.Context()
 	var req struct {
-		ASIN          string `json:"asin"`
-		DestinationID string `json:"destination_id"`
+		ASIN           string   `json:"asin"`
+		DestinationID  string   `json:"destination_id"`
+		DestinationIDs []string `json:"destination_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.ASIN) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing asin"})
@@ -348,16 +353,26 @@ func (s *Server) handleDiagnosticsTargetedScan(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no enabled destinations configured"})
 		return
 	}
-	if strings.TrimSpace(req.DestinationID) != "" {
-		filtered := make([]database.LibraryDestination, 0, 1)
+	requestedIDs := map[string]struct{}{}
+	for _, id := range req.DestinationIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		requestedIDs[id] = struct{}{}
+	}
+	if len(requestedIDs) == 0 && strings.TrimSpace(req.DestinationID) != "" {
+		requestedIDs[strings.TrimSpace(req.DestinationID)] = struct{}{}
+	}
+	if len(requestedIDs) > 0 {
+		filtered := make([]database.LibraryDestination, 0, len(requestedIDs))
 		for _, d := range dests {
-			if d.ID == strings.TrimSpace(req.DestinationID) {
+			if _, ok := requestedIDs[d.ID]; ok {
 				filtered = append(filtered, d)
-				break
 			}
 		}
 		if len(filtered) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "destination not found or not enabled"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "requested destinations not found or not enabled"})
 			return
 		}
 		dests = filtered
@@ -938,7 +953,6 @@ func normalizeDiagnosticsPathKey(p string) string {
 	return strings.ToLower(strings.Join(parts, "/"))
 }
 
-
 // handleDiagnosticsEnv returns a JSON snapshot of runtime + path
 // info for the DS-style "Logs & Environment" diagnostics tab. Read-only.
 func (s *Server) handleDiagnosticsEnv(c *gin.Context) {
@@ -1019,15 +1033,56 @@ func (s *Server) handleDiagnosticsDestinations(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"destinations": out})
 }
 
-// handleDiagnosticsLogsTail returns the most recent log lines from the
-// in-memory ring buffer (capped at 1024). Polled by the diagnostics
-// page every 2s while the Logs panel is visible.
-func (s *Server) handleDiagnosticsLogsTail(c *gin.Context) {
-	n := 200
+// handleDiagnosticsLogsSSE streams diagnostics log entries via SSE.
+// It emits a bootstrap event with recent history, then incremental
+// "log" events for each new line captured by the in-memory ring buffer.
+func (s *Server) handleDiagnosticsLogsSSE(c *gin.Context) {
+	n := 300
 	if v := c.Query("n"); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 1024 {
 			n = parsed
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"entries": logging.TailLogs(n)})
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	ctx := c.Request.Context()
+	id, ch := logging.SubscribeLogs()
+	defer logging.UnsubscribeLogs(id)
+
+	initialRaw := logging.TailLogs(n)
+	initial := make([]logging.ParsedEntry, len(initialRaw))
+	for i, raw := range initialRaw {
+		entry := logging.ParseLogLine(raw.Line)
+		if entry.Time.IsZero() {
+			entry.Time = raw.Time
+		}
+		initial[i] = entry
+	}
+	c.SSEvent("logs_bootstrap", gin.H{"entries": initial})
+
+	keepAlive := time.NewTicker(20 * time.Second)
+	defer keepAlive.Stop()
+
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-keepAlive.C:
+			c.SSEvent("ping", gin.H{"ts": time.Now().UTC()})
+			return true
+		case raw, ok := <-ch:
+			if !ok {
+				return false
+			}
+			entry := logging.ParseLogLine(raw.Line)
+			if entry.Time.IsZero() {
+				entry.Time = raw.Time
+			}
+			c.SSEvent("log", entry)
+			return true
+		}
+	})
 }

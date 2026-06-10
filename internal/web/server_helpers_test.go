@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/library"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
 )
 
@@ -155,5 +156,81 @@ func TestBuildLibraryBookActionsHideCancelWhenComplete(t *testing.T) {
 	}
 	if action.ShowCancel {
 		t.Fatalf("expected ShowCancel false for complete book")
+	}
+}
+
+func libraryStatusCountsAvailableAndCoverageBasisDup(t *testing.T) {
+	db := newWebTestDB(t)
+	s := &Server{db: db}
+	ctx := context.Background()
+
+	seed := []database.Book{
+		{ASIN: "B1001", Title: "New", Author: "x", Status: database.BookStatusNew},
+		{ASIN: "B1002", Title: "Complete", Author: "x", Status: database.BookStatusComplete},
+		{ASIN: "B1003", Title: "Unavailable", Author: "x", Status: database.BookStatusUnavailable},
+	}
+	for i := range seed {
+		if err := db.UpsertBook(ctx, &seed[i]); err != nil {
+			t.Fatalf("UpsertBook %s: %v", seed[i].ASIN, err)
+		}
+	}
+
+	counts := s.libraryStatusCounts(ctx)
+	if counts["all"] != 3 {
+		t.Fatalf("all = %d, want 3", counts["all"])
+	}
+	if counts["available"] != 2 {
+		t.Fatalf("available = %d, want 2", counts["available"])
+	}
+	if counts["unavailable"] != 1 {
+		t.Fatalf("unavailable = %d, want 1", counts["unavailable"])
+	}
+
+	if err := db.SetSetting(ctx, library.SettingKeyCoverageBasis, library.CoverageBasisAvailable); err != nil {
+		t.Fatalf("SetSetting coverage_basis: %v", err)
+	}
+	if got := s.coverageBasis(ctx); got != library.CoverageBasisAvailable {
+		t.Fatalf("coverageBasis = %q, want %q", got, library.CoverageBasisAvailable)
+	}
+	if got := s.coverageDenominator(ctx, counts); got != 2 {
+		t.Fatalf("coverageDenominator = %d, want 2", got)
+	}
+}
+
+func TestLibraryStatusCountsAvailableAndCoverageBasis(t *testing.T) {
+	db := newWebTestDB(t)
+	s := &Server{db: db}
+	ctx := context.Background()
+
+	seed := []database.Book{
+		{ASIN: "B1001", Title: "New", Author: "x", Status: database.BookStatusNew},
+		{ASIN: "B1002", Title: "Complete", Author: "x", Status: database.BookStatusComplete},
+		{ASIN: "B1003", Title: "Unavailable", Author: "x", Status: database.BookStatusUnavailable},
+	}
+	for i := range seed {
+		if err := db.UpsertBook(ctx, &seed[i]); err != nil {
+			t.Fatalf("UpsertBook %s: %v", seed[i].ASIN, err)
+		}
+	}
+
+	counts := s.libraryStatusCounts(ctx)
+	if counts["all"] != 3 {
+		t.Fatalf("all = %d, want 3", counts["all"])
+	}
+	if counts["available"] != 2 {
+		t.Fatalf("available = %d, want 2", counts["available"])
+	}
+	if counts["unavailable"] != 1 {
+		t.Fatalf("unavailable = %d, want 1", counts["unavailable"])
+	}
+
+	if err := db.SetSetting(ctx, library.SettingKeyCoverageBasis, library.CoverageBasisAvailable); err != nil {
+		t.Fatalf("SetSetting coverage_basis: %v", err)
+	}
+	if got := s.coverageBasis(ctx); got != library.CoverageBasisAvailable {
+		t.Fatalf("coverageBasis = %q, want %q", got, library.CoverageBasisAvailable)
+	}
+	if got := s.coverageDenominator(ctx, counts); got != 2 {
+		t.Fatalf("coverageDenominator = %d, want 2", got)
 	}
 }

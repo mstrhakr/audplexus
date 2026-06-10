@@ -18,6 +18,17 @@
             <a href="#section-system" data-section="section-system" class="settings-nav-link"><span class="settings-nav-dot"></span>System Information</a>
             {{if .Devices}}<a href="#section-devices" data-section="section-devices" class="settings-nav-link"><span class="settings-nav-dot"></span>Registered Devices</a>{{end}}
             <a href="#section-danger" data-section="section-danger" class="settings-nav-link"><span class="settings-nav-dot"></span>Danger Zone</a>
+
+            <div id="settings-sidebar-actions" class="settings-sidebar-actions" style="display:none" aria-live="polite">
+                <button type="submit" form="settings-main-form" class="btn btn-primary settings-sidebar-btn">Save settings</button>
+                <button type="button" class="btn btn-secondary settings-sidebar-btn" id="settings-revert-btn">Revert changes</button>
+                <span id="save-status" class="status-msg settings-sidebar-status"></span>
+            </div>
+
+            <div class="settings-sidebar-util">
+                <button type="button" class="btn btn-secondary settings-sidebar-btn" onclick="openReorgModal()">Reorganize library</button>
+                <span id="reorg-status" class="status-msg settings-sidebar-status"></span>
+            </div>
         </nav>
 
         <div class="settings-content settings-container">
@@ -152,6 +163,15 @@
                     <div class="hint">Extension is added automatically. Keep tokens data-only and place punctuation/spaces inside conditional blocks.</div>
                 </div>
 
+                <div class="form-row">
+                    <label for="coverage_basis">Coverage percent basis</label>
+                    <select class="select" id="coverage_basis" name="coverage_basis">
+                        <option value="all" {{if eq .CoverageBasis "all"}}selected{{end}}>All library items</option>
+                        <option value="available" {{if eq .CoverageBasis "available"}}selected{{end}}>Available items only</option>
+                    </select>
+                    <div class="hint">Controls coverage meters on the dashboard and destination cards.</div>
+                </div>
+
                 <label class="form-row inline">
                     <span class="row-label">
                         Embed cover art
@@ -282,12 +302,6 @@
         </div>
     </section>
 
-    {{/* Single save row for the Library + Sync + Performance form. */}}
-    <div class="settings-save-bar">
-        <button type="submit" class="btn btn-primary">Save settings</button>
-        <button type="button" class="btn btn-secondary" hx-post="/api/library/reorganize" hx-target="#save-status" hx-swap="innerHTML">Reorganize library to current settings</button>
-        <span id="save-status" class="status-msg"></span>
-    </div>
     </form>
 
     {{/* ── Tag Profile ──────────────────────────────────────────────
@@ -621,6 +635,27 @@
     </div>{{/* /.settings-layout */}}
 </div>{{/* /.page */}}
 
+<!-- Reorganize library confirmation modal -->
+<div id="reorg-modal" class="modal-overlay" style="display:none" aria-hidden="true">
+    <div class="modal-backdrop" onclick="closeReorgModal()"></div>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="reorg-modal-title">
+        <button type="button" class="modal-close" onclick="closeReorgModal()" aria-label="Close">&times;</button>
+        <div class="modal-body">
+            <h2 id="reorg-modal-title" style="margin:0 0 .5rem">Reorganize library?</h2>
+            <p style="margin:0 0 .75rem;font-size:.9rem">This will re-queue every completed book through the organizer using your current naming templates. Files will be moved or renamed on disk.</p>
+            <div class="alert warn" style="margin:.5rem 0 1rem">
+                <span class="ico">!</span>
+                <div>Only run this after saving your template changes. Destinations and media servers will rescan automatically.</div>
+            </div>
+            <div style="display:flex;gap:.5rem;justify-content:flex-end">
+                <button class="btn btn-outline-ds" type="button" onclick="closeReorgModal()">Cancel</button>
+                <button class="btn btn-primary" type="button" id="reorg-confirm-btn" onclick="confirmReorg()">Reorganize</button>
+            </div>
+            <p id="reorg-modal-status" class="muted" style="margin:.5rem 0 0;font-size:.78rem"></p>
+        </div>
+    </div>
+</div>
+
 <!-- Restart confirmation modal -->
 <div id="restart-modal" class="modal-overlay" style="display:none" aria-hidden="true">
     <div class="modal-backdrop" onclick="closeRestartModal()"></div>
@@ -767,6 +802,34 @@ function executeRestore() {
     });
 }
 
+function openReorgModal() {
+    var modal = document.getElementById('reorg-modal');
+    var status = document.getElementById('reorg-modal-status');
+    var btn = document.getElementById('reorg-confirm-btn');
+    if (status) status.textContent = '';
+    if (btn) { btn.disabled = false; btn.textContent = 'Reorganize'; }
+    if (modal) modal.style.display = 'flex';
+}
+function closeReorgModal() {
+    var modal = document.getElementById('reorg-modal');
+    if (modal) modal.style.display = 'none';
+}
+function confirmReorg() {
+    var btn = document.getElementById('reorg-confirm-btn');
+    var status = document.getElementById('reorg-modal-status');
+    if (btn) { btn.disabled = true; btn.textContent = 'Queuing…'; }
+    if (status) status.textContent = '';
+    htmx.ajax('POST', '/api/library/reorganize', {
+        target: '#reorg-status',
+        swap: 'innerHTML'
+    }).then(function() {
+        if (status) status.textContent = 'Queued — closing…';
+        setTimeout(closeReorgModal, 1200);
+    }).catch(function() {
+        if (status) status.textContent = 'Request failed. Please try again.';
+        if (btn) { btn.disabled = false; btn.textContent = 'Reorganize'; }
+    });
+}
 function confirmFactoryReset() {
     document.getElementById('reset-modal').style.display = 'flex';
     document.getElementById('final-confirm').style.display = 'none';
@@ -929,12 +992,49 @@ function confirmRestart() {
        column + gap so every card is spaced consistently. */
     #settings-main-form { display: flex; flex-direction: column; gap: 1.25rem; }
 
-    /* Bottom save bar shared by the Library + Sync + Performance form. */
-    .settings-save-bar {
+    /* Sidebar save/revert panel — shown only when the form is dirty. */
+    .settings-sidebar-actions {
         display: flex;
+        flex-direction: column;
         gap: 0.5rem;
-        flex-wrap: wrap;
-        align-items: center;
+        margin-top: 1.25rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border);
+    }
+
+    /* Always-visible sidebar util actions (reorganize, etc.) */
+    .settings-sidebar-util {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--border);
+    }
+
+    /* Buttons inside the sidebar action blocks fill the column width. */
+    .settings-sidebar-btn { width: 100%; justify-content: center; }
+
+    /* Tiny status line under the save/reorg buttons. */
+    .settings-sidebar-status {
+        display: block;
+        font-size: 0.8rem;
+        text-align: center;
+        min-height: 1em;
+    }
+
+    /* On narrow viewports the sidebar nav goes horizontal; push the
+       action blocks to a new row that spans the full width. */
+    @media (max-width: 980px) {
+        .settings-sidebar-actions,
+        .settings-sidebar-util {
+            width: 100%;
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            flex-direction: row;
+            flex-wrap: wrap;
+        }
+        .settings-sidebar-btn { width: auto; flex: 1 1 auto; }
     }
 
     /* Configuration form — two-column grid of .form-rows so we fit a
@@ -1038,7 +1138,7 @@ function confirmRestart() {
             ev.preventDefault();
             setActive(id);
             clickLock = true;
-            var y = el.getBoundingClientRect().top + window.scrollY - 72;
+            var y = el.getBoundingClientRect().top + window.scrollY - OFFSET;
             window.scrollTo({ top: y, behavior: 'smooth' });
             history.replaceState(null, '', '#' + id);
             if (clickTimer) clearTimeout(clickTimer);
@@ -1050,6 +1150,80 @@ function confirmRestart() {
     });
 
     setActive(currentSection());
+})();
+</script>
+
+<script>
+// ── Settings dirty-state tracker ────────────────────────────────────────────
+// Captures original form values on load, shows the Save/Revert sidebar panel
+// when any field changes, and hides it again after a successful save or revert.
+(function() {
+    var form     = document.getElementById('settings-main-form');
+    var panel    = document.getElementById('settings-sidebar-actions');
+    var revertBtn = document.getElementById('settings-revert-btn');
+    if (!form || !panel) return;
+
+    var baseline  = {};   // original values captured on load / after save
+    var isDirty   = false;
+    var hideTimer = null;
+
+    // Capture a snapshot of every named field in the form.
+    function capture() {
+        baseline = {};
+        var els = form.elements;
+        for (var i = 0; i < els.length; i++) {
+            var el = els[i];
+            if (!el.name) continue;
+            var key = el.id || (el.name + '_' + i);
+            baseline[key] = (el.type === 'checkbox') ? el.checked : el.value;
+        }
+    }
+
+    // Restore all fields to the last captured baseline.
+    function revert() {
+        var els = form.elements;
+        for (var i = 0; i < els.length; i++) {
+            var el = els[i];
+            if (!el.name) continue;
+            var key = el.id || (el.name + '_' + i);
+            if (!(key in baseline)) continue;
+            if (el.type === 'checkbox') {
+                el.checked = baseline[key];
+            } else {
+                el.value = baseline[key];
+            }
+        }
+        setDirty(false);
+    }
+
+    function setDirty(dirty) {
+        isDirty = dirty;
+        clearTimeout(hideTimer);
+        panel.style.display = dirty ? 'flex' : 'none';
+    }
+
+    // Show panel on any field interaction.
+    form.addEventListener('input',  function() { setDirty(true); });
+    form.addEventListener('change', function() { setDirty(true); });
+
+    // After a successful HTMX save: update baseline and fade panel out
+    // after 3 s (long enough for the user to read the status message).
+    form.addEventListener('htmx:afterRequest', function(evt) {
+        if (!evt.detail || !evt.detail.successful) return;
+        capture();
+        isDirty = false;
+        // keep panel visible briefly so status text is readable
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(function() {
+            if (!isDirty) panel.style.display = 'none';
+        }, 3000);
+    });
+
+    if (revertBtn) {
+        revertBtn.addEventListener('click', revert);
+    }
+
+    capture();
 })();
 </script>
 
