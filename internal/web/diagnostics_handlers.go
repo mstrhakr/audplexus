@@ -1086,3 +1086,86 @@ func (s *Server) handleDiagnosticsLogsSSE(c *gin.Context) {
 		}
 	})
 }
+
+// diagnosticsAccountProbe is one account's view of a single ASIN, fetched live
+// from the per-item library endpoint (/1.0/library/{asin}). Exists to answer
+// "account X owns this title, why doesn't it sync?" — the LIST endpoint
+// applies server-side filters the item endpoint doesn't, so a title can probe
+// fine here yet never appear in a sync.
+type diagnosticsAccountProbe struct {
+	AccountID    string `json:"account_id"`
+	AccountName  string `json:"account_name"`
+	Found        bool   `json:"found"`
+	Error        string `json:"error,omitempty"`
+	Title        string `json:"title,omitempty"`
+	ContentType  string `json:"content_type,omitempty"`
+	FormatType   string `json:"format_type,omitempty"`
+	DeliveryType string `json:"delivery_type,omitempty"`
+	Downloadable bool   `json:"downloadable"`
+	Entitled     bool   `json:"entitled"`
+	EntitleError string `json:"entitle_error,omitempty"`
+}
+
+// handleDiagnosticsASINProbe checks one ASIN against every connected account
+// plus the local DB. GET /api/diagnostics/asin/:asin
+func (s *Server) handleDiagnosticsASINProbe(c *gin.Context) {
+	ctx := c.Request.Context()
+	asin := strings.TrimSpace(c.Param("asin"))
+	if asin == "" || len(asin) > 20 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ASIN"})
+		return
+	}
+
+	var probes []diagnosticsAccountProbe
+	if s.accounts != nil {
+		for _, acct := range s.accounts.EnabledAccounts() {
+			p := diagnosticsAccountProbe{AccountID: acct.ID, AccountName: acct.Name}
+			if acct.Client == nil || !acct.Client.IsAuthenticated() {
+				p.Error = "not authenticated"
+				probes = append(probes, p)
+				continue
+			}
+			probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			item, err := acct.Client.GetBook(probeCtx, asin)
+			if err != nil {
+				p.Error = errs.CleanForDisplay(err.Error())
+			} else if item == nil || item.ASIN == "" {
+				p.Error = "not in this account's library"
+			} else {
+				p.Found = true
+				p.Title = item.Title
+				p.ContentType = item.ContentType
+				p.FormatType = item.FormatType
+				p.DeliveryType = item.ContentDeliveryType
+				p.Downloadable = item.Downloadable()
+				if ok, cdErr := acct.Client.CanDownload(probeCtx, *item); cdErr != nil {
+					p.EntitleError = errs.CleanEntitlementReason(cdErr.Error())
+				} else {
+					p.Entitled = ok
+				}
+			}
+			cancel()
+			probes = append(probes, p)
+		}
+	}
+
+	// Local DB view: does a row exist, and which accounts are stamped on it.
+	localStatus := ""
+	localReason := ""
+	var localOwners []string
+	if book, err := s.db.GetBookByASIN(ctx, asin); err == nil && book != nil {
+		localStatus = string(book.Status)
+		localReason = book.UnavailableReason
+		if owners, err := s.db.GetBookAccountsForASINs(ctx, []string{asin}); err == nil {
+			localOwners = owners[asin]
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"asin":         asin,
+		"accounts":     probes,
+		"local_status": localStatus,
+		"local_reason": localReason,
+		"local_owners": localOwners,
+	})
+}

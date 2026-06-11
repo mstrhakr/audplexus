@@ -1105,7 +1105,8 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	// with >1 account so single-account installs keep the flat "N / N" line.
 	multiAccount := len(targets) > 1
 	subPhase := s.subPhaseFnFor(PhaseAudibleSync)
-	perTotal := make(map[string]int, len(targets))   // entries attributed to each account
+	perTotal := make(map[string]int, len(targets))   // entries attributed to each account (unique in merge order)
+	perOwned := make(map[string]int, len(targets))   // everything the account's library reported, incl. shared
 	perScanned := make(map[string]int, len(targets)) // processed so far
 	perAdded := make(map[string]int, len(targets))   // new books per account
 	accountSub := func(accountID, status string) {
@@ -1119,16 +1120,26 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 				break
 			}
 		}
-		msg := ""
+		var parts []string
 		switch n := perAdded[accountID]; {
 		case n == 1:
-			msg = "1 new book found"
+			parts = append(parts, "1 new book found")
 		case n > 1:
-			msg = fmt.Sprintf("%d new books found", n)
+			parts = append(parts, fmt.Sprintf("%d new books found", n))
 		case status == "complete":
-			msg = "No new books"
+			parts = append(parts, "No new books")
 		}
-		subPhase(accountID, name, status, msg, perScanned[accountID], perTotal[accountID])
+		// The N / M count below only covers entries attributed to this
+		// account in the merge — surface the full library size and the
+		// overlap with earlier accounts so the numbers reconcile.
+		if owned := perOwned[accountID]; owned > 0 {
+			if shared := owned - perTotal[accountID]; shared > 0 {
+				parts = append(parts, fmt.Sprintf("%d in library (%d shared)", owned, shared))
+			} else {
+				parts = append(parts, fmt.Sprintf("%d in library", owned))
+			}
+		}
+		subPhase(accountID, name, status, strings.Join(parts, " · "), perScanned[accountID], perTotal[accountID])
 	}
 	// Called once per processed entry (every branch of the scan loop).
 	noteAccountScan := func(accountID string) {
@@ -1163,6 +1174,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			entries = append(entries, accountItem{client: t.Client, accountID: t.ID, item: item})
 		}
 		perTotal[t.ID] = unique
+		perOwned[t.ID] = len(accBooks)
 		accountSub(t.ID, "running")
 		syncLog.Info().Str("account_id", t.ID).Int("books", len(accBooks)).
 			Int("unique_to_merge", unique).Int("already_seen", shared).

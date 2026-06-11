@@ -99,6 +99,18 @@
                     </div>
                     <p class="muted" style="font-size:.72rem;margin-top:.6rem">Each row calls the destination's existing test endpoint and records the new health state.</p>
                 </div>
+
+                <div class="card">
+                    <div class="card-head" style="display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem">
+                        <h3 style="font-size:.95rem;font-weight:600;margin:0">ASIN lookup</h3>
+                    </div>
+                    <p class="muted" style="font-size:.78rem;margin:0 0 .5rem">Checks a title against every connected Audible account (live API) and the local database. Use when a book you own isn't showing up after a sync.</p>
+                    <form onsubmit="diagProbeASIN(event)" style="display:flex;gap:.4rem;margin-bottom:.6rem">
+                        <input class="input" type="text" id="diag-asin-input" placeholder="e.g. B07K6WYTMV" style="flex:1;font-family:ui-monospace,monospace" required pattern="[A-Za-z0-9]{8,14}">
+                        <button type="submit" class="btn btn-secondary btn-small" id="diag-asin-btn">Look up</button>
+                    </form>
+                    <div id="diag-asin-result" style="font-size:.8rem"></div>
+                </div>
             </div>
         </div>
     </section>
@@ -134,6 +146,59 @@
         });
     });
 })();
+
+// ASIN lookup card — probes one title against every connected account + local DB.
+function diagProbeASIN(evt) {
+    evt.preventDefault();
+    var asin = document.getElementById('diag-asin-input').value.trim();
+    var btn = document.getElementById('diag-asin-btn');
+    var out = document.getElementById('diag-asin-result');
+    if (!asin) return;
+    btn.disabled = true;
+    btn.textContent = 'Looking up…';
+    out.innerHTML = '<div class="muted">Querying Audible per account…</div>';
+    fetch('/api/diagnostics/asin/' + encodeURIComponent(asin)).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(function(d) {
+        var esc = function(s) { var el = document.createElement('span'); el.textContent = s == null ? '' : String(s); return el.innerHTML; };
+        var html = '';
+        // Local DB summary first — answers "is it in my library at all".
+        if (d.local_status) {
+            html += '<div style="margin-bottom:.5rem"><b>Local DB:</b> status <code>' + esc(d.local_status) + '</code>'
+                 + (d.local_reason ? ' — ' + esc(d.local_reason) : '')
+                 + (d.local_owners && d.local_owners.length ? ' · owners: ' + esc(d.local_owners.join(', ')) : '')
+                 + '</div>';
+        } else {
+            html += '<div style="margin-bottom:.5rem"><b>Local DB:</b> <span class="muted">no row — this title has never been recorded by a sync</span></div>';
+        }
+        (d.accounts || []).forEach(function(a) {
+            html += '<div style="border-top:1px solid var(--border,#2a2a2a);padding:.45rem 0">';
+            html += '<b>' + esc(a.account_name) + '</b> — ';
+            if (!a.found) {
+                html += '<span style="color:var(--error,#f44336)">' + esc(a.error || 'not found') + '</span>';
+            } else {
+                html += '<span style="color:var(--success,#5cb85c)">in library</span>: ' + esc(a.title);
+                html += '<div class="muted" style="margin-top:.2rem">content type: <code>' + esc(a.content_type || '—') + '</code>'
+                     + ' · format: <code>' + esc(a.format_type || '—') + '</code>'
+                     + ' · delivery: <code>' + esc(a.delivery_type || '—') + '</code></div>';
+                html += '<div style="margin-top:.2rem">downloadable: ' + (a.downloadable ? '✓' : '✗')
+                     + ' · entitled: ' + (a.entitle_error ? ('✗ <span class="muted">' + esc(a.entitle_error) + '</span>') : (a.entitled ? '✓' : '✗')) + '</div>';
+                html += '<div class="muted" style="margin-top:.2rem">If this shows "in library" but the title never appears after a sync, the account\'s library LIST endpoint is filtering it out server-side — report the content type above.</div>';
+            }
+            html += '</div>';
+        });
+        if (!(d.accounts || []).length) {
+            html += '<div class="muted">No connected accounts to probe.</div>';
+        }
+        out.innerHTML = html;
+    }).catch(function(e) {
+        out.innerHTML = '<div style="color:var(--error,#f44336)">Lookup failed: ' + e.message + '</div>';
+    }).finally(function() {
+        btn.disabled = false;
+        btn.textContent = 'Look up';
+    });
+}
 
 // Environment card — fetches /api/diagnostics/env once on tab open + on refresh.
 function diagRefreshEnv() {
