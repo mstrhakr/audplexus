@@ -76,6 +76,7 @@ func (d *destinationIDsStubDB) SetBookAccount(ctx context.Context, asin, account
 func (d *destinationIDsStubDB) GetBookAccount(ctx context.Context, asin string) (string, error) { return "", nil }
 func (d *destinationIDsStubDB) ReplaceBookAccounts(ctx context.Context, asin string, accountIDs []string) error { return nil }
 func (d *destinationIDsStubDB) GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error) { return map[string][]string{}, nil }
+func (d *destinationIDsStubDB) ListASINsForAccount(ctx context.Context, accountID string) ([]string, error) { return nil, nil }
 func (d *destinationIDsStubDB) CreateLibraryDestination(ctx context.Context, d2 *database.LibraryDestination) error { return nil }
 func (d *destinationIDsStubDB) GetLibraryDestination(ctx context.Context, id string) (*database.LibraryDestination, error) { return nil, nil }
 func (d *destinationIDsStubDB) ListLibraryDestinations(ctx context.Context) ([]database.LibraryDestination, error) { return nil, nil }

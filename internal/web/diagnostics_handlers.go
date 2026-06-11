@@ -22,6 +22,7 @@ import (
 	"github.com/mstrhakr/audplexus/internal/library"
 	"github.com/mstrhakr/audplexus/internal/logging"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
+	audible "github.com/mstrhakr/go-audible"
 )
 
 type diagnosticsDestinationCard struct {
@@ -1168,4 +1169,99 @@ func (s *Server) handleDiagnosticsASINProbe(c *gin.Context) {
 		"local_reason": localReason,
 		"local_owners": localOwners,
 	})
+}
+
+// diagnosticsAccountInventory reconciles one account's live Audible library
+// against what the local DB has stamped for it. Answers "the account owns N
+// titles but the Library filter shows M — which ones, and why."
+type diagnosticsAccountInventory struct {
+	AccountID    string   `json:"account_id"`
+	AccountName  string   `json:"account_name"`
+	Error        string   `json:"error,omitempty"`
+	APICount     int      `json:"api_count"`      // distinct ASINs the library API returned
+	StampedCount int      `json:"stamped_count"`  // rows in book_audible_accounts for this account
+	InAPINotDB   []string `json:"in_api_not_db"`  // API returned it, but it's not stamped (the bug surface)
+	InDBNotAPI   []string `json:"in_db_not_api"`  // stamped, but the API no longer returns it
+	Downloadable int      `json:"downloadable"`   // of APICount, how many pass Downloadable()
+	NonDownload  int      `json:"non_download"`   // of APICount, how many fail it
+}
+
+// handleDiagnosticsAccountInventory fetches every connected account's full
+// library live and reconciles it against the DB ownership junction. This is
+// the ground-truth tool for "owned vs shown" gaps. GET
+// /api/diagnostics/account-inventory
+func (s *Server) handleDiagnosticsAccountInventory(c *gin.Context) {
+	ctx := c.Request.Context()
+	if s.accounts == nil {
+		c.JSON(http.StatusOK, gin.H{"accounts": []diagnosticsAccountInventory{}})
+		return
+	}
+
+	libraryGroups := append([]string{}, audible.DefaultResponseGroups...)
+	libraryGroups = append(libraryGroups, "relationships")
+
+	out := make([]diagnosticsAccountInventory, 0)
+	for _, acct := range s.accounts.EnabledAccounts() {
+		inv := diagnosticsAccountInventory{AccountID: acct.ID, AccountName: acct.Name}
+		if acct.Client == nil || !acct.Client.IsAuthenticated() {
+			inv.Error = "not authenticated"
+			out = append(out, inv)
+			continue
+		}
+
+		fetchCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+		books, err := acct.Client.GetAllLibrary(fetchCtx, audible.WithResponseGroups(libraryGroups...))
+		cancel()
+		if err != nil {
+			inv.Error = errs.CleanForDisplay(err.Error())
+			out = append(out, inv)
+			continue
+		}
+
+		apiASINs := make(map[string]struct{}, len(books))
+		for _, b := range books {
+			if b.ASIN == "" {
+				continue
+			}
+			if _, dup := apiASINs[b.ASIN]; dup {
+				continue
+			}
+			apiASINs[b.ASIN] = struct{}{}
+			if b.Downloadable() {
+				inv.Downloadable++
+			} else {
+				inv.NonDownload++
+			}
+		}
+		inv.APICount = len(apiASINs)
+
+		// What the DB has stamped for this account.
+		stamped, err := s.db.ListASINsForAccount(ctx, acct.ID)
+		if err != nil {
+			inv.Error = "stamped-lookup failed: " + errs.CleanForDisplay(err.Error())
+			out = append(out, inv)
+			continue
+		}
+		stampedSet := make(map[string]struct{}, len(stamped))
+		for _, a := range stamped {
+			stampedSet[a] = struct{}{}
+		}
+		inv.StampedCount = len(stampedSet)
+
+		for a := range apiASINs {
+			if _, ok := stampedSet[a]; !ok {
+				inv.InAPINotDB = append(inv.InAPINotDB, a)
+			}
+		}
+		for a := range stampedSet {
+			if _, ok := apiASINs[a]; !ok {
+				inv.InDBNotAPI = append(inv.InDBNotAPI, a)
+			}
+		}
+		sort.Strings(inv.InAPINotDB)
+		sort.Strings(inv.InDBNotAPI)
+		out = append(out, inv)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"accounts": out})
 }

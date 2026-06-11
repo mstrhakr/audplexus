@@ -102,6 +102,9 @@ func (s *StubDB) ReplaceBookAccounts(ctx context.Context, asin string, accountID
 func (s *StubDB) GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error) {
 	return map[string][]string{}, nil
 }
+func (s *StubDB) ListASINsForAccount(ctx context.Context, accountID string) ([]string, error) {
+	return nil, nil
+}
 
 // --- Library destinations ---
 func (s *StubDB) CreateLibraryDestination(ctx context.Context, d *LibraryDestination) error {

@@ -707,6 +707,8 @@ func (s *Server) setupRoutes() {
 		api.POST("/diagnostics/targeted-scan", s.handleDiagnosticsTargetedScan)
 		// Per-account ASIN probe — answers "I own this, why isn't it synced?"
 		api.GET("/diagnostics/asin/:asin", s.handleDiagnosticsASINProbe)
+		// Account inventory reconciliation — live library vs stamped ownership.
+		api.GET("/diagnostics/account-inventory", s.handleDiagnosticsAccountInventory)
 		// DS-style ops tab — read-only system state. JSON so the
 		// browser can pretty-render in the diagnostics page.
 		api.GET("/diagnostics/env", s.handleDiagnosticsEnv)

@@ -111,6 +111,17 @@
                     </form>
                     <div id="diag-asin-result" style="font-size:.8rem"></div>
                 </div>
+
+                <div class="card">
+                    <div class="card-head" style="display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem">
+                        <h3 style="font-size:.95rem;font-weight:600;margin:0">Account inventory</h3>
+                        <span class="right" style="margin-left:auto">
+                            <button type="button" class="btn btn-ghost btn-small" id="diag-inv-btn" onclick="diagAccountInventory()">Reconcile</button>
+                        </span>
+                    </div>
+                    <p class="muted" style="font-size:.78rem;margin:0 0 .5rem">Fetches each connected account's full library live and compares it to what the local database has stamped. Shows the exact ASIN gaps when "owned" and "shown in Library" disagree.</p>
+                    <div id="diag-inv-result" style="font-size:.8rem"><div class="muted">Click Reconcile to run (one live API sweep per account).</div></div>
+                </div>
             </div>
         </div>
     </section>
@@ -197,6 +208,52 @@ function diagProbeASIN(evt) {
     }).finally(function() {
         btn.disabled = false;
         btn.textContent = 'Look up';
+    });
+}
+
+// Account inventory — live library vs stamped ownership reconciliation.
+function diagAccountInventory() {
+    var btn = document.getElementById('diag-inv-btn');
+    var out = document.getElementById('diag-inv-result');
+    btn.disabled = true;
+    btn.textContent = 'Reconciling…';
+    out.innerHTML = '<div class="muted">Sweeping each account\'s full library… this may take a minute.</div>';
+    fetch('/api/diagnostics/account-inventory').then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(function(d) {
+        var esc = function(s) { var el = document.createElement('span'); el.textContent = s == null ? '' : String(s); return el.innerHTML; };
+        var accts = d.accounts || [];
+        if (!accts.length) { out.innerHTML = '<div class="muted">No connected accounts.</div>'; return; }
+        var html = '';
+        accts.forEach(function(a) {
+            html += '<div style="border-top:1px solid var(--border,#2a2a2a);padding:.5rem 0">';
+            html += '<b>' + esc(a.account_name) + '</b>';
+            if (a.error) {
+                html += ' — <span style="color:var(--error,#f44336)">' + esc(a.error) + '</span></div>';
+                return;
+            }
+            html += '<div class="muted" style="margin-top:.2rem">API returned <b>' + a.api_count + '</b> titles ('
+                 + a.downloadable + ' downloadable, ' + a.non_download + ' not) · DB has <b>' + a.stamped_count + '</b> stamped</div>';
+            if ((a.in_api_not_db || []).length) {
+                html += '<div style="margin-top:.3rem;color:var(--warning,#e0a800)"><b>' + a.in_api_not_db.length + '</b> in API but NOT stamped in DB (sync isn\'t recording these):</div>';
+                html += '<div style="font-family:ui-monospace,monospace;font-size:.72rem;max-height:120px;overflow:auto;margin-top:.2rem">' + a.in_api_not_db.map(esc).join('<br>') + '</div>';
+            }
+            if ((a.in_db_not_api || []).length) {
+                html += '<div style="margin-top:.3rem;color:var(--text-muted)"><b>' + a.in_db_not_api.length + '</b> stamped in DB but no longer returned by API:</div>';
+                html += '<div style="font-family:ui-monospace,monospace;font-size:.72rem;max-height:120px;overflow:auto;margin-top:.2rem">' + a.in_db_not_api.map(esc).join('<br>') + '</div>';
+            }
+            if (!(a.in_api_not_db || []).length && !(a.in_db_not_api || []).length) {
+                html += '<div style="margin-top:.3rem;color:var(--success,#5cb85c)">✓ API and DB agree exactly.</div>';
+            }
+            html += '</div>';
+        });
+        out.innerHTML = html;
+    }).catch(function(e) {
+        out.innerHTML = '<div style="color:var(--error,#f44336)">Reconcile failed: ' + e.message + '</div>';
+    }).finally(function() {
+        btn.disabled = false;
+        btn.textContent = 'Reconcile';
     });
 }
 

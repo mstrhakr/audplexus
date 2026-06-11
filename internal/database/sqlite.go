@@ -660,6 +660,24 @@ func (s *SQLiteDB) ReplaceBookAccounts(ctx context.Context, asin string, account
 	return tx.Commit()
 }
 
+func (s *SQLiteDB) ListASINsForAccount(ctx context.Context, accountID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT asin FROM book_audible_accounts WHERE account_id = ? ORDER BY asin`, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("list asins for account: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 func (s *SQLiteDB) GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error) {
 	out := make(map[string][]string, len(asins))
 	if len(asins) == 0 {

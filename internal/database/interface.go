@@ -72,6 +72,9 @@ type Database interface {
 	// of books (map key = asin, values = account ids).
 	ReplaceBookAccounts(ctx context.Context, asin string, accountIDs []string) error
 	GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error)
+	// ListASINsForAccount returns every ASIN stamped to one account. Used by
+	// diagnostics to reconcile the live library against stored ownership.
+	ListASINsForAccount(ctx context.Context, accountID string) ([]string, error)
 
 	// Library destinations (multi-destination model — replaces single-active
 	// MEDIA_SERVER selector). Multiple destinations of the same type are
