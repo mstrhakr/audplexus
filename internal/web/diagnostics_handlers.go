@@ -1210,7 +1210,7 @@ func (s *Server) handleDiagnosticsAccountInventory(c *gin.Context) {
 		}
 
 		fetchCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-		books, err := acct.Client.GetAllLibrary(fetchCtx, audible.WithResponseGroups(libraryGroups...))
+		books, err := library.FetchEntireLibrary(fetchCtx, acct.Client, libraryGroups)
 		cancel()
 		if err != nil {
 			inv.Error = errs.CleanForDisplay(err.Error())

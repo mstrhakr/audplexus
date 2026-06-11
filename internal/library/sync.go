@@ -1075,6 +1075,86 @@ func (s *SyncService) syncTargets() []EnabledAccount {
 	return nil
 }
 
+// FetchEntireLibrary is the exported entry point for callers outside this
+// package (diagnostics) that need the same correct pagination as sync.
+func FetchEntireLibrary(ctx context.Context, client *audible.Client, responseGroups []string) ([]audible.Book, error) {
+	return fetchEntireLibrary(ctx, client, responseGroups)
+}
+
+// fetchEntireLibrary pages through an account's Audible library and returns
+// every item. We drive pagination here instead of using the SDK's
+// GetAllLibrary because that helper stops the moment a page returns fewer
+// than num_results items — and Audible's /library endpoint regularly returns
+// short pages (it filters some entries server-side after paging) while more
+// pages remain. The short-page break silently truncated libraries: an account
+// with 600+ titles could come back with far fewer, and the missing titles
+// (including ones the user can still download) never entered sync.
+//
+// Stop conditions, in order:
+//   - a page returns zero items (definitive end), or
+//   - total_results is known and we've collected at least that many, or
+//   - a hard page cap as a runaway guard.
+func fetchEntireLibrary(ctx context.Context, client *audible.Client, responseGroups []string) ([]audible.Book, error) {
+	const pageSize = 50
+	const maxPages = 2000 // 100k titles — far beyond any real library
+
+	var all []audible.Book
+	seen := make(map[string]struct{})
+	total := -1
+
+	for page := 1; page <= maxPages; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		lib, err := client.GetLibrary(ctx,
+			audible.WithResponseGroups(responseGroups...),
+			audible.WithPage(page),
+			audible.WithPageSize(pageSize),
+		)
+		if err != nil {
+			// Return what we have plus the error so the caller can decide;
+			// a mid-pagination failure shouldn't silently look like an end.
+			return all, fmt.Errorf("library page %d: %w", page, err)
+		}
+		if lib.TotalResults > 0 {
+			total = lib.TotalResults
+		}
+
+		newOnPage := 0
+		for _, item := range lib.Items {
+			if item.ASIN == "" {
+				continue
+			}
+			if _, dup := seen[item.ASIN]; dup {
+				continue
+			}
+			seen[item.ASIN] = struct{}{}
+			all = append(all, item)
+			newOnPage++
+		}
+
+		// Definitive end: the page carried no items at all. A short page (some
+		// items, but < pageSize) is NOT an end signal — keep going.
+		if len(lib.Items) == 0 {
+			break
+		}
+		// Known total reached. Guard against a server that keeps returning the
+		// last page: also stop if a full page produced no new ASINs.
+		if total >= 0 && len(all) >= total {
+			break
+		}
+		if newOnPage == 0 {
+			break
+		}
+	}
+
+	if total >= 0 && len(all) < total {
+		syncLog.Warn().Int("collected", len(all)).Int("total_results", total).
+			Msg("audible library fetch ended below reported total_results")
+	}
+	return all, nil
+}
+
 func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.SyncHistory) (int, error) {
 	startTime := time.Now()
 	syncLog.Info().Msg("starting audible library sync")
@@ -1151,7 +1231,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		if multiAccount {
 			subPhase(t.ID, t.Name, "running", "Fetching library…", 0, 0)
 		}
-		accBooks, err := t.Client.GetAllLibrary(ctx, audible.WithResponseGroups(libraryGroups...))
+		accBooks, err := fetchEntireLibrary(ctx, t.Client, libraryGroups)
 		if err != nil {
 			syncLog.Error().Err(err).Str("account_id", t.ID).Msg("failed to fetch audible library for account")
 			if multiAccount {
