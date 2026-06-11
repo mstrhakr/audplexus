@@ -156,6 +156,12 @@ func (s *settingsOnlyStubDB) SetBookAccount(ctx context.Context, asin, accountID
 func (s *settingsOnlyStubDB) GetBookAccount(ctx context.Context, asin string) (string, error) {
 	return "", nil
 }
+func (s *settingsOnlyStubDB) ReplaceBookAccounts(ctx context.Context, asin string, accountIDs []string) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error) {
+	return map[string][]string{}, nil
+}
 
 // Library destinations + book destinations (PR-B). Stub returns zero values.
 func (s *settingsOnlyStubDB) CreateLibraryDestination(ctx context.Context, d *database.LibraryDestination) error {

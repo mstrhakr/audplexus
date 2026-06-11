@@ -1208,12 +1208,19 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		}
 	}
 
+	// Account filter — only meaningful (and only rendered) when more than
+	// one Audible account is connected.
+	accountFilter := c.Query("account")
+	filter.AccountID = accountFilter
+
 	books, total, err := s.db.ListBooks(ctx, filter)
 	if err != nil {
 		webLog.Error().Err(err).Msg("failed to list books")
 		c.HTML(http.StatusInternalServerError, "library.html", gin.H{"Error": "Failed to load library"})
 		return
 	}
+
+	accountOpts, bookAccounts := s.libraryAccountData(ctx, books)
 
 	counts := s.libraryStatusCounts(ctx)
 	coverageBasis := s.coverageBasis(ctx)
@@ -1241,6 +1248,9 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		"CoverageBasis":   coverageBasis,
 		"PresenceFilters": s.libraryPresenceFilterOpts(ctx, destFilterState),
 		"OnDiskFilter":    c.Query("on_disk"),
+		"AccountFilters":  accountOpts,
+		"AccountFilter":   accountFilter,
+		"BookAccounts":    bookAccounts,
 		"PageNum":         pageNum,
 		"TotalPages":      totalPages,
 		"PageSize":        pageSize,
@@ -1255,6 +1265,60 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		return
 	}
 	c.HTML(http.StatusOK, "library.html", s.withSidebar(c, data))
+}
+
+// libraryAccountOption is one row in the Audible-account filter dropdown.
+type libraryAccountOption struct {
+	ID          string
+	DisplayName string
+}
+
+// libraryAccountData returns the account filter options plus a per-book map
+// of owning-account display names ("Jeremy, Josh") for the current page.
+// Both are nil/empty when zero or one account is connected — single-account
+// installs keep the exact pre-multi-account UI.
+func (s *Server) libraryAccountData(ctx context.Context, books []database.Book) ([]libraryAccountOption, map[int64]string) {
+	accounts, err := s.db.ListAudibleAccounts(ctx)
+	if err != nil || len(accounts) <= 1 {
+		return nil, nil
+	}
+	opts := make([]libraryAccountOption, 0, len(accounts))
+	names := make(map[string]string, len(accounts))
+	for i := range accounts {
+		a := &accounts[i]
+		name := accountDisplayName(a)
+		names[a.ID] = name
+		opts = append(opts, libraryAccountOption{ID: a.ID, DisplayName: name})
+	}
+
+	asins := make([]string, 0, len(books))
+	for _, b := range books {
+		if b.ASIN != "" {
+			asins = append(asins, b.ASIN)
+		}
+	}
+	ownersByASIN, err := s.db.GetBookAccountsForASINs(ctx, asins)
+	if err != nil {
+		webLog.Warn().Err(err).Msg("failed to resolve book account owners")
+		return opts, nil
+	}
+	out := make(map[int64]string, len(books))
+	for _, b := range books {
+		ids := ownersByASIN[b.ASIN]
+		if len(ids) == 0 {
+			continue
+		}
+		parts := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if n, ok := names[id]; ok {
+				parts = append(parts, n)
+			}
+		}
+		if len(parts) > 0 {
+			out[b.ID] = strings.Join(parts, ", ")
+		}
+	}
+	return opts, out
 }
 
 // libraryPresenceFilterOption is one row in the per-destination presence
@@ -1474,6 +1538,7 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 
 	folderPath, files := buildBookFileDetails(book.FilePath)
 	fileInfo := s.buildBookFileInfo(ctx, book)
+	_, detailAccounts := s.libraryAccountData(ctx, []database.Book{*book})
 
 	data := gin.H{
 		"Book":                    book,
@@ -1484,6 +1549,7 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 		"BookFileInfo":            fileInfo,
 		"BookAction":              buildLibraryBookActions([]database.Book{*book}, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false))[book.ID],
 		"BookDestinationStatuses": s.bookDestinationStatuses(ctx, book.ID),
+		"BookAccountNames":        detailAccounts[book.ID],
 	}
 
 	if c.Query("view") == "modal" || c.GetHeader("HX-Request") == "true" {
@@ -4025,10 +4091,12 @@ func (s *Server) handleDeleteBookMedia(c *gin.Context) {
 	}
 	if c.Query("view") == "row" {
 		presence := s.computeBookPresence(ctx, []database.Book{*book})
+		_, rowAccounts := s.libraryAccountData(ctx, []database.Book{*book})
 		c.HTML(http.StatusOK, "library_row.html", gin.H{
 			"Book":       book,
 			"BookAction": buildLibraryBookActions([]database.Book{*book}, autoQueueNew)[book.ID],
 			"Presence":   presence[book.ID],
+			"Accounts":   rowAccounts[book.ID],
 		})
 		return
 	}

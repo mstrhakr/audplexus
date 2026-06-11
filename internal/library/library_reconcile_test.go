@@ -561,6 +561,12 @@ func (m *reconcileMockDB) SetBookAccount(ctx context.Context, asin, accountID st
 func (m *reconcileMockDB) GetBookAccount(ctx context.Context, asin string) (string, error) {
 	return "", nil
 }
+func (m *reconcileMockDB) ReplaceBookAccounts(ctx context.Context, asin string, accountIDs []string) error {
+	return nil
+}
+func (m *reconcileMockDB) GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error) {
+	return map[string][]string{}, nil
+}
 
 // Library destinations + book destinations (introduced PR-B). Test mock
 // returns zero values; tests that exercise these methods will replace the

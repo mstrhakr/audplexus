@@ -66,6 +66,13 @@ type Database interface {
 	SetBookAccount(ctx context.Context, asin, accountID string) error
 	GetBookAccount(ctx context.Context, asin string) (string, error)
 
+	// Full book↔account ownership (a book can be in several accounts'
+	// libraries). ReplaceBookAccounts rewrites the owner set for one ASIN
+	// during sync; GetBookAccountsForASINs bulk-resolves owners for a page
+	// of books (map key = asin, values = account ids).
+	ReplaceBookAccounts(ctx context.Context, asin string, accountIDs []string) error
+	GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error)
+
 	// Library destinations (multi-destination model — replaces single-active
 	// MEDIA_SERVER selector). Multiple destinations of the same type are
 	// allowed.
@@ -133,4 +140,8 @@ type BookFilter struct {
 	OnDisk                  *bool
 	PresentInDestinations   []string
 	MissingFromDestinations []string
+
+	// AccountID keeps only books present in that Audible account's library
+	// (via book_audible_accounts). Empty = no account filter.
+	AccountID string
 }

@@ -290,14 +290,22 @@ func (s *SyncService) SetFFmpeg(ff *audio.FFmpeg) {
 // merges every enabled+authenticated account's library. Safe to leave unset.
 func (s *SyncService) SetAccountManager(m *AccountManager) { s.accounts = m }
 
-// stampBookAccount records the owning account for a book after upsert. No-op
-// for the legacy single-account path (empty account id).
-func (s *SyncService) stampBookAccount(ctx context.Context, asin, accountID string) {
-	if accountID == "" {
+// stampBookAccounts records ownership for a book after upsert: primaryID into
+// books.account_id (download routing — the account whose client passed the
+// entitlement check), and the full owner set into book_audible_accounts (UI
+// display + filtering). No-op for the legacy single-account path.
+func (s *SyncService) stampBookAccounts(ctx context.Context, asin, primaryID string, allOwners []string) {
+	if primaryID == "" {
 		return
 	}
-	if err := s.db.SetBookAccount(ctx, asin, accountID); err != nil {
-		syncLog.Warn().Err(err).Str("asin", asin).Str("account_id", accountID).Msg("failed to stamp book account")
+	if err := s.db.SetBookAccount(ctx, asin, primaryID); err != nil {
+		syncLog.Warn().Err(err).Str("asin", asin).Str("account_id", primaryID).Msg("failed to stamp book account")
+	}
+	if len(allOwners) == 0 {
+		allOwners = []string{primaryID}
+	}
+	if err := s.db.ReplaceBookAccounts(ctx, asin, allOwners); err != nil {
+		syncLog.Warn().Err(err).Str("asin", asin).Msg("failed to record book account owners")
 	}
 }
 
@@ -1088,6 +1096,10 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	}
 	var entries []accountItem
 	seenASIN := make(map[string]struct{})
+	// Every account that reports an ASIN is an owner — recorded in
+	// book_audible_accounts after upsert. Processing (entitlement check,
+	// download client) still uses the FIRST account that reported it.
+	owners := make(map[string][]string)
 	for _, t := range targets {
 		accBooks, err := t.Client.GetAllLibrary(ctx, audible.WithResponseGroups(libraryGroups...))
 		if err != nil {
@@ -1097,14 +1109,20 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			// return an error below.
 			continue
 		}
-		syncLog.Info().Str("account_id", t.ID).Int("books", len(accBooks)).Msg("fetched account library")
+		unique, shared := 0, 0
 		for _, item := range accBooks {
+			owners[item.ASIN] = append(owners[item.ASIN], t.ID)
 			if _, dup := seenASIN[item.ASIN]; dup {
+				shared++
 				continue
 			}
 			seenASIN[item.ASIN] = struct{}{}
+			unique++
 			entries = append(entries, accountItem{client: t.Client, accountID: t.ID, item: item})
 		}
+		syncLog.Info().Str("account_id", t.ID).Int("books", len(accBooks)).
+			Int("unique_to_merge", unique).Int("already_seen", shared).
+			Msg("fetched account library")
 	}
 	if len(entries) == 0 {
 		return 0, fmt.Errorf("audible library fetch failed for all accounts")
@@ -1220,7 +1238,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 				if err := s.db.UpsertBook(ctx, &book); err != nil {
 					syncLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to upsert unavailable book")
 				} else {
-					s.stampBookAccount(ctx, book.ASIN, entry.accountID)
+					s.stampBookAccounts(ctx, book.ASIN, entry.accountID, owners[book.ASIN])
 					keepASIN[book.ASIN] = struct{}{}
 					added++
 				}
@@ -1306,7 +1324,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		upsertMs := time.Since(upsertStart).Milliseconds()
 		dbWriteTimeMs += upsertMs
 
-		s.stampBookAccount(ctx, book.ASIN, entry.accountID)
+		s.stampBookAccounts(ctx, book.ASIN, entry.accountID, owners[book.ASIN])
 
 		scanned++
 		if scanned-lastProgressEmit >= 20 {

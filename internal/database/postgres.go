@@ -10,7 +10,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 // PostgresDB implements Database using PostgreSQL.
@@ -615,6 +615,50 @@ func (p *PostgresDB) GetBookAccount(ctx context.Context, asin string) (string, e
 	return id, err
 }
 
+func (p *PostgresDB) ReplaceBookAccounts(ctx context.Context, asin string, accountIDs []string) error {
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM book_audible_accounts WHERE asin = $1`, asin); err != nil {
+		return fmt.Errorf("clear book accounts: %w", err)
+	}
+	for _, id := range accountIDs {
+		if id == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO book_audible_accounts (asin, account_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			asin, id); err != nil {
+			return fmt.Errorf("insert book account: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (p *PostgresDB) GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(asins))
+	if len(asins) == 0 {
+		return out, nil
+	}
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT asin, account_id FROM book_audible_accounts WHERE asin = ANY($1) ORDER BY account_id`,
+		pq.Array(asins))
+	if err != nil {
+		return nil, fmt.Errorf("get book accounts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var asin, id string
+		if err := rows.Scan(&asin, &id); err != nil {
+			return nil, err
+		}
+		out[asin] = append(out[asin], id)
+	}
+	return out, rows.Err()
+}
+
 func (p *PostgresDB) queryAudibleAccounts(ctx context.Context, query string, args ...any) ([]AudibleAccount, error) {
 	rows, err := p.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -743,6 +787,13 @@ func buildBookWherePostgres(filter BookFilter) (string, []interface{}) {
 		clauses = append(clauses, fmt.Sprintf("NOT EXISTS (SELECT 1 FROM book_library_destinations bld WHERE bld.book_id = books.id AND bld.destination_id = $%d AND bld.sync_state IN ('synced','syncing'))", paramIdx))
 		args = append(args, destID)
 		paramIdx++
+	}
+	if filter.AccountID != "" {
+		// books.account_id is the legacy single-owner fallback for rows
+		// synced before the junction existed.
+		clauses = append(clauses, fmt.Sprintf("(EXISTS (SELECT 1 FROM book_audible_accounts baa WHERE baa.asin = books.asin AND baa.account_id = $%d) OR books.account_id = $%d)", paramIdx, paramIdx+1))
+		args = append(args, filter.AccountID, filter.AccountID)
+		paramIdx += 2
 	}
 
 	if len(clauses) == 0 {

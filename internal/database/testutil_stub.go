@@ -96,6 +96,12 @@ func (s *StubDB) UpdateAudibleAccount(ctx context.Context, a *AudibleAccount) er
 func (s *StubDB) DeleteAudibleAccount(ctx context.Context, id string) error         { return nil }
 func (s *StubDB) SetBookAccount(ctx context.Context, asin, accountID string) error  { return nil }
 func (s *StubDB) GetBookAccount(ctx context.Context, asin string) (string, error)   { return "", nil }
+func (s *StubDB) ReplaceBookAccounts(ctx context.Context, asin string, accountIDs []string) error {
+	return nil
+}
+func (s *StubDB) GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error) {
+	return map[string][]string{}, nil
+}
 
 // --- Library destinations ---
 func (s *StubDB) CreateLibraryDestination(ctx context.Context, d *LibraryDestination) error {
