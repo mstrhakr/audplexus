@@ -1,6 +1,14 @@
 package organizer
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mstrhakr/audplexus/internal/audnexus"
+	"github.com/mstrhakr/audplexus/internal/database"
+)
 
 
 
@@ -103,3 +111,70 @@ func TestRenderNamingTemplatePreservesLiteralSpaceAroundToken(t *testing.T) {
 	}
 }
 
+
+func TestPlanReorganizeDryRun(t *testing.T) {
+	root := t.TempDir()
+	o := NewPlexOrganizer(nil, nil, root, true, true, true)
+
+	// Lay out a book under a stale naming scheme.
+	oldDir := filepath.Join(root, "Old Author", "Old Title")
+	if err := os.MkdirAll(oldDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	oldFile := filepath.Join(oldDir, "Old Title.m4b")
+	if err := os.WriteFile(oldFile, []byte("audio"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	book := &database.Book{ASIN: "ASIN1", Title: "New Title", Author: "New Author", FilePath: oldFile}
+	enriched := &audnexus.EnrichedBook{Book: book}
+
+	plan, err := o.PlanReorganize(book, enriched)
+	if err != nil {
+		t.Fatalf("PlanReorganize: %v", err)
+	}
+	if !plan.Changed {
+		t.Fatalf("expected plan to report a change, got %+v", plan)
+	}
+	if plan.SourcePath != oldFile {
+		t.Fatalf("source = %q, want %q", plan.SourcePath, oldFile)
+	}
+	if !strings.Contains(plan.TargetPath, "New Author") || !strings.Contains(plan.TargetPath, "New Title") {
+		t.Fatalf("target %q should reflect new naming", plan.TargetPath)
+	}
+
+	// Dry run must not touch the filesystem.
+	if _, err := os.Stat(oldFile); err != nil {
+		t.Fatalf("source file was modified by dry run: %v", err)
+	}
+	if _, err := os.Stat(plan.TargetPath); !os.IsNotExist(err) {
+		t.Fatalf("target path should not exist after dry run, stat err = %v", err)
+	}
+
+	// A book already at its computed target reports no change.
+	book2 := &database.Book{ASIN: "ASIN1", Title: "New Title", Author: "New Author", FilePath: oldFile}
+	plan2, err := o.PlanReorganize(book2, &audnexus.EnrichedBook{Book: book2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	book2.FilePath = plan2.TargetPath
+	if err := os.MkdirAll(filepath.Dir(plan2.TargetPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plan2.TargetPath, []byte("audio"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	plan3, err := o.PlanReorganize(book2, &audnexus.EnrichedBook{Book: book2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan3.Changed {
+		t.Fatalf("book already at target should report no change: %+v", plan3)
+	}
+
+	// Missing file is an error, not a silent plan.
+	bookMissing := &database.Book{ASIN: "ASIN2", Title: "Ghost", Author: "Nobody", FilePath: filepath.Join(root, "nope.m4b")}
+	if _, err := o.PlanReorganize(bookMissing, &audnexus.EnrichedBook{Book: bookMissing}); err == nil {
+		t.Fatal("expected error for missing source file")
+	}
+}

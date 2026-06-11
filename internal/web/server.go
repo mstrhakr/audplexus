@@ -442,7 +442,7 @@ func (s *Server) setupTemplates() {
 	base := template.Must(template.New("base").Funcs(funcMap).ParseFS(templateFS, "templates/base.html"))
 
 	// Parse all partial/fragment templates that may be referenced by page templates
-	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/book_detail_modal.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html", "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html", "templates/destinations_card.html"}
+	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/book_detail_modal.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html", "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html", "templates/destinations_card.html", "templates/reorganize_modal.html", "templates/reorganize_preview.html"}
 	baseWithPartials := template.Must(template.Must(base.Clone()).ParseFS(templateFS, partials...))
 
 	r := &multiRender{templates: make(map[string]*template.Template)}
@@ -696,6 +696,7 @@ func (s *Server) setupRoutes() {
 
 		api.GET("/events", s.handleSSE)
 		api.POST("/settings", s.handleSaveSettings)
+		api.GET("/library/reorganize/preview", s.handleReorganizePreview)
 		api.POST("/library/reorganize", s.handleReorganizeLibrary)
 		api.POST("/restart", s.handleRestart)
 		api.GET("/settings/db-backup", s.handleDBBackup)
@@ -4167,56 +4168,199 @@ func (s *Server) handleConvertBook(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "format": target})
 }
 
-// handleReorganizeLibrary queues complete books for reorganization through
-// the download pipeline's move stage, respecting current naming templates.
-func (s *Server) handleReorganizeLibrary(c *gin.Context) {
-	ctx := context.Background()
+// reorgMove is one book's dry-run reorganize outcome: where it lives now and
+// where the current naming templates would place it. Prefix holds the shared
+// leading directory of both paths so the UI can de-emphasize it and highlight
+// only the parts that actually change.
+type reorgMove struct {
+	BookID   int64  `json:"-"`
+	Title    string `json:"title"`
+	Author   string `json:"author"`
+	ASIN     string `json:"asin"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Prefix   string `json:"-"`
+	FromRest string `json:"-"`
+	ToRest   string `json:"-"`
+}
+
+// reorgPlanSummary aggregates the dry-run evaluation across the library.
+type reorgPlanSummary struct {
+	Moves     []reorgMove
+	Unchanged int
+	Missing   int
+	Total     int
+}
+
+// commonDirPrefix returns the longest shared leading directory of two paths
+// (including the trailing separator), or "" if they diverge immediately.
+func commonDirPrefix(a, b string) string {
+	max := len(a)
+	if len(b) < max {
+		max = len(b)
+	}
+	last := 0
+	for i := 0; i < max; i++ {
+		if a[i] != b[i] {
+			break
+		}
+		if a[i] == '/' || a[i] == '\\' {
+			last = i + 1
+		}
+	}
+	return a[:last]
+}
+
+// buildReorganizePlans evaluates every complete book against the current
+// naming templates without moving anything. It enriches naming metadata from
+// audnexus the same way the move stage does (tolerating lookup failures), so
+// the preview and the real reorganize always agree on destinations.
+func (s *Server) buildReorganizePlans(ctx context.Context) (*reorgPlanSummary, error) {
 	status := database.BookStatusComplete
 	books, _, err := s.db.ListBooks(ctx, database.BookFilter{Status: &status})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list books: " + err.Error()})
+		return nil, err
+	}
+
+	sum := &reorgPlanSummary{Total: len(books)}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+
+	for i := range books {
+		b := &books[i]
+		if strings.TrimSpace(b.FilePath) == "" {
+			sum.Missing++
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(b *database.Book) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			// Naming-relevant enrichment matches the pipeline's prefetch:
+			// audnexus book data is preferred, DB record is the fallback
+			// when the lookup fails (same fallback the move stage uses).
+			enriched := &audnexus.EnrichedBook{Book: b}
+			if anBook, anErr := s.audnexus.GetBook(ctx, b.ASIN); anErr == nil {
+				enriched.AudnexusBook = anBook
+			}
+
+			plan, planErr := s.organizer.PlanReorganize(b, enriched)
+			mu.Lock()
+			defer mu.Unlock()
+			if planErr != nil {
+				sum.Missing++
+				return
+			}
+			if !plan.Changed {
+				sum.Unchanged++
+				return
+			}
+			prefix := commonDirPrefix(plan.SourcePath, plan.TargetPath)
+			sum.Moves = append(sum.Moves, reorgMove{
+				BookID:   b.ID,
+				Title:    b.Title,
+				Author:   b.Author,
+				ASIN:     b.ASIN,
+				From:     plan.SourcePath,
+				To:       plan.TargetPath,
+				Prefix:   prefix,
+				FromRest: plan.SourcePath[len(prefix):],
+				ToRest:   plan.TargetPath[len(prefix):],
+			})
+		}(b)
+	}
+	wg.Wait()
+
+	sort.Slice(sum.Moves, func(i, j int) bool {
+		if sum.Moves[i].Author != sum.Moves[j].Author {
+			return sum.Moves[i].Author < sum.Moves[j].Author
+		}
+		return sum.Moves[i].Title < sum.Moves[j].Title
+	})
+	return sum, nil
+}
+
+// handleReorganizePreview is the dry-run half of the reorganize flow: it
+// reports exactly which books would move and where, without touching disk.
+func (s *Server) handleReorganizePreview(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	defer cancel()
+
+	sum, err := s.buildReorganizePlans(ctx)
+	if err != nil {
+		if c.GetHeader("HX-Request") == "true" {
+			c.HTML(http.StatusInternalServerError, "reorganize_preview.html", gin.H{"Error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to evaluate library: " + err.Error()})
+		return
+	}
+
+	if c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "reorganize_preview.html", gin.H{
+			"Moves":     sum.Moves,
+			"MoveCount": len(sum.Moves),
+			"Unchanged": sum.Unchanged,
+			"Missing":   sum.Missing,
+			"Total":     sum.Total,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"moves":     sum.Moves,
+		"unchanged": sum.Unchanged,
+		"missing":   sum.Missing,
+		"total":     sum.Total,
+	})
+}
+
+// handleReorganizeLibrary applies a reorganize: it re-evaluates the dry-run
+// plan and queues only the books whose on-disk paths differ from the current
+// naming templates. Books that already match are left untouched.
+func (s *Server) handleReorganizeLibrary(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	sum, err := s.buildReorganizePlans(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to evaluate library: " + err.Error()})
 		return
 	}
 
 	queued := 0
-	skipped := 0
 	failed := 0
-
-	for i := range books {
-		b := books[i]
-		if strings.TrimSpace(b.FilePath) == "" {
-			skipped++
-			continue
-		}
-		if _, statErr := os.Stat(b.FilePath); statErr != nil {
-			skipped++
-			continue
-		}
-
+	for i := range sum.Moves {
+		m := &sum.Moves[i]
 		dl := &database.DownloadQueue{
-			BookID: b.ID,
-			ASIN:   b.ASIN,
+			BookID: m.BookID,
+			ASIN:   m.ASIN,
 			Status: database.DownloadStatusReorganize,
 		}
 		if insertErr := s.db.EnqueueDownload(ctx, dl); insertErr != nil {
 			failed++
-			webLog.Warn().Err(insertErr).Str("asin", b.ASIN).Msg("reorganize: queue insert failed")
+			webLog.Warn().Err(insertErr).Str("asin", m.ASIN).Msg("reorganize: queue insert failed")
 			continue
 		}
-
 		queued++
 	}
 
-	msg := fmt.Sprintf("Reorganize queued: %d books, skipped %d (no file or missing), failed %d (queue insert)", queued, skipped, failed)
+	msg := fmt.Sprintf("Queued %d book(s) to move; %d already organized, %d missing on disk", queued, sum.Unchanged, sum.Missing)
+	if failed > 0 {
+		msg += fmt.Sprintf(", %d failed to queue", failed)
+	}
 	if c.GetHeader("HX-Request") == "true" {
 		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": msg})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": msg,
-		"queued":  queued,
-		"skipped": skipped,
-		"failed":  failed,
+		"success":   true,
+		"message":   msg,
+		"queued":    queued,
+		"unchanged": sum.Unchanged,
+		"missing":   sum.Missing,
+		"failed":    failed,
 	})
 }
