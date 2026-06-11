@@ -1078,7 +1078,15 @@ func (s *SyncService) syncTargets() []EnabledAccount {
 // FetchEntireLibrary is the exported entry point for callers outside this
 // package (diagnostics) that need the same correct pagination as sync.
 func FetchEntireLibrary(ctx context.Context, client *audible.Client, responseGroups []string) ([]audible.Book, error) {
-	return fetchEntireLibrary(ctx, client, responseGroups)
+	books, _, err := fetchEntireLibraryWithTotal(ctx, client, responseGroups)
+	return books, err
+}
+
+// FetchEntireLibraryWithTotal also returns the API's reported total_results,
+// so diagnostics can show the gap between what the API claims and what it
+// actually delivers.
+func FetchEntireLibraryWithTotal(ctx context.Context, client *audible.Client, responseGroups []string) ([]audible.Book, int, error) {
+	return fetchEntireLibraryWithTotal(ctx, client, responseGroups)
 }
 
 // fetchEntireLibrary pages through an account's Audible library and returns
@@ -1095,6 +1103,11 @@ func FetchEntireLibrary(ctx context.Context, client *audible.Client, responseGro
 //   - total_results is known and we've collected at least that many, or
 //   - a hard page cap as a runaway guard.
 func fetchEntireLibrary(ctx context.Context, client *audible.Client, responseGroups []string) ([]audible.Book, error) {
+	books, _, err := fetchEntireLibraryWithTotal(ctx, client, responseGroups)
+	return books, err
+}
+
+func fetchEntireLibraryWithTotal(ctx context.Context, client *audible.Client, responseGroups []string) ([]audible.Book, int, error) {
 	const pageSize = 50
 	const maxPages = 2000 // 100k titles — far beyond any real library
 
@@ -1104,7 +1117,7 @@ func fetchEntireLibrary(ctx context.Context, client *audible.Client, responseGro
 
 	for page := 1; page <= maxPages; page++ {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, total, err
 		}
 		lib, err := client.GetLibrary(ctx,
 			audible.WithResponseGroups(responseGroups...),
@@ -1114,7 +1127,7 @@ func fetchEntireLibrary(ctx context.Context, client *audible.Client, responseGro
 		if err != nil {
 			// Return what we have plus the error so the caller can decide;
 			// a mid-pagination failure shouldn't silently look like an end.
-			return all, fmt.Errorf("library page %d: %w", page, err)
+			return all, total, fmt.Errorf("library page %d: %w", page, err)
 		}
 		if lib.TotalResults > 0 {
 			total = lib.TotalResults
@@ -1152,7 +1165,7 @@ func fetchEntireLibrary(ctx context.Context, client *audible.Client, responseGro
 		syncLog.Warn().Int("collected", len(all)).Int("total_results", total).
 			Msg("audible library fetch ended below reported total_results")
 	}
-	return all, nil
+	return all, total, nil
 }
 
 func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.SyncHistory) (int, error) {

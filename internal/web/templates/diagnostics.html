@@ -234,7 +234,18 @@ function diagAccountInventory() {
                 return;
             }
             html += '<div class="muted" style="margin-top:.2rem">API returned <b>' + a.api_count + '</b> titles ('
-                 + a.downloadable + ' downloadable, ' + a.non_download + ' not) · DB has <b>' + a.stamped_count + '</b> stamped</div>';
+                 + a.downloadable + ' downloadable, ' + a.non_download + ' not) · API reports total <b>' + a.total_results + '</b> · DB has <b>' + a.stamped_count + '</b> stamped</div>';
+            if (a.total_results > a.api_count) {
+                html += '<div style="margin-top:.2rem;color:var(--warning,#e0a800)">⚠ API claims ' + a.total_results + ' but only delivered ' + a.api_count + ' across all pages — Audible is filtering ' + (a.total_results - a.api_count) + ' owned title(s) out of the list.</div>';
+            }
+            html += '<div class="muted" style="margin-top:.2rem">Minimal-groups fetch returned <b>' + a.minimal_count + '</b>.';
+            if ((a.only_in_minimal || []).length) {
+                html += ' <span style="color:var(--success,#5cb85c)">' + a.only_in_minimal.length + ' title(s) appear ONLY with minimal response_groups</span> — these are the ones full groups drop:';
+                html += '<div style="font-family:ui-monospace,monospace;font-size:.72rem;margin-top:.2rem">' + a.only_in_minimal.map(esc).join('<br>') + '</div>';
+            } else {
+                html += ' Same set as the full fetch (response_groups is not the filter).';
+            }
+            html += '</div>';
             if ((a.in_api_not_db || []).length) {
                 html += '<div style="margin-top:.3rem;color:var(--warning,#e0a800)"><b>' + a.in_api_not_db.length + '</b> in API but NOT stamped in DB (sync isn\'t recording these):</div>';
                 html += '<div style="font-family:ui-monospace,monospace;font-size:.72rem;max-height:120px;overflow:auto;margin-top:.2rem">' + a.in_api_not_db.map(esc).join('<br>') + '</div>';

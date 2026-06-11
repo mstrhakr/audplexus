@@ -1178,10 +1178,13 @@ type diagnosticsAccountInventory struct {
 	AccountID    string   `json:"account_id"`
 	AccountName  string   `json:"account_name"`
 	Error        string   `json:"error,omitempty"`
-	APICount     int      `json:"api_count"`      // distinct ASINs the library API returned
+	APICount     int      `json:"api_count"`      // distinct ASINs the library API returned (full response_groups)
+	MinimalCount int      `json:"minimal_count"`  // same fetch with minimal response_groups — if higher, groups are filtering
+	TotalResults int      `json:"total_results"`  // what the API itself reports as the library size
 	StampedCount int      `json:"stamped_count"`  // rows in book_audible_accounts for this account
 	InAPINotDB   []string `json:"in_api_not_db"`  // API returned it, but it's not stamped (the bug surface)
 	InDBNotAPI   []string `json:"in_db_not_api"`  // stamped, but the API no longer returns it
+	OnlyInMinimal []string `json:"only_in_minimal"` // ASINs the minimal fetch surfaced that the full one dropped
 	Downloadable int      `json:"downloadable"`   // of APICount, how many pass Downloadable()
 	NonDownload  int      `json:"non_download"`   // of APICount, how many fail it
 }
@@ -1210,13 +1213,14 @@ func (s *Server) handleDiagnosticsAccountInventory(c *gin.Context) {
 		}
 
 		fetchCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-		books, err := library.FetchEntireLibrary(fetchCtx, acct.Client, libraryGroups)
+		books, total, err := library.FetchEntireLibraryWithTotal(fetchCtx, acct.Client, libraryGroups)
 		cancel()
 		if err != nil {
 			inv.Error = errs.CleanForDisplay(err.Error())
 			out = append(out, inv)
 			continue
 		}
+		inv.TotalResults = total
 
 		apiASINs := make(map[string]struct{}, len(books))
 		for _, b := range books {
@@ -1234,6 +1238,31 @@ func (s *Server) handleDiagnosticsAccountInventory(c *gin.Context) {
 			}
 		}
 		inv.APICount = len(apiASINs)
+
+		// Second fetch with MINIMAL response_groups. The Audible library
+		// endpoint can omit items whose product data doesn't satisfy the
+		// requested groups (delisted/rights-changed titles often lack
+		// product_plans/price). If the bare fetch surfaces ASINs the full
+		// one dropped, response_groups is the filter and the fix is to
+		// trim them. This is a diagnostic comparison only.
+		minCtx, minCancel := context.WithTimeout(ctx, 120*time.Second)
+		minBooks, _, minErr := library.FetchEntireLibraryWithTotal(minCtx, acct.Client, []string{"product_desc", "product_attrs"})
+		minCancel()
+		if minErr == nil {
+			minSet := make(map[string]struct{}, len(minBooks))
+			for _, b := range minBooks {
+				if b.ASIN != "" {
+					minSet[b.ASIN] = struct{}{}
+				}
+			}
+			inv.MinimalCount = len(minSet)
+			for a := range minSet {
+				if _, ok := apiASINs[a]; !ok {
+					inv.OnlyInMinimal = append(inv.OnlyInMinimal, a)
+				}
+			}
+			sort.Strings(inv.OnlyInMinimal)
+		}
 
 		// What the DB has stamped for this account.
 		stamped, err := s.db.ListASINsForAccount(ctx, acct.ID)
