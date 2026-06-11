@@ -30,6 +30,7 @@ type AccountManager struct {
 
 	mu      sync.RWMutex
 	clients map[string]*audible.Client // keyed by account id
+	names   map[string]string          // display names, keyed by account id
 	order   []string                   // account ids in stable creation order
 }
 
@@ -53,6 +54,7 @@ func (m *AccountManager) Reload(ctx context.Context) error {
 	}
 
 	clients := make(map[string]*audible.Client, len(accounts))
+	names := make(map[string]string, len(accounts))
 	order := make([]string, 0, len(accounts))
 	for i := range accounts {
 		a := accounts[i]
@@ -76,11 +78,13 @@ func (m *AccountManager) Reload(ctx context.Context) error {
 			}
 		}
 		clients[a.ID] = client
+		names[a.ID] = a.DisplayName
 		order = append(order, a.ID)
 	}
 
 	m.mu.Lock()
 	m.clients = clients
+	m.names = names
 	m.order = order
 	m.mu.Unlock()
 
@@ -163,6 +167,7 @@ func (m *AccountManager) PrimaryAccountID() string {
 // merge-all sync.
 type EnabledAccount struct {
 	ID     string
+	Name   string
 	Client *audible.Client
 }
 
@@ -173,7 +178,11 @@ func (m *AccountManager) EnabledAccounts() []EnabledAccount {
 	defer m.mu.RUnlock()
 	out := make([]EnabledAccount, 0, len(m.order))
 	for _, id := range m.order {
-		out = append(out, EnabledAccount{ID: id, Client: m.clients[id]})
+		name := m.names[id]
+		if name == "" {
+			name = "Audible Account"
+		}
+		out = append(out, EnabledAccount{ID: id, Name: name, Client: m.clients[id]})
 	}
 	return out
 }

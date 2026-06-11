@@ -1100,10 +1100,52 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	// book_audible_accounts after upsert. Processing (entitlement check,
 	// download client) still uses the FIRST account that reported it.
 	owners := make(map[string][]string)
+
+	// Per-account progress rows under the Audible Library phase. Only shown
+	// with >1 account so single-account installs keep the flat "N / N" line.
+	multiAccount := len(targets) > 1
+	subPhase := s.subPhaseFnFor(PhaseAudibleSync)
+	perTotal := make(map[string]int, len(targets))   // entries attributed to each account
+	perScanned := make(map[string]int, len(targets)) // processed so far
+	perAdded := make(map[string]int, len(targets))   // new books per account
+	accountSub := func(accountID, status string) {
+		if !multiAccount {
+			return
+		}
+		name := accountID
+		for _, t := range targets {
+			if t.ID == accountID {
+				name = t.Name
+				break
+			}
+		}
+		msg := ""
+		switch n := perAdded[accountID]; {
+		case n == 1:
+			msg = "1 new book found"
+		case n > 1:
+			msg = fmt.Sprintf("%d new books found", n)
+		case status == "complete":
+			msg = "No new books"
+		}
+		subPhase(accountID, name, status, msg, perScanned[accountID], perTotal[accountID])
+	}
+	// Called once per processed entry (every branch of the scan loop).
+	noteAccountScan := func(accountID string) {
+		perScanned[accountID]++
+		accountSub(accountID, "running")
+	}
+
 	for _, t := range targets {
+		if multiAccount {
+			subPhase(t.ID, t.Name, "running", "Fetching library…", 0, 0)
+		}
 		accBooks, err := t.Client.GetAllLibrary(ctx, audible.WithResponseGroups(libraryGroups...))
 		if err != nil {
 			syncLog.Error().Err(err).Str("account_id", t.ID).Msg("failed to fetch audible library for account")
+			if multiAccount {
+				subPhase(t.ID, t.Name, "failed", errs.CleanForDisplay(err.Error()), 0, 0)
+			}
 			// One account failing shouldn't abort the whole merge — skip it and
 			// keep syncing the others. If ALL fail, entries stays empty and we
 			// return an error below.
@@ -1120,6 +1162,8 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			unique++
 			entries = append(entries, accountItem{client: t.Client, accountID: t.ID, item: item})
 		}
+		perTotal[t.ID] = unique
+		accountSub(t.ID, "running")
 		syncLog.Info().Str("account_id", t.ID).Int("books", len(accBooks)).
 			Int("unique_to_merge", unique).Int("already_seen", shared).
 			Msg("fetched account library")
@@ -1181,6 +1225,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		if !item.Downloadable() {
 			syncLog.Trace().Str("asin", book.ASIN).Str("content_type", item.ContentType).Msg("skipping non-downloadable item")
 			scanned++
+			noteAccountScan(entry.accountID)
 			s.mu.Lock()
 			s.progress.BooksScanned = scanned
 			s.progress.BooksAdded = added
@@ -1204,6 +1249,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		if err != nil {
 			syncLog.Error().Err(err).Str("asin", book.ASIN).Int("db_ms", int(dbCheckMs)).Msg("failed to check existing book")
 			scanned++
+			noteAccountScan(entry.accountID)
 			s.mu.Lock()
 			s.progress.BooksScanned = scanned
 			s.progress.BooksAdded = added
@@ -1241,8 +1287,10 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 					s.stampBookAccounts(ctx, book.ASIN, entry.accountID, owners[book.ASIN])
 					keepASIN[book.ASIN] = struct{}{}
 					added++
+					perAdded[entry.accountID]++
 				}
 				scanned++
+				noteAccountScan(entry.accountID)
 				s.mu.Lock()
 				s.progress.BooksScanned = scanned
 				s.progress.BooksAdded = added
@@ -1295,6 +1343,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		} else {
 			book.Status = database.BookStatusNew
 			added++
+			perAdded[entry.accountID]++
 			syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Msg("new book discovered")
 		}
 
@@ -1304,6 +1353,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			dbWriteTimeMs += upsertMs
 			syncLog.Error().Err(err).Str("asin", book.ASIN).Int("upsert_ms", int(upsertMs)).Msg("failed to upsert book")
 			scanned++
+			noteAccountScan(entry.accountID)
 			s.mu.Lock()
 			s.progress.BooksScanned = scanned
 			s.progress.BooksAdded = added
@@ -1327,6 +1377,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		s.stampBookAccounts(ctx, book.ASIN, entry.accountID, owners[book.ASIN])
 
 		scanned++
+		noteAccountScan(entry.accountID)
 		if scanned-lastProgressEmit >= 20 {
 			s.mu.Lock()
 			s.progress.BooksScanned = scanned
@@ -1344,6 +1395,16 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		if scanned%20 == 0 {
 			syncRecord.BooksAdded = added
 			_ = s.db.UpdateSync(ctx, syncRecord)
+		}
+	}
+
+	// Close out the per-account rows. Accounts whose fetch failed keep their
+	// "failed" state; everything else flips to complete with its final tally.
+	if multiAccount {
+		for _, t := range targets {
+			if _, fetched := perTotal[t.ID]; fetched {
+				accountSub(t.ID, "complete")
+			}
 		}
 	}
 
