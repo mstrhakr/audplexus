@@ -92,8 +92,10 @@ body {
     min-height: 100vh;
 }
 
-/* Wizard pages (setup) render without sidebar; let onboard-shell flex-fill */
-body:has(> .onboard-shell) { display: block; }
+/* Wizard (setup) and login pages render without sidebar as direct body
+   children; drop the flex layout so their shells span the full viewport */
+body:has(> .onboard-shell),
+body:has(> .login-shell) { display: block; }
 
 /* Sidebar */
 .sidebar {
