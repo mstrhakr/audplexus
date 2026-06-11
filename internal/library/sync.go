@@ -1221,9 +1221,39 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 				Msg("audible sync batch progress")
 		}
 
-		// Skip items not eligible for local download (e.g. ebook-only or non-owned).
+		// Items not eligible for local download (podcasts, periodicals,
+		// ebook-only entries). These used to be skipped silently, which made
+		// an account's title count here never match the Audible app and left
+		// no trace of WHY something was missing. Record them as unavailable
+		// instead — they show under the Unavailable tab with the content type
+		// as the reason, and count toward per-account ownership.
 		if !item.Downloadable() {
-			syncLog.Trace().Str("asin", book.ASIN).Str("content_type", item.ContentType).Msg("skipping non-downloadable item")
+			reason := "Not downloadable from Audible"
+			if ct := strings.TrimSpace(item.ContentType); ct != "" {
+				reason = "Not downloadable from Audible (content type: " + ct + ")"
+			}
+			book.Status = database.BookStatusUnavailable
+			book.UnavailableReason = reason
+			existing, exErr := s.db.GetBookByASIN(ctx, book.ASIN)
+			if exErr == nil && existing != nil && existing.FilePath != "" {
+				// Audible metadata flipped on a title we already downloaded —
+				// keep the local state rather than clobbering it.
+				book.Status = existing.Status
+				book.UnavailableReason = existing.UnavailableReason
+				book.FilePath = existing.FilePath
+				book.FileSize = existing.FileSize
+			}
+			syncLog.Debug().Str("asin", book.ASIN).Str("content_type", item.ContentType).Msg("recording non-downloadable item as unavailable")
+			if err := s.db.UpsertBook(ctx, &book); err != nil {
+				syncLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to upsert non-downloadable item")
+			} else {
+				s.stampBookAccounts(ctx, book.ASIN, entry.accountID, owners[book.ASIN])
+				keepASIN[book.ASIN] = struct{}{}
+				if exErr == nil && existing == nil {
+					added++
+					perAdded[entry.accountID]++
+				}
+			}
 			scanned++
 			noteAccountScan(entry.accountID)
 			s.mu.Lock()
