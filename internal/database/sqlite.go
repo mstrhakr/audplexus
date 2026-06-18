@@ -865,10 +865,14 @@ func buildBookWhere(filter BookFilter) (string, []interface{}) {
 
 // --- Users ---
 
+const userColumns = `id, username, password, salt, iterations, identifier,
+	oidc_subject, oidc_issuer, auth_source, created_at, updated_at`
+
 func (s *SQLiteDB) scanUser(row *sql.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Username, &u.Password, &u.Salt, &u.Iterations,
-		&u.Identifier, &u.CreatedAt, &u.UpdatedAt)
+		&u.Identifier, &u.OIDCSubject, &u.OIDCIssuer, &u.AuthSource,
+		&u.CreatedAt, &u.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -880,20 +884,28 @@ func (s *SQLiteDB) scanUser(row *sql.Row) (*User, error) {
 
 func (s *SQLiteDB) GetUserByUsername(ctx context.Context, username string) (*User, error) {
 	return s.scanUser(s.db.QueryRowContext(ctx,
-		`SELECT id, username, password, salt, iterations, identifier, created_at, updated_at
+		`SELECT `+userColumns+`
 		 FROM users WHERE username = ? COLLATE NOCASE LIMIT 1`, username))
 }
 
 func (s *SQLiteDB) GetUserByID(ctx context.Context, id int64) (*User, error) {
 	return s.scanUser(s.db.QueryRowContext(ctx,
-		`SELECT id, username, password, salt, iterations, identifier, created_at, updated_at
-		 FROM users WHERE id = ?`, id))
+		`SELECT `+userColumns+` FROM users WHERE id = ?`, id))
 }
 
 func (s *SQLiteDB) GetFirstUser(ctx context.Context) (*User, error) {
 	return s.scanUser(s.db.QueryRowContext(ctx,
-		`SELECT id, username, password, salt, iterations, identifier, created_at, updated_at
-		 FROM users ORDER BY id ASC LIMIT 1`))
+		`SELECT `+userColumns+` FROM users ORDER BY id ASC LIMIT 1`))
+}
+
+func (s *SQLiteDB) GetUserByOIDC(ctx context.Context, issuer, subject string) (*User, error) {
+	if subject == "" {
+		return nil, nil
+	}
+	return s.scanUser(s.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+`
+		 FROM users WHERE oidc_issuer = ? AND oidc_subject = ? AND oidc_subject <> '' LIMIT 1`,
+		issuer, subject))
 }
 
 func (s *SQLiteDB) CountUsers(ctx context.Context) (int, error) {
@@ -908,11 +920,16 @@ func (s *SQLiteDB) UpsertUser(ctx context.Context, user *User) error {
 	if user.CreatedAt.IsZero() {
 		user.CreatedAt = now
 	}
+	if user.AuthSource == "" {
+		user.AuthSource = "forms"
+	}
 	if user.ID == 0 {
 		res, err := s.db.ExecContext(ctx,
-			`INSERT INTO users (username, password, salt, iterations, identifier, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO users (username, password, salt, iterations, identifier,
+			                    oidc_subject, oidc_issuer, auth_source, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
+			user.OIDCSubject, user.OIDCIssuer, user.AuthSource,
 			user.CreatedAt, user.UpdatedAt)
 		if err != nil {
 			if isSQLiteUniqueErr(err) {
@@ -925,9 +942,11 @@ func (s *SQLiteDB) UpsertUser(ctx context.Context, user *User) error {
 	}
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE users SET username = ?, password = ?, salt = ?, iterations = ?,
-		                  identifier = ?, updated_at = ?
+		                  identifier = ?, oidc_subject = ?, oidc_issuer = ?,
+		                  auth_source = ?, updated_at = ?
 		 WHERE id = ?`,
 		user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
+		user.OIDCSubject, user.OIDCIssuer, user.AuthSource,
 		user.UpdatedAt, user.ID)
 	if err != nil {
 		if isSQLiteUniqueErr(err) {

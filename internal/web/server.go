@@ -29,6 +29,7 @@ import (
 	"github.com/gin-gonic/gin/render"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mstrhakr/audplexus/internal/audio"
+	appcrypto "github.com/mstrhakr/audplexus/internal/crypto"
 	"github.com/mstrhakr/audplexus/internal/audnexus"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
@@ -67,6 +68,9 @@ type Server struct {
 	accounts *library.AccountManager
 	ffmpeg   *audio.FFmpeg
 	credPath string
+	// credBox encrypts secrets at rest (Audible creds, OIDC client secret).
+	// Shared with the AccountManager; same key file (audplexus.key).
+	credBox *appcrypto.Box
 	port           int
 	audiobooksPath string
 	downloadsPath  string
@@ -127,6 +131,7 @@ func NewServer(
 	accounts *library.AccountManager,
 	ffmpeg *audio.FFmpeg,
 	credPath string,
+	credBox *appcrypto.Box,
 	port int,
 	audiobooksPath string,
 	downloadsPath string,
@@ -148,6 +153,7 @@ func NewServer(
 		accounts:       accounts,
 		ffmpeg:         ffmpeg,
 		credPath:       credPath,
+		credBox:        credBox,
 		port:           port,
 		audiobooksPath: audiobooksPath,
 		downloadsPath:  downloadsPath,
@@ -573,6 +579,14 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/settings/security/api-key/rotate", s.handleSecurityAPIKeyRotate)
 	s.router.POST("/settings/security/password", s.handleSecurityPassword)
 	s.router.POST("/settings/security/sessions/revoke-all", s.handleSecurityRevokeAllSessions)
+	s.router.POST("/settings/security/oidc", s.handleSecurityOIDC)
+
+	// OIDC/OAuth login flow (e.g. Authentik). Both GET; the callback validates
+	// state from the sealed oidcFlow cookie, so it needs no CSRF token. Both
+	// must be auth-exempt (see authExemptPath) so unauthenticated visitors can
+	// start and complete the flow.
+	s.router.GET("/auth/oidc/login", s.handleOIDCLogin)
+	s.router.GET("/auth/oidc/callback", s.handleOIDCCallback)
 	// Security lives as a section on the main Settings page. Keep the old
 	// /settings/security URL working by bouncing it to the anchor.
 	s.router.GET("/settings/security", func(c *gin.Context) {
@@ -593,6 +607,7 @@ func (s *Server) setupRoutes() {
 	settingsGETFallback("/settings/security/api-key/rotate", "section-security")
 	settingsGETFallback("/settings/security/password", "section-security")
 	settingsGETFallback("/settings/security/sessions/revoke-all", "section-security")
+	settingsGETFallback("/settings/security/oidc", "section-security")
 
 	// Audible OAuth flow — distinct from app auth above. Kept under
 	// /auth/* for backwards compatibility with the URL the existing

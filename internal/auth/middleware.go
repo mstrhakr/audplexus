@@ -390,6 +390,11 @@ func IsAPIKeyAuth(c *gin.Context) bool {
 // trust model used for X-Forwarded-For in local.go — an unauthenticated LAN
 // attacker can't spoof Secure-cookie-suppression by setting their own XFP.
 // (Manager method so it can read trusted_proxies from settings.)
+
+// IsHTTPS is the exported view of isHTTPS for callers that need to build
+// absolute URLs with the correct scheme (e.g. the OIDC redirect URL).
+func (m *Manager) IsHTTPS(c *gin.Context) bool { return m.isHTTPS(c) }
+
 func (m *Manager) isHTTPS(c *gin.Context) bool {
 	if c.Request.TLS != nil {
 		return true

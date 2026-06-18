@@ -218,8 +218,13 @@ type User struct {
 	Salt       string    `json:"-"`
 	Iterations int       `json:"-"`
 	Identifier string    `json:"-"` // UUID; rotation invalidates sessions
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	// OIDC identity. Empty for forms users. Matched on (OIDCIssuer,
+	// OIDCSubject) when logging in via an OIDC provider.
+	OIDCSubject string    `json:"-"`
+	OIDCIssuer  string    `json:"-"`
+	AuthSource  string    `json:"auth_source,omitempty"` // "forms" | "oidc"
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Session is one logged-in cookie session. Token is the opaque random value

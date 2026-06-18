@@ -41,6 +41,21 @@ func (s *Server) handleLoginGet(c *gin.Context) {
 	if c.Query("loginFailed") == "true" {
 		data["Error"] = "Invalid username or password."
 	}
+	// Offer the OIDC button only when OIDC is enabled AND forms is the active
+	// method (OIDC is additive to forms — see handleOIDCLogin). The login URL
+	// carries returnUrl so the user lands where they intended after SSO.
+	ctx := c.Request.Context()
+	if s.authMgr.CurrentMethod(ctx) == auth.AuthMethodForms && auth.OIDCEnabled(ctx, s.db) {
+		if cfg, err := auth.LoadOIDCConfig(ctx, s.db, s.credBox); err == nil && cfg.Configured() {
+			data["OIDCEnabled"] = true
+			data["OIDCProviderName"] = cfg.ProviderName
+			loginURL := "/auth/oidc/login"
+			if returnURL != "" && returnURL != "/" {
+				loginURL += "?returnUrl=" + url.QueryEscape(returnURL)
+			}
+			data["OIDCLoginURL"] = loginURL
+		}
+	}
 	c.HTML(http.StatusOK, "login.html", data)
 }
 
@@ -181,7 +196,7 @@ func (s *Server) securityPageData(ctx context.Context, c *gin.Context) gin.H {
 		}
 	}
 
-	return gin.H{
+	data := gin.H{
 		"Page":              "security",
 		"CSRFToken":         auth.CSRFToken(c),
 		"APIKey":            apiKey,
@@ -194,6 +209,19 @@ func (s *Server) securityPageData(ctx context.Context, c *gin.Context) gin.H {
 		"PasswordSet":       passwordSet,
 		"PasswordChangedAt": passwordChangedAt,
 	}
+
+	// OIDC config for the Security page. The client secret is write-only —
+	// we surface only whether one is stored, never the value.
+	if oc, err := auth.LoadOIDCConfig(ctx, s.db, s.credBox); err == nil {
+		data["OIDCEnabled"] = oc.Enabled
+		data["OIDCProviderName"] = oc.ProviderName
+		data["OIDCIssuerURL"] = oc.IssuerURL
+		data["OIDCClientID"] = oc.ClientID
+		data["OIDCSecretSet"] = oc.ClientSecret != ""
+		data["OIDCScopes"] = strings.Join(oc.Scopes, " ")
+	}
+	data["OIDCRedirectURL"] = s.oidcRedirectURL(c)
+	return data
 }
 
 // firstUser returns the oldest user row, or nil when no users exist. Wrapper
@@ -233,12 +261,15 @@ func (s *Server) handleSecurityAuthMethod(c *gin.Context) {
 	}
 
 	// Switching to forms without a user would lock everyone out — require
-	// that the admin row exists first.
+	// that the admin row exists first. Exception: when OIDC is enabled and
+	// fully configured, the first successful SSO login auto-provisions a user,
+	// so an OIDC-only operator (no forms password) still has a way in. Confirm
+	// the provider is reachable so we don't trade one lockout for another.
 	if method == auth.AuthMethodForms {
 		count, _ := s.db.CountUsers(ctx)
-		if count == 0 {
+		if count == 0 && !s.oidcReadyForBootstrap(ctx) {
 			s.renderSecurityPage(c, http.StatusBadRequest, gin.H{
-				"Error": "Set an admin password in the next section before turning Forms authentication on.",
+				"Error": "Set an admin password in the next section, or enable a working OIDC provider, before turning Forms authentication on.",
 			})
 			return
 		}
@@ -413,7 +444,8 @@ func sanitizeReturnURL(raw string) string {
 // keeping them off the public surface is cleaner.)
 func (s *Server) authExemptPath(path string) bool {
 	switch path {
-	case "/login", "/logout", "/healthz":
+	case "/login", "/logout", "/healthz",
+		"/auth/oidc/login", "/auth/oidc/callback":
 		return true
 	}
 	if (path == "/setup" || strings.HasPrefix(path, "/setup/")) && !s.onboarded.Load() {

@@ -95,6 +95,9 @@ type Database interface {
 	// users exist. Used by the single-admin UI to surface the admin without
 	// hardcoding id=1 (which breaks if the row was ever rotated).
 	GetFirstUser(ctx context.Context) (*User, error)
+	// GetUserByOIDC returns the user matched on (issuer, subject), or nil.
+	// Used by the OIDC callback to find an already-provisioned account.
+	GetUserByOIDC(ctx context.Context, issuer, subject string) (*User, error)
 	CountUsers(ctx context.Context) (int, error)
 	UpsertUser(ctx context.Context, user *User) error
 	RotateUserIdentifier(ctx context.Context, userID int64, newIdentifier string) error

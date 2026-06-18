@@ -31,6 +31,16 @@
             Sign In
         </button>
 
+        {{if .OIDCEnabled}}
+        <div style="display:flex;align-items:center;gap:.6em;margin:1.2em 0;color:#666;font-size:.8em;">
+            <span style="flex:1;height:1px;background:#3a3d45;"></span>or<span style="flex:1;height:1px;background:#3a3d45;"></span>
+        </div>
+        <a href="{{.OIDCLoginURL}}"
+           style="display:block;text-align:center;width:100%;box-sizing:border-box;padding:.7em;background:#2e313a;border:1px solid #3a3d45;color:#f0f0f0;border-radius:5px;font-size:1em;font-weight:600;text-decoration:none;">
+            Sign in with {{.OIDCProviderName}}
+        </a>
+        {{end}}
+
         {{if .LockedUntil}}
         <p style="color:#f08585;font-size:.85em;margin:1em 0 0;text-align:center;">Too many attempts. Try again at {{.LockedUntil}}.</p>
         {{end}}

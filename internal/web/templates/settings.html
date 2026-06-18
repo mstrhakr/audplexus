@@ -610,6 +610,66 @@
             </div>
         </div>
 
+        {{/* ── OIDC / OAuth single sign-on (e.g. Authentik) ──────────────
+             Additive to forms auth. When enabled, the login page shows a
+             "Sign in with {provider}" button alongside the password form.
+             Anyone the provider authenticates is auto-provisioned as a full
+             user — access control lives in the provider, not here. */}}
+        <div class="card" style="margin-top:1rem">
+            <div class="card-head"><h3>Single Sign-On (OIDC)</h3></div>
+            <div class="card-body">
+                <p class="hint" style="margin:0 0 .75rem">
+                    Add an OAuth/OIDC provider (Authentik, Keycloak, etc.) as a login option next to the password form.
+                    Every user your provider lets through is signed in as a full user — restrict access in the provider's
+                    application/policy binding. Requires Forms authentication to be on.
+                </p>
+
+                <form method="POST" action="/settings/security/oidc">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    <div class="form-row" style="flex-direction:row;align-items:center;gap:.5rem">
+                        <input type="checkbox" id="oidc_enabled" name="oidc_enabled" {{if .OIDCEnabled}}checked{{end}} style="width:auto">
+                        <label for="oidc_enabled" style="margin:0">Enable OIDC login</label>
+                    </div>
+                    <div class="form-row">
+                        <label for="oidc_provider_name">Provider name</label>
+                        <input class="input" type="text" id="oidc_provider_name" name="oidc_provider_name" value="{{.OIDCProviderName}}" placeholder="Authentik">
+                        <div class="hint">Shown on the login button: "Sign in with …".</div>
+                    </div>
+                    <div class="form-row">
+                        <label for="oidc_issuer_url">Issuer URL</label>
+                        <input class="input" type="url" id="oidc_issuer_url" name="oidc_issuer_url" value="{{.OIDCIssuerURL}}" placeholder="https://authentik.example.com/application/o/audplexus/">
+                        <div class="hint">The provider's OIDC issuer. We auto-discover endpoints from <code>{issuer}/.well-known/openid-configuration</code>.</div>
+                    </div>
+                    <div class="form-row">
+                        <label for="oidc_client_id">Client ID</label>
+                        <input class="input" type="text" id="oidc_client_id" name="oidc_client_id" value="{{.OIDCClientID}}">
+                    </div>
+                    <div class="form-row">
+                        <label for="oidc_client_secret">Client secret</label>
+                        <input class="input" type="password" id="oidc_client_secret" name="oidc_client_secret" autocomplete="new-password"
+                               placeholder="{{if .OIDCSecretSet}}configured — leave blank to keep{{else}}required{{end}}">
+                        <div class="hint">Stored encrypted at rest. Leave blank to keep the existing secret.</div>
+                    </div>
+                    <div class="form-row">
+                        <label for="oidc_scopes">Scopes</label>
+                        <input class="input" type="text" id="oidc_scopes" name="oidc_scopes" value="{{.OIDCScopes}}" placeholder="openid profile email">
+                        <div class="hint">Space-separated. Must include <code>openid</code>.</div>
+                    </div>
+                    <div class="form-row">
+                        <label>Redirect URI</label>
+                        <div style="display:flex;gap:.5rem;align-items:center">
+                            <input class="input" type="text" id="oidc_redirect_uri" value="{{.OIDCRedirectURL}}" readonly style="font-family:ui-monospace,monospace;font-size:.8rem">
+                            <button type="button" class="btn btn-secondary" data-copy-target="#oidc_redirect_uri" data-copy-label="Copy">Copy</button>
+                        </div>
+                        <div class="hint">Register this exact URL as the Redirect URI / callback in your provider's application.</div>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Save SSO settings</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
         {{if eq .AuthMethod "forms"}}
         <div class="card" style="margin-top:1rem">
             <div class="card-head"><h3>Sessions</h3></div>

@@ -216,7 +216,7 @@ func main() {
 	log.Info().Bool("enabled", cfg.Sync.Enabled).Str("schedule", cfg.Sync.Schedule).Msg("scheduler started")
 
 	// Start web server
-	webServer := web.NewServer(db, syncSvc, dlMgr, sched, anClient, org, audibleClient, accountMgr, ffmpeg, credPath, cfg.Server.Port, cfg.Paths.Audiobooks, cfg.Paths.Downloads, cfg.Paths.Config)
+	webServer := web.NewServer(db, syncSvc, dlMgr, sched, anClient, org, audibleClient, accountMgr, ffmpeg, credPath, credBox, cfg.Server.Port, cfg.Paths.Audiobooks, cfg.Paths.Downloads, cfg.Paths.Config)
 
 	// Login throttle GC — drops expired (ip, username) buckets so the map
 	// doesn't grow unbounded during a username-enumeration attack. Sweeps

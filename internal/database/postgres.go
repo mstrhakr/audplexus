@@ -822,10 +822,14 @@ func buildBookWherePostgres(filter BookFilter) (string, []interface{}) {
 
 // --- Users ---
 
+const pgUserColumns = `id, username, password, salt, iterations, identifier,
+	oidc_subject, oidc_issuer, auth_source, created_at, updated_at`
+
 func (p *PostgresDB) scanUser(row *sql.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Username, &u.Password, &u.Salt, &u.Iterations,
-		&u.Identifier, &u.CreatedAt, &u.UpdatedAt)
+		&u.Identifier, &u.OIDCSubject, &u.OIDCIssuer, &u.AuthSource,
+		&u.CreatedAt, &u.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -837,20 +841,28 @@ func (p *PostgresDB) scanUser(row *sql.Row) (*User, error) {
 
 func (p *PostgresDB) GetUserByUsername(ctx context.Context, username string) (*User, error) {
 	return p.scanUser(p.db.QueryRowContext(ctx,
-		`SELECT id, username, password, salt, iterations, identifier, created_at, updated_at
+		`SELECT `+pgUserColumns+`
 		 FROM users WHERE username = $1 LIMIT 1`, username))
 }
 
 func (p *PostgresDB) GetUserByID(ctx context.Context, id int64) (*User, error) {
 	return p.scanUser(p.db.QueryRowContext(ctx,
-		`SELECT id, username, password, salt, iterations, identifier, created_at, updated_at
-		 FROM users WHERE id = $1`, id))
+		`SELECT `+pgUserColumns+` FROM users WHERE id = $1`, id))
 }
 
 func (p *PostgresDB) GetFirstUser(ctx context.Context) (*User, error) {
 	return p.scanUser(p.db.QueryRowContext(ctx,
-		`SELECT id, username, password, salt, iterations, identifier, created_at, updated_at
-		 FROM users ORDER BY id ASC LIMIT 1`))
+		`SELECT `+pgUserColumns+` FROM users ORDER BY id ASC LIMIT 1`))
+}
+
+func (p *PostgresDB) GetUserByOIDC(ctx context.Context, issuer, subject string) (*User, error) {
+	if subject == "" {
+		return nil, nil
+	}
+	return p.scanUser(p.db.QueryRowContext(ctx,
+		`SELECT `+pgUserColumns+`
+		 FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2 AND oidc_subject <> '' LIMIT 1`,
+		issuer, subject))
 }
 
 func (p *PostgresDB) CountUsers(ctx context.Context) (int, error) {
@@ -865,11 +877,16 @@ func (p *PostgresDB) UpsertUser(ctx context.Context, user *User) error {
 	if user.CreatedAt.IsZero() {
 		user.CreatedAt = now
 	}
+	if user.AuthSource == "" {
+		user.AuthSource = "forms"
+	}
 	if user.ID == 0 {
 		err := p.db.QueryRowContext(ctx,
-			`INSERT INTO users (username, password, salt, iterations, identifier, created_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+			`INSERT INTO users (username, password, salt, iterations, identifier,
+			                    oidc_subject, oidc_issuer, auth_source, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
 			user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
+			user.OIDCSubject, user.OIDCIssuer, user.AuthSource,
 			user.CreatedAt, user.UpdatedAt).Scan(&user.ID)
 		if err != nil {
 			if isPostgresUniqueErr(err) {
@@ -881,9 +898,11 @@ func (p *PostgresDB) UpsertUser(ctx context.Context, user *User) error {
 	}
 	_, err := p.db.ExecContext(ctx,
 		`UPDATE users SET username = $1, password = $2, salt = $3, iterations = $4,
-		                  identifier = $5, updated_at = $6
-		 WHERE id = $7`,
+		                  identifier = $5, oidc_subject = $6, oidc_issuer = $7,
+		                  auth_source = $8, updated_at = $9
+		 WHERE id = $10`,
 		user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
+		user.OIDCSubject, user.OIDCIssuer, user.AuthSource,
 		user.UpdatedAt, user.ID)
 	if err != nil {
 		if isPostgresUniqueErr(err) {

@@ -208,6 +208,9 @@ func (s *settingsOnlyStubDB) GetUserByID(ctx context.Context, id int64) (*databa
 func (s *settingsOnlyStubDB) GetFirstUser(ctx context.Context) (*database.User, error) {
 	return nil, nil
 }
+func (s *settingsOnlyStubDB) GetUserByOIDC(ctx context.Context, issuer, subject string) (*database.User, error) {
+	return nil, nil
+}
 func (s *settingsOnlyStubDB) CountUsers(ctx context.Context) (int, error)            { return 0, nil }
 func (s *settingsOnlyStubDB) UpsertUser(ctx context.Context, u *database.User) error { return nil }
 func (s *settingsOnlyStubDB) RotateUserIdentifier(ctx context.Context, id int64, ident string) error {

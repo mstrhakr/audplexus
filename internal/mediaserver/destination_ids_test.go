@@ -90,6 +90,7 @@ func (d *destinationIDsStubDB) GetBookDestination(ctx context.Context, bookID in
 func (d *destinationIDsStubDB) GetUserByUsername(ctx context.Context, u string) (*database.User, error) { return nil, nil }
 func (d *destinationIDsStubDB) GetUserByID(ctx context.Context, id int64) (*database.User, error) { return nil, nil }
 func (d *destinationIDsStubDB) GetFirstUser(ctx context.Context) (*database.User, error) { return nil, nil }
+func (d *destinationIDsStubDB) GetUserByOIDC(ctx context.Context, issuer, subject string) (*database.User, error) { return nil, nil }
 func (d *destinationIDsStubDB) CountUsers(ctx context.Context) (int, error) { return 0, nil }
 func (d *destinationIDsStubDB) UpsertUser(ctx context.Context, u *database.User) error { return nil }
 func (d *destinationIDsStubDB) RotateUserIdentifier(ctx context.Context, id int64, ident string) error { return nil }
