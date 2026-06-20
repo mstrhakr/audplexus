@@ -1,0 +1,84 @@
+{{define "amazon_auth_connected_or_callback"}}
+{{if .Authenticated}}
+<div class="alert ok" role="status">
+    <span class="ico">✓</span>
+    <div><strong>Authenticated</strong> — connected to Audible.</div>
+</div>
+{{else if .AuthURL}}
+<div class="alert" role="status" style="margin-bottom:1rem">
+    <div>
+        <strong>Sign in with Amazon</strong>
+        <ol style="margin:.5rem 0 .25rem 1.1rem;font-size:.85rem;line-height:1.6">
+            <li>Open Amazon login in a new tab.</li>
+            <li>Sign in and finish any prompts.</li>
+            <li>Copy the <strong>entire</strong> URL from that tab.</li>
+            <li>Paste it below and submit.</li>
+        </ol>
+    </div>
+</div>
+
+<p style="margin-bottom:1rem">
+    <a href="{{.AuthURL}}" target="_blank" rel="noopener noreferrer" class="btn btn-primary">Open Amazon login →</a>
+</p>
+
+<div class="alert" role="status" style="margin-bottom:1rem;font-size:.85rem">
+    <div>
+        <strong>Step 2:</strong> After signing in you'll land on a page that says <em>"Looking for Something?"</em> or shows a blank page.
+        That's normal. <strong>Copy the entire URL</strong> from that tab's address bar and paste it below.
+    </div>
+</div>
+
+<details class="auth-help" style="margin-bottom:1rem">
+    <summary style="cursor:pointer;font-size:.85rem;color:#78b7ff">Show example of what to copy</summary>
+    <img src="/static/amazon-redirect-help.svg" alt="Example showing the Amazon redirect URL to copy" class="auth-help-image" style="max-width:100%;margin-top:.5rem;border-radius:6px">
+</details>
+
+<form method="POST" action="/auth/callback">
+    <input type="hidden" name="code_verifier" value="{{.CodeVerifier}}">
+    <input type="hidden" name="device_serial" value="{{.DeviceSerial}}">
+    <div class="form-row">
+        <label for="redirect_url">Redirect URL</label>
+        <input class="input" type="text" id="redirect_url" name="redirect_url"
+               placeholder="https://www.amazon.com/ap/maplanding?openid.oa2.authorization_code=..."
+               autofocus required>
+        <div class="hint" id="redirect_url_help">Paste the full URL including <code>openid.oa2.authorization_code=...</code></div>
+    </div>
+    <button type="submit" class="btn btn-primary">Complete authentication</button>
+</form>
+
+<script>
+(function() {
+    var redirectInput = document.getElementById('redirect_url');
+    var redirectHelp = document.getElementById('redirect_url_help');
+    if (!redirectInput || !redirectHelp) {
+        return;
+    }
+
+    var validateRedirect = function() {
+        var value = (redirectInput.value || '').trim();
+        if (!value) {
+            redirectHelp.textContent = 'Paste the full URL including openid.oa2.authorization_code=...';
+            redirectInput.classList.remove('auth-input-good');
+            redirectInput.classList.remove('auth-input-bad');
+            return;
+        }
+
+        var hasCode = value.indexOf('openid.oa2.authorization_code=') !== -1;
+        var looksLikeURL = /^https?:\/\//i.test(value);
+        if (hasCode && looksLikeURL) {
+            redirectHelp.textContent = 'Looks good. You can submit this URL.';
+            redirectInput.classList.add('auth-input-good');
+            redirectInput.classList.remove('auth-input-bad');
+        } else {
+            redirectHelp.textContent = 'This does not look like the Amazon redirect URL yet. Make sure you copied the full browser URL.';
+            redirectInput.classList.add('auth-input-bad');
+            redirectInput.classList.remove('auth-input-good');
+        }
+    };
+
+    redirectInput.addEventListener('input', validateRedirect);
+    validateRedirect();
+})();
+</script>
+{{end}}
+{{end}}

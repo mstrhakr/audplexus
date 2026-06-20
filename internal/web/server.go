@@ -400,7 +400,7 @@ func (s *Server) setupTemplates() {
 	base := template.Must(template.New("base").Funcs(funcMap).ParseFS(templateFS, "templates/base.html"))
 
 	// Parse all partial/fragment templates that may be referenced by page templates
-	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/book_detail_modal.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html", "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html", "templates/destinations_card.html"}
+	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/book_detail_modal.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html", "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html", "templates/destinations_card.html", "templates/amazon_auth_flow.html"}
 	baseWithPartials := template.Must(template.Must(base.Clone()).ParseFS(templateFS, partials...))
 
 	r := &multiRender{templates: make(map[string]*template.Template)}
