@@ -695,6 +695,7 @@ func (s *Server) setupRoutes() {
 		api.POST("/sync/retry", s.handleSyncRetry)
 		api.POST("/sync/phase/:phase", s.handleRunPhase)
 		api.GET("/sync/status", s.handleSyncStatus)
+		api.GET("/sync/status.json", s.handleSyncStatusJSON)
 		api.GET("/dashboard/summary", s.handleDashboardSummary)
 		api.GET("/dashboard/downloads", s.handleDashboardDownloads)
 		api.POST("/downloads/queue-all", s.handleQueueAll)
@@ -2881,6 +2882,45 @@ func (s *Server) handleRunPhase(c *gin.Context) {
 func (s *Server) handleSyncStatus(c *gin.Context) {
 	progress := s.sync.GetProgress()
 	c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(progress))
+}
+
+// handleSyncStatusJSON returns a machine-readable sync-status + library-health
+// summary for external consumers (e.g. HearthShelf's admin integration card).
+// Unlike handleSyncStatus this emits JSON, not an HTMX fragment, and unlike the
+// full diagnostics compare it stays cheap: sync progress is in-memory and the
+// status counts are a single grouped DB query (no remote inventory fetches).
+func (s *Server) handleSyncStatusJSON(c *gin.Context) {
+	progress := s.sync.GetProgress()
+
+	counts, err := s.db.CountBooksByStatus(c.Request.Context())
+	if err != nil {
+		webLog.Warn().Err(err).Msg("sync status json: failed to count books by status")
+		counts = map[database.BookStatus]int{}
+	}
+
+	statusCounts := make(map[string]int, len(counts))
+	total := 0
+	for status, n := range counts {
+		statusCounts[string(status)] = n
+		total += n
+	}
+	// "Failed" books are the actionable health signal an admin should be alerted
+	// to; the full per-destination drift list remains behind /api/diagnostics/compare.
+	failed := counts[database.BookStatusFailed]
+
+	resp := gin.H{
+		"running":       progress.Running,
+		"status":        progress.Status,
+		"message":       progress.Message,
+		"error":         progress.Error,
+		"started_at":    progress.StartedAt,
+		"completed_at":  progress.CompletedAt,
+		"books_total":   total,
+		"books_failed":  failed,
+		"status_counts": statusCounts,
+		"has_issues":    failed > 0 || progress.Error != "",
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // plexSyncForSync is the callback used by SyncService to perform a full Plex scan and then query the library.
