@@ -150,6 +150,10 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 		Int("index_ms", int(indexMs)).
 		Msg("fs_scan: ASIN index built")
 
+	// Chapter-directory classification depends only on the discovered files, so
+	// calculate it once rather than rebuilding it for every book's fuzzy match.
+	directoryStats := buildDirectoryAudioStats(discoveredFiles)
+
 	// Phase 2: Load all books from the database
 	dbLoadStart := time.Now()
 	books, _, err := db.ListBooks(ctx, database.BookFilter{})
@@ -198,7 +202,7 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 		}
 
 		matchStart := time.Now()
-		matchedFile, matchedSize, matchMethod := findBestFileForBook(ctx, &books[i], libraryRoot, discoveredFiles, asinFileIndex)
+		matchedFile, matchedSize, matchMethod := findBestFileForBookWithDirectoryStats(ctx, &books[i], libraryRoot, discoveredFiles, asinFileIndex, directoryStats)
 		matchMs := time.Since(matchStart).Milliseconds()
 		matchTimeMs += matchMs
 
@@ -301,6 +305,10 @@ func reconcileExistingAudiobookFilesWithProgress(ctx context.Context, db databas
 //   - "candidate_path" a generated candidate path (author/title/filename layout) exists on disk
 //   - "no_match"       no file found
 func findBestFileForBook(ctx context.Context, book *database.Book, libraryRoot string, discoveredFiles map[string]int64, asinFileIndex map[string]string) (string, int64, string) {
+	return findBestFileForBookWithDirectoryStats(ctx, book, libraryRoot, discoveredFiles, asinFileIndex, buildDirectoryAudioStats(discoveredFiles))
+}
+
+func findBestFileForBookWithDirectoryStats(ctx context.Context, book *database.Book, libraryRoot string, discoveredFiles map[string]int64, asinFileIndex map[string]string, directoryStats map[string]directoryAudioStats) (string, int64, string) {
 	if book == nil {
 		return "", 0, "no_match"
 	}
@@ -344,14 +352,35 @@ func findBestFileForBook(ctx context.Context, book *database.Book, libraryRoot s
 	// Fourth choice: fuzzy title/author search across discovered paths.
 	// This helps preserve matches when users switch naming templates and older
 	// files no longer follow the generated candidate layout.
-	if path, size, ok := fuzzyMatchDiscoveredFile(book, discoveredFiles); ok {
+	if path, size, ok := fuzzyMatchDiscoveredFileWithDirectoryStats(book, discoveredFiles, directoryStats); ok {
 		return path, size, "fuzzy_title_author"
 	}
 
 	return "", 0, "no_match"
 }
 
+const (
+	chapterDirectoryMinFiles = 3
+	chapterDirectoryPercent  = 70
+)
+
+// explicitChapterFilenameRe recognizes chapter-track names such as
+// "031 - Chapter 30 - Armageddon.m4a". It deliberately requires a chapter
+// number so standalone titles such as "The Final Chapter.m4b" are not treated
+// as chapter tracks.
+var explicitChapterFilenameRe = regexp.MustCompile(`(?i)(?:^|[-_.\s])(?:chapter|chap)\s*(?:\d+|[ivxlcdm]+)\b`)
+
+type directoryAudioStats struct {
+	totalSize        int64
+	fileCount        int
+	chapterFileCount int
+}
+
 func fuzzyMatchDiscoveredFile(book *database.Book, discoveredFiles map[string]int64) (string, int64, bool) {
+	return fuzzyMatchDiscoveredFileWithDirectoryStats(book, discoveredFiles, buildDirectoryAudioStats(discoveredFiles))
+}
+
+func fuzzyMatchDiscoveredFileWithDirectoryStats(book *database.Book, discoveredFiles map[string]int64, directoryStats map[string]directoryAudioStats) (string, int64, bool) {
 	if book == nil {
 		return "", 0, false
 	}
@@ -367,24 +396,59 @@ func fuzzyMatchDiscoveredFile(book *database.Book, discoveredFiles map[string]in
 		score int
 	}
 	matches := make([]candidate, 0, 4)
-	for path, size := range discoveredFiles {
-		name := normalizeReconToken(filepath.Base(path))
-		dir := normalizeReconToken(filepath.Base(filepath.Dir(path)))
-		whole := normalizeReconToken(path)
+	chapterDirectoriesChecked := make(map[string]struct{})
 
-		if !strings.Contains(name, titleKey) && !strings.Contains(dir, titleKey) && !strings.Contains(whole, titleKey) {
+	for path, size := range discoveredFiles {
+		parentDir := filepath.Clean(filepath.Dir(path))
+		stats := directoryStats[parentDir]
+
+		// A high-confidence chapter directory represents one audiobook, not a
+		// collection of independently matchable chapter titles. Match it once
+		// using the directory path and aggregate size, and never use individual
+		// chapter filenames as fuzzy title candidates.
+		if isLikelyChapterDirectory(stats) {
+			if _, checked := chapterDirectoriesChecked[parentDir]; checked {
+				continue
+			}
+			chapterDirectoriesChecked[parentDir] = struct{}{}
+
+			name := normalizeReconToken(filepath.Base(parentDir))
+			dir := normalizeReconToken(filepath.Base(filepath.Dir(parentDir)))
+			whole := normalizeReconToken(parentDir)
+			if !strings.Contains(name, titleKey) && !strings.Contains(dir, titleKey) && !strings.Contains(whole, titleKey) {
+				continue
+			}
+
+			score := fuzzyReconScore(titleKey, authorKey, name, dir, whole)
+			matches = append(matches, candidate{path: parentDir, size: stats.totalSize, score: score})
 			continue
 		}
 
-		score := 1
-		if authorKey != "" {
-			if strings.Contains(name, authorKey) || strings.Contains(dir, authorKey) || strings.Contains(whole, authorKey) {
-				score += 2
-			}
+		name := normalizeReconToken(filepath.Base(path))
+		dir := normalizeReconToken(filepath.Base(parentDir))
+		directoryPath := normalizeReconToken(parentDir)
+		whole := normalizeReconToken(path)
+		nameMatchesTitle := strings.Contains(name, titleKey)
+		directoryMatchesTitle := strings.Contains(directoryPath, titleKey)
+
+		if !nameMatchesTitle && !strings.Contains(dir, titleKey) && !strings.Contains(whole, titleKey) {
+			continue
 		}
-		if strings.Contains(name, titleKey) {
-			score++
+
+		authorMatchesPath := authorKey != "" && strings.Contains(whole, authorKey)
+
+		// Even below the directory-classification threshold, do not let an
+		// explicit chapter track create a title-only match inside a multi-file
+		// directory belonging to an unrelated author/book.
+		if stats.fileCount > 1 &&
+			isExplicitChapterFilename(filepath.Base(path)) &&
+			nameMatchesTitle &&
+			!directoryMatchesTitle &&
+			!authorMatchesPath {
+			continue
 		}
+
+		score := fuzzyReconScore(titleKey, authorKey, name, dir, whole)
 		matches = append(matches, candidate{path: path, size: size, score: score})
 	}
 
@@ -408,6 +472,42 @@ func fuzzyMatchDiscoveredFile(book *database.Book, discoveredFiles map[string]in
 	}
 
 	return "", 0, false
+}
+
+func fuzzyReconScore(titleKey, authorKey, name, dir, whole string) int {
+	score := 1
+	if authorKey != "" && (strings.Contains(name, authorKey) || strings.Contains(dir, authorKey) || strings.Contains(whole, authorKey)) {
+		score += 2
+	}
+	if strings.Contains(name, titleKey) {
+		score++
+	}
+	return score
+}
+
+func buildDirectoryAudioStats(discoveredFiles map[string]int64) map[string]directoryAudioStats {
+	statsByDirectory := make(map[string]directoryAudioStats)
+	for path, size := range discoveredFiles {
+		dir := filepath.Clean(filepath.Dir(path))
+		stats := statsByDirectory[dir]
+		stats.totalSize += size
+		stats.fileCount++
+		if isExplicitChapterFilename(filepath.Base(path)) {
+			stats.chapterFileCount++
+		}
+		statsByDirectory[dir] = stats
+	}
+	return statsByDirectory
+}
+
+func isLikelyChapterDirectory(stats directoryAudioStats) bool {
+	return stats.fileCount >= chapterDirectoryMinFiles &&
+		stats.chapterFileCount*100 >= stats.fileCount*chapterDirectoryPercent
+}
+
+func isExplicitChapterFilename(filename string) bool {
+	nameWithoutExtension := strings.TrimSuffix(filename, filepath.Ext(filename))
+	return explicitChapterFilenameRe.MatchString(nameWithoutExtension)
 }
 
 func normalizeReconToken(s string) string {
