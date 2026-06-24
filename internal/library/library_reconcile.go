@@ -389,6 +389,7 @@ func fuzzyMatchDiscoveredFileWithDirectoryStats(book *database.Book, discoveredF
 		return "", 0, false
 	}
 	authorKey := normalizeReconToken(book.Author)
+	seriesKey := normalizeReconToken(book.Series)
 
 	type candidate struct {
 		path  string
@@ -419,12 +420,16 @@ func fuzzyMatchDiscoveredFileWithDirectoryStats(book *database.Book, discoveredF
 				continue
 			}
 
-			score := fuzzyReconScore(titleKey, authorKey, name, dir, whole)
+			if !fuzzyTitleMatchHasSupport(titleKey, authorKey, seriesKey, parentDir, whole) {
+				continue
+			}
+
+			score := fuzzyReconScore(titleKey, authorKey, seriesKey, name, dir, whole, parentDir)
 			matches = append(matches, candidate{path: parentDir, size: stats.totalSize, score: score})
 			continue
 		}
 
-		name := normalizeReconToken(filepath.Base(path))
+		name := normalizeReconToken(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
 		dir := normalizeReconToken(filepath.Base(parentDir))
 		directoryPath := normalizeReconToken(parentDir)
 		whole := normalizeReconToken(path)
@@ -436,6 +441,16 @@ func fuzzyMatchDiscoveredFileWithDirectoryStats(book *database.Book, discoveredF
 		}
 
 		authorMatchesPath := authorKey != "" && strings.Contains(whole, authorKey)
+		seriesMatchesPath := len(seriesKey) >= 4 && strings.Contains(whole, seriesKey)
+
+		// A proper-substring title match is too weak on its own. For example,
+		// Audible's "Crucible" must not match "Leadville Crucible", and
+		// "Guardian" must not match "The Guardian Guild". Accept a partial
+		// title only when the path also corroborates the Audible author or
+		// series. An exact title path component remains sufficient by itself.
+		if !pathHasExactReconComponent(path, titleKey) && !authorMatchesPath && !seriesMatchesPath {
+			continue
+		}
 
 		// Even below the directory-classification threshold, do not let an
 		// explicit chapter track create a title-only match inside a multi-file
@@ -444,11 +459,12 @@ func fuzzyMatchDiscoveredFileWithDirectoryStats(book *database.Book, discoveredF
 			isExplicitChapterFilename(filepath.Base(path)) &&
 			nameMatchesTitle &&
 			!directoryMatchesTitle &&
-			!authorMatchesPath {
+			!authorMatchesPath &&
+			!seriesMatchesPath {
 			continue
 		}
 
-		score := fuzzyReconScore(titleKey, authorKey, name, dir, whole)
+		score := fuzzyReconScore(titleKey, authorKey, seriesKey, name, dir, whole, path)
 		matches = append(matches, candidate{path: path, size: size, score: score})
 	}
 
@@ -474,15 +490,56 @@ func fuzzyMatchDiscoveredFileWithDirectoryStats(book *database.Book, discoveredF
 	return "", 0, false
 }
 
-func fuzzyReconScore(titleKey, authorKey, name, dir, whole string) int {
-	score := 1
-	if authorKey != "" && (strings.Contains(name, authorKey) || strings.Contains(dir, authorKey) || strings.Contains(whole, authorKey)) {
-		score += 2
+func fuzzyTitleMatchHasSupport(titleKey, authorKey, seriesKey, path, whole string) bool {
+	if pathHasExactReconComponent(path, titleKey) {
+		return true
 	}
-	if strings.Contains(name, titleKey) {
+	if authorKey != "" && strings.Contains(whole, authorKey) {
+		return true
+	}
+	return len(seriesKey) >= 4 && strings.Contains(whole, seriesKey)
+}
+
+func fuzzyReconScore(titleKey, authorKey, seriesKey, name, dir, whole, path string) int {
+	score := 1
+	if pathHasExactReconComponent(path, titleKey) {
+		score += 4
+	} else if strings.Contains(name, titleKey) || strings.Contains(dir, titleKey) {
 		score++
 	}
+	if authorKey != "" && strings.Contains(whole, authorKey) {
+		score += 3
+	}
+	if len(seriesKey) >= 4 && strings.Contains(whole, seriesKey) {
+		score += 2
+	}
 	return score
+}
+
+func pathHasExactReconComponent(path, token string) bool {
+	if token == "" {
+		return false
+	}
+
+	cleanPath := filepath.Clean(path)
+	for {
+		base := filepath.Base(cleanPath)
+		component := base
+		if isAudioFile(base) {
+			component = strings.TrimSuffix(base, filepath.Ext(base))
+		}
+		if normalizeReconToken(component) == token {
+			return true
+		}
+
+		parent := filepath.Dir(cleanPath)
+		if parent == cleanPath {
+			break
+		}
+		cleanPath = parent
+	}
+
+	return false
 }
 
 func buildDirectoryAudioStats(discoveredFiles map[string]int64) map[string]directoryAudioStats {
