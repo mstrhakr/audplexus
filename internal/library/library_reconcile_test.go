@@ -327,6 +327,139 @@ func TestFindBestFileForBookPromotesStoredChapterFileToDirectory(t *testing.T) {
 	}
 }
 
+func TestFuzzyMatchRejectsTitleFoundOnlyInChapterTrack(t *testing.T) {
+	root := filepath.Join("root")
+	bookDir := filepath.Join(root, "Dennis E. Taylor", "Bobiverse", "Bobiverse 3 - All These Worlds")
+	discovered := map[string]int64{
+		filepath.Join(bookDir, "001 - Intro.m4a"):                        10,
+		filepath.Join(bookDir, "002 - Chapter 01 - Face-Off.m4a"):        20,
+		filepath.Join(bookDir, "003 - Chapter 02 - We've Lost.m4a"):      30,
+		filepath.Join(bookDir, "004 - Chapter 03 - Trouble Brewing.m4a"): 40,
+		filepath.Join(bookDir, "005 - Chapter 04 - Attitude.m4a"):        50,
+		filepath.Join(bookDir, "006 - Chapter 05 - Bushwacked.m4a"):      60,
+		filepath.Join(bookDir, "031 - Chapter 30 - Armageddon.m4a"):      70,
+		filepath.Join(bookDir, "078 - Outro.m4a"):                        80,
+	}
+	book := &database.Book{
+		Title:  "Armageddon",
+		Author: "Travis Bagwell",
+	}
+
+	path, size, ok := fuzzyMatchDiscoveredFile(book, discovered)
+	if ok || path != "" || size != 0 {
+		t.Fatalf("fuzzyMatchDiscoveredFile() = (%q, %d, %v), want no match", path, size, ok)
+	}
+}
+
+func TestFuzzyMatchTreatsChapterDirectoryAsSingleBookCandidate(t *testing.T) {
+	root := filepath.Join("root")
+	bookDir := filepath.Join(root, "Dennis E. Taylor", "Bobiverse", "Bobiverse 3 - All These Worlds")
+	discovered := map[string]int64{
+		filepath.Join(bookDir, "001 - Intro.m4a"):                        10,
+		filepath.Join(bookDir, "002 - Chapter 01 - Face-Off.m4a"):        20,
+		filepath.Join(bookDir, "003 - Chapter 02 - We've Lost.m4a"):      30,
+		filepath.Join(bookDir, "004 - Chapter 03 - Trouble Brewing.m4a"): 40,
+		filepath.Join(bookDir, "005 - Chapter 04 - Attitude.m4a"):        50,
+		filepath.Join(bookDir, "006 - Chapter 05 - Bushwacked.m4a"):      60,
+		filepath.Join(bookDir, "031 - Chapter 30 - Armageddon.m4a"):      70,
+		filepath.Join(bookDir, "078 - Outro.m4a"):                        80,
+	}
+	book := &database.Book{
+		Title:  "All These Worlds",
+		Author: "Dennis E. Taylor",
+	}
+
+	path, size, ok := fuzzyMatchDiscoveredFile(book, discovered)
+	if !ok {
+		t.Fatal("fuzzyMatchDiscoveredFile() did not match chapter directory")
+	}
+	if path != bookDir {
+		t.Fatalf("fuzzyMatchDiscoveredFile() path = %q, want %q", path, bookDir)
+	}
+	if size != 360 {
+		t.Fatalf("fuzzyMatchDiscoveredFile() size = %d, want %d", size, 360)
+	}
+}
+
+func TestFuzzyMatchKeepsStandaloneBooksInSharedDirectory(t *testing.T) {
+	root := filepath.Join("root", "Flat Library")
+	armageddon := filepath.Join(root, "Armageddon.m4b")
+	discovered := map[string]int64{
+		armageddon: 100,
+		filepath.Join(root, "All These Worlds.m4b"):  200,
+		filepath.Join(root, "Project Hail Mary.m4b"): 300,
+	}
+	book := &database.Book{
+		Title:  "Armageddon",
+		Author: "Travis Bagwell",
+	}
+
+	path, size, ok := fuzzyMatchDiscoveredFile(book, discovered)
+	if !ok {
+		t.Fatal("fuzzyMatchDiscoveredFile() did not match standalone shared-directory book")
+	}
+	if path != armageddon || size != 100 {
+		t.Fatalf("fuzzyMatchDiscoveredFile() = (%q, %d), want (%q, %d)", path, size, armageddon, 100)
+	}
+}
+
+func TestExplicitChapterFilenameRequiresChapterNumber(t *testing.T) {
+	tests := []struct {
+		filename string
+		want     bool
+	}{
+		{"031 - Chapter 30 - Armageddon.m4a", true},
+		{"Chapter IV - The Return.mp3", true},
+		{"Chap 07 - Arrival.m4a", true},
+		{"The Final Chapter.m4b", false},
+		{"Chapterhouse Dune.m4b", false},
+		{"My Chapter in History.m4b", false},
+	}
+
+	for _, tt := range tests {
+		if got := isExplicitChapterFilename(tt.filename); got != tt.want {
+			t.Errorf("isExplicitChapterFilename(%q) = %v, want %v", tt.filename, got, tt.want)
+		}
+	}
+}
+
+func TestFuzzyMatchRejectsChapterCollisionBelowDirectoryThreshold(t *testing.T) {
+	root := filepath.Join("root")
+	bookDir := filepath.Join(root, "Unrelated Author", "Mixed Tracks")
+	discovered := map[string]int64{
+		filepath.Join(bookDir, "001 - Intro.m4a"):                   10,
+		filepath.Join(bookDir, "002 - Chapter 01 - Beginning.m4a"):  20,
+		filepath.Join(bookDir, "003 - Interlude.m4a"):               30,
+		filepath.Join(bookDir, "004 - Chapter 30 - Armageddon.m4a"): 40,
+		filepath.Join(bookDir, "005 - Outro.m4a"):                   50,
+	}
+	book := &database.Book{
+		Title:  "Armageddon",
+		Author: "Travis Bagwell",
+	}
+
+	path, size, ok := fuzzyMatchDiscoveredFile(book, discovered)
+	if ok || path != "" || size != 0 {
+		t.Fatalf("fuzzyMatchDiscoveredFile() = (%q, %d, %v), want no match", path, size, ok)
+	}
+}
+
+func TestFuzzyMatchDoesNotClassifyStandaloneFinalChapterAsTrack(t *testing.T) {
+	root := filepath.Join("root", "Flat Library")
+	finalChapter := filepath.Join(root, "The Final Chapter.m4b")
+	discovered := map[string]int64{
+		finalChapter:                                100,
+		filepath.Join(root, "Another Book.m4b"):     200,
+		filepath.Join(root, "Third Standalone.m4b"): 300,
+	}
+	book := &database.Book{Title: "The Final Chapter"}
+
+	path, size, ok := fuzzyMatchDiscoveredFile(book, discovered)
+	if !ok || path != finalChapter || size != 100 {
+		t.Fatalf("fuzzyMatchDiscoveredFile() = (%q, %d, %v), want (%q, %d, true)", path, size, ok, finalChapter, 100)
+	}
+}
+
 func TestReconcileExistingAudiobookFilesIgnoresUnmatchedFiles(t *testing.T) {
 	tmp := t.TempDir()
 
