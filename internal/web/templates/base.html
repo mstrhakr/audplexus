@@ -82,7 +82,7 @@
                 <a href="/downloads" class="{{if eq .Page "pipeline"}}active{{end}}">
                     <svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 6h6a4 4 0 0 1 4 4v0"/><path d="M7 18h6a4 4 0 0 0 4-4v0"/></svg>
                     <span>Pipeline</span>
-                    {{if and $sb (gt $sb.ActiveDL 0)}}<span class="nav-badge">{{$sb.ActiveDL}}</span>{{end}}
+                    <span id="nav-active-dl" class="nav-badge"{{if or (not $sb) (eq $sb.ActiveDL 0)}} style="display:none"{{end}}>{{if $sb}}{{$sb.ActiveDL}}{{else}}0{{end}}</span>
                 </a>
             </li>
             <li>
@@ -753,6 +753,15 @@
                 if (!el) return;
                 var v = parseInt(el.textContent || '0') + delta;
                 el.textContent = v < 0 ? 0 : v;
+                if (id === 'stat-active-dl') {
+                    var navBadge = document.getElementById('nav-active-dl');
+                    if (navBadge) {
+                        var nv = parseInt(navBadge.textContent || '0') + delta;
+                        nv = nv < 0 ? 0 : nv;
+                        navBadge.textContent = nv;
+                        navBadge.style.display = nv > 0 ? '' : 'none';
+                    }
+                }
             }
 
             // --- Dashboard stat updates ---

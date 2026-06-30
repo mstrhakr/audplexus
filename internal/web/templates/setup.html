@@ -103,18 +103,10 @@
                 <p class="sub">Pick your Audible region. The next step redirects you through Amazon's official sign-in to capture an activation token — we never see your password.</p>
 
                 {{if .Authenticated}}
-                <div class="alert ok">
-                    <span class="ico">✓</span>
-                    <div><b>Already signed in.</b> Audible region: <code>{{.CurrentMarketplace}}</code>. Continue to the next step.</div>
-                </div>
+                {{template "amazon_auth_connected_or_callback" .}}
+                <div class="hint" style="margin-top:.6rem">Audible region: <code>{{.CurrentMarketplace}}</code>. Continue to the next step.</div>
                 {{else if .AuthURL}}
-                <div class="alert">
-                    <div>
-                        <b>Step 1 of 2 — Sign in with Amazon</b><br>
-                        <a href="{{.AuthURL}}" rel="noopener" class="btn btn-primary" style="margin-top:.6rem">Open Amazon sign-in →</a>
-                        <p class="hint" style="margin-top:.5rem">Amazon will redirect you back here when done.</p>
-                    </div>
-                </div>
+                {{template "amazon_auth_connected_or_callback" .}}
                 {{else}}
                 <form method="POST" action="/setup/marketplace" class="form-row">
                     <label>Region</label>

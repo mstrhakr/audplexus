@@ -298,8 +298,8 @@ function diagRefreshEnv() {
 // Log tail via SSE stream with a local rolling buffer.
 var diagLogSource = null;
 var diagLogEntries = [];
-var diagLogMaxEntries = 1024;
-var diagLogRenderLimit = 300;
+var diagLogMaxEntries = 2048;
+var diagLogRenderLimit = 50;
 var diagLogRenderIntervalMs = 120;
 var diagLogPendingRender = false;
 var diagLogRenderTimer = null;
@@ -473,7 +473,7 @@ function diagConnectLogStream() {
         stream.innerHTML = '<div class="muted">Connecting log stream…</div>';
         diagLogLastRendered = '';
     }
-    var source = new EventSource('/api/diagnostics/logs/stream?n=300');
+    var source = new EventSource('/api/diagnostics/logs/stream?n=900');
     diagLogSource = source;
 
     source.addEventListener('logs_bootstrap', function(ev) {
