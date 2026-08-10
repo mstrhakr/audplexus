@@ -673,6 +673,10 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/destinations/discover/abs", s.handleDestinationsDiscoverABS)
 	s.router.POST("/destinations/discover/emby", s.handleDestinationsDiscoverEmby)
 	s.router.POST("/destinations/discover/jellyfin", s.handleDestinationsDiscoverJellyfin)
+	// HearthShelf one-click connect (OAuth device grant). Same shape as the Plex
+	// PIN flow below: start shows a code, poll waits for the user to approve it.
+	s.router.POST("/destinations/hearthshelf/start", s.handleHearthShelfConnectStart)
+	s.router.POST("/destinations/hearthshelf/poll", s.handleHearthShelfConnectPoll)
 	s.router.POST("/destinations/plex/pin/start", s.handleDestinationsPlexPinStart)
 	s.router.POST("/destinations/plex/pin/poll", s.handleDestinationsPlexPinPoll)
 	s.router.POST("/destinations/plex/discover/servers", s.handleDestinationsPlexDiscoverServers)

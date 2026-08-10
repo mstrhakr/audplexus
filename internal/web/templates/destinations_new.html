@@ -30,6 +30,19 @@
                 <span class="lg"><span class="pill pill-logo"><img src="/static/audiobookshelf.png" alt=""></span>Audiobookshelf</span>
                 <span class="desc">Self-hosted audiobook server</span>
             </button>
+            {{/*
+              HearthShelf is not a separate destination TYPE - it serves the
+              Audiobookshelf API, so it ends up as an abs row. What differs is
+              how it gets configured: one click and an approval, instead of
+              pasting a URL, an API key and a library id. So this button skips
+              the generic form and posts straight to the connect flow.
+            */}}
+            <button type="button" class="picker destination-type-btn"
+                    hx-post="/destinations/hearthshelf/start"
+                    hx-target="#dest-modal-content" hx-swap="innerHTML">
+                <span class="lg"><span class="pill pill-logo"><img src="/static/hearthshelf.png" alt=""></span>HearthShelf</span>
+                <span class="desc">One-click connect - no API key needed</span>
+            </button>
         </div>
     </fieldset>
 </form>
