@@ -989,7 +989,7 @@ async function triggerTargetedScan(asin, destinationIDs) {
         payload.destination_ids = destinationIDs;
     }
     try {
-        const r = await fetch('/api/diagnostics/targeted-scan', {
+        const r = await apiFetch('/api/diagnostics/targeted-scan', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload)
@@ -1008,7 +1008,7 @@ async function redownloadBook(asin, title) {
     const status = document.getElementById('diag-status');
     status.innerHTML = '<span class="loading">Queueing redownload...</span>';
     try {
-        const r = await fetch('/api/downloads/redownload/' + encodeURIComponent(asin), { method: 'POST' });
+        const r = await apiFetch('/api/downloads/redownload/' + encodeURIComponent(asin), { method: 'POST' });
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || 'redownload failed');
         status.innerHTML = '<span class="success">' + escapeHtml(data.message || 'queued') + '</span>';
@@ -1052,7 +1052,7 @@ async function rescanAllIssues() {
         const payload = { asin: item.asin };
         const destinationIDs = getMissingDestinationIds(item);
         if (destinationIDs.length > 0) payload.destination_ids = destinationIDs;
-        const r = await fetch('/api/diagnostics/targeted-scan', {
+        const r = await apiFetch('/api/diagnostics/targeted-scan', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload)
@@ -1071,7 +1071,7 @@ async function redownloadAllListed() {
     if (!confirm('Last resort: redownload all listed issue items (' + redownloadItems.length + ')? This deletes local files first.')) return;
 
     await runBulkAction(redownloadItems, 'Redownload all', async (item) => {
-        const r = await fetch('/api/downloads/redownload/' + encodeURIComponent(item.asin), { method: 'POST' });
+        const r = await apiFetch('/api/downloads/redownload/' + encodeURIComponent(item.asin), { method: 'POST' });
         return r.ok;
     });
 }

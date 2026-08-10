@@ -39,6 +39,22 @@
             input.value = decodeURIComponent(m[1]);
             form.appendChild(input);
         }, true);
+        // Same token again, for hand-rolled fetch() calls. Anything that isn't
+        // HTMX and isn't a <form> submit misses both hooks above, so it needs
+        // the header attached explicitly or the server 403s it. Use this in
+        // place of a bare fetch() for every non-GET API call.
+        window.apiFetch = function (url, options) {
+            var opts = options || {};
+            var method = (opts.method || 'GET').toUpperCase();
+            if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+                var m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+                if (m) {
+                    opts.headers = opts.headers || {};
+                    opts.headers['X-CSRF-Token'] = decodeURIComponent(m[1]);
+                }
+            }
+            return fetch(url, opts);
+        };
         // When the session expires mid-page, Authenticate emits HX-Redirect; HTMX
         // honors that header automatically. We also catch the HTTP-level 401 as a
         // belt-and-suspenders so plain fetch()-style flows redirect too.
@@ -994,9 +1010,20 @@
                 var paused = queueToggleBtn.getAttribute('data-paused') === '1';
                 var action = paused ? 'resume' : 'pause';
                 queueToggleBtn.disabled = true;
-                fetch('/api/downloads/' + action, { method: 'POST' })
+                apiFetch('/api/downloads/' + action, { method: 'POST' })
                     .then(function(r) {
-                        if (!r.ok) throw new Error('request failed');
+                        if (!r.ok) {
+                            // Surface *why* it failed — a bare "request failed"
+                            // sent people chasing volume permissions when the
+                            // real cause was an expired session or CSRF token.
+                            return r.json().catch(function() { return {}; })
+                                .then(function(body) {
+                                    var detail = body && body.error ? body.error : ('HTTP ' + r.status);
+                                    if (r.status === 401) detail = 'session expired — reload the page and sign in again';
+                                    else if (r.status === 403) detail = 'security token expired — reload the page and try again';
+                                    throw new Error(detail);
+                                });
+                        }
                         return r.json();
                     })
                     .then(function(resp) {
@@ -1008,10 +1035,11 @@
                             statusEl.className = isPaused ? 'status-msg error' : 'status-msg success';
                         }
                     })
-                    .catch(function() {
+                    .catch(function(err) {
                         var statusEl = document.getElementById('dl-status');
                         if (statusEl) {
-                            statusEl.textContent = 'Failed to update queue state';
+                            var why = (err && err.message) ? err.message : 'network error';
+                            statusEl.textContent = 'Failed to ' + action + ' queue: ' + why;
                             statusEl.className = 'status-msg error';
                         }
                     })
@@ -1034,7 +1062,7 @@
             // fresh active Cancel button on the next progress event.
             var card = document.getElementById('pipe-' + asin);
             if (card) card.setAttribute('data-cancelling', '1');
-            fetch('/api/downloads/cancel-active/' + encodeURIComponent(asin), { method: 'POST' })
+            apiFetch('/api/downloads/cancel-active/' + encodeURIComponent(asin), { method: 'POST' })
                 .catch(function() {
                     // Request failed to reach the server (network error, etc.) so
                     // the server never cancelled the item. Roll back the frozen state

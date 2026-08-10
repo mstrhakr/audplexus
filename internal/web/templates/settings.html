@@ -929,7 +929,7 @@ function executeReset() {
         input.focus();
         return;
     }
-    fetch('/api/settings/factory-reset', {
+    apiFetch('/api/settings/factory-reset', {
         method: 'POST',
         headers: { 'HX-Request': 'true' }
     }).then(function() {
@@ -994,7 +994,7 @@ function confirmRestart() {
         status.textContent = 'Requesting restart...';
     }
 
-    fetch('/api/restart', {
+    apiFetch('/api/restart', {
         method: 'POST'
     }).then(function() {
         if (status) {
