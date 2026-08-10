@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -918,6 +919,10 @@ type destinationSummaryView struct {
 	DisplayName string
 	Type        string
 	TypeLabel   string
+	// AddressNote explains the stored URL in words when the raw address would be
+	// confusing on its own (a Docker bridge or LAN IP from a HearthShelf
+	// connection). Empty for destinations the user typed an address for.
+	AddressNote string
 	// ViaHearthShelf marks a row created by the HearthShelf connect flow. The
 	// row's Type is still `abs` (HearthShelf serves the ABS API and every push
 	// path treats it as one) - this only changes how it is LABELLED, so a
@@ -995,8 +1000,16 @@ func (s *Server) buildDestinationSummary(ctx context.Context, row *database.Libr
 	// HearthShelf logo and label instead of an Audiobookshelf one. Cosmetic only
 	// - Type stays `abs` and every push path is unchanged.
 	viaHS := false
+	// How the address is DESCRIBED, for HearthShelf rows. The stored URL is
+	// whatever route actually works - often a Docker bridge or LAN IP, which is
+	// correct for routing but meaningless as an identity. A user who connected
+	// "Unraid" through app.hearthshelf.com should see that, not 172.17.0.13.
+	viaHSDetail := ""
 	if row.Type == database.LibraryDestinationTypeABS {
 		_, viaHS = s.hearthShelfManaged(ctx)[row.ID]
+		if viaHS {
+			viaHSDetail = describeHearthShelfAddress(row.URL)
+		}
 	}
 	v := destinationSummaryView{
 		ID:              row.ID,
@@ -1004,6 +1017,7 @@ func (s *Server) buildDestinationSummary(ctx context.Context, row *database.Libr
 		Type:            string(row.Type),
 		TypeLabel:       destinationTypeLabel(row.Type),
 		ViaHearthShelf:  viaHS,
+		AddressNote:     viaHSDetail,
 		Enabled:         row.Enabled,
 		Configured:      destinationConfigured(row),
 		HasCredential:   hasCred,
@@ -4476,4 +4490,76 @@ func (s *Server) handleReorganizeLibrary(c *gin.Context) {
 		"missing":   sum.Missing,
 		"failed":    failed,
 	})
+}
+
+// describeHearthShelfAddress turns the route a HearthShelf connection actually
+// uses into something a person can read.
+//
+// The stored URL is chosen for REACHABILITY, not for display: on a container
+// host it is usually a Docker bridge address like http://172.17.0.13, and on a
+// home LAN a private IP. Both are correct - they are the fastest route and they
+// keep working when the internet is down - but shown bare they look like a
+// misconfiguration, because nothing about "172.17.0.13" says "the Unraid server
+// I connected through HearthShelf".
+//
+// So the card shows the explanation and keeps the raw address as a title
+// attribute for anyone debugging.
+func describeHearthShelfAddress(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return "via HearthShelf"
+	}
+	host := u.Hostname()
+	switch {
+	case isDockerBridgeHost(host):
+		return "via HearthShelf - direct on this Docker network"
+	case isPrivateHostname(host):
+		return "via HearthShelf - direct on your local network"
+	default:
+		return "via HearthShelf"
+	}
+}
+
+func isDockerBridgeHost(host string) bool {
+	o := strings.Split(host, ".")
+	if len(o) != 4 {
+		return false
+	}
+	a, err1 := strconv.Atoi(o[0])
+	b, err2 := strconv.Atoi(o[1])
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return a == 172 && b >= 17 && b <= 31
+}
+
+// isPrivateHostname reports RFC1918 / loopback / link-local / .local hosts.
+func isPrivateHostname(host string) bool {
+	h := strings.ToLower(host)
+	if h == "localhost" || strings.HasSuffix(h, ".local") {
+		return true
+	}
+	o := strings.Split(h, ".")
+	if len(o) != 4 {
+		return false
+	}
+	n := make([]int, 4)
+	for i, part := range o {
+		v, err := strconv.Atoi(part)
+		if err != nil || v < 0 || v > 255 {
+			return false
+		}
+		n[i] = v
+	}
+	switch {
+	case n[0] == 10, n[0] == 127:
+		return true
+	case n[0] == 172 && n[1] >= 16 && n[1] <= 31:
+		return true
+	case n[0] == 192 && n[1] == 168:
+		return true
+	case n[0] == 169 && n[1] == 254:
+		return true
+	}
+	return false
 }

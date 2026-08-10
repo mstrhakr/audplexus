@@ -206,3 +206,58 @@ func TestDestinationCardBadgesHearthShelfConnections(t *testing.T) {
 		t.Errorf("a plain abs destination must not be badged HearthShelf: %s", plain)
 	}
 }
+
+// The stored URL for a HearthShelf connection is chosen for reachability, not
+// for reading: on a container host it is a Docker bridge address, on a home LAN
+// a private IP. Both route correctly, but shown bare they look like a
+// misconfiguration - nothing about "172.17.0.13" says "the Unraid server I
+// connected through HearthShelf".
+func TestDescribeHearthShelfAddress(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"http://172.17.0.13", "via HearthShelf - direct on this Docker network"},
+		{"http://172.20.5.4:8080", "via HearthShelf - direct on this Docker network"},
+		{"http://192.168.1.50:13378", "via HearthShelf - direct on your local network"},
+		{"http://10.0.0.8", "via HearthShelf - direct on your local network"},
+		{"http://books.local", "via HearthShelf - direct on your local network"},
+		// 172.16.x is RFC1918 but NOT the Docker bridge range.
+		{"http://172.16.0.9", "via HearthShelf - direct on your local network"},
+		{"https://books.example.com", "via HearthShelf"},
+		{"", "via HearthShelf"},
+	}
+	for _, tc := range cases {
+		if got := describeHearthShelfAddress(tc.in); got != tc.want {
+			t.Errorf("describeHearthShelfAddress(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The card shows the explanation, and keeps the raw address discoverable for
+// anyone debugging a route.
+func TestDestinationCardExplainsHearthShelfAddress(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := &Server{router: gin.New()}
+	s.setupTemplates()
+	s.router.GET("/card", func(c *gin.Context) {
+		c.HTML(200, "destination_card_body", gin.H{
+			"Dest": destinationSummaryView{
+				ID: "d1", DisplayName: "Unraid",
+				Type: "abs", TypeLabel: "Audiobookshelf",
+				URL:            "http://172.17.0.13",
+				ViaHearthShelf: true,
+				AddressNote:    "via HearthShelf - direct on this Docker network",
+				Enabled:        true, Health: "healthy",
+			},
+		})
+	})
+	w := httptest.NewRecorder()
+	s.router.ServeHTTP(w, httptest.NewRequest("GET", "/card", nil))
+	out := w.Body.String()
+
+	if !strings.Contains(out, "direct on this Docker network") {
+		t.Errorf("card should explain the address: %s", out)
+	}
+	// The raw address stays available on hover rather than being thrown away.
+	if !strings.Contains(out, `title="http://172.17.0.13"`) {
+		t.Errorf("card should keep the raw address as a title: %s", out)
+	}
+}

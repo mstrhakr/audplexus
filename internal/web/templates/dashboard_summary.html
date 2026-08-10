@@ -52,7 +52,10 @@
                 <span class="type-icon">{{$logo := destLogo $kind}}{{if $logo}}<img src="{{$logo}}" alt="{{$kindLabel}}">{{else}}{{firstTwo $kindLabel}}{{end}}</span>
                 <div class="dest-head-text">
                     <div class="dest-name" id="dest-sum-{{.ID}}-name">{{.DisplayName}}</div>
-                    <div class="dest-url">{{if .URL}}{{.URL}}{{else}}{{$kindLabel}}{{end}}</div>
+                    {{/* A HearthShelf row stores whatever route works - often a Docker
+                         bridge or LAN IP. Correct for routing, meaningless as an
+                         identity, so describe it and keep the raw address on hover. */}}
+                    <div class="dest-url"{{if .AddressNote}} title="{{.URL}}"{{end}}>{{if .AddressNote}}{{.AddressNote}}{{else if .URL}}{{.URL}}{{else}}{{$kindLabel}}{{end}}</div>
                 </div>
                 <div class="dest-head-status">
                     {{if not .Enabled}}<span class="badge badge-inactive" role="status">Disabled</span>
