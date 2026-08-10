@@ -208,3 +208,35 @@ func destinationName(c *Connection) string {
 	}
 	return "HearthShelf"
 }
+
+// ManagedDestinationIDs returns the destination rows this HearthShelf
+// connection created, keyed by id.
+//
+// A HearthShelf destination IS an Audiobookshelf destination - HearthShelf
+// serves the ABS API, so the row's type is `abs` and every push path treats it
+// exactly like one. That is deliberate and should stay that way. But it means
+// the UI cannot tell the two apart from the type alone, and a connection the
+// user set up by clicking "HearthShelf" should not come back wearing an
+// Audiobookshelf logo. This is the seam that lets a renderer ask.
+//
+// Returns an empty (non-nil) map when nothing is connected, so callers can look
+// up without nil-checking.
+func ManagedDestinationIDs(
+	ctx context.Context,
+	db database.Database,
+	box *crypto.Box,
+) map[string]Connection {
+	out := map[string]Connection{}
+	conns, err := LoadConnections(ctx, db, box)
+	if err != nil {
+		// A read failure here only costs the HearthShelf badge - never break the
+		// destinations page over cosmetics.
+		return out
+	}
+	for _, c := range conns {
+		if c.DestinationID != "" {
+			out[c.DestinationID] = c
+		}
+	}
+	return out
+}

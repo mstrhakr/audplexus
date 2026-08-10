@@ -29,11 +29,12 @@ import (
 	"github.com/gin-gonic/gin/render"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mstrhakr/audplexus/internal/audio"
-	appcrypto "github.com/mstrhakr/audplexus/internal/crypto"
 	"github.com/mstrhakr/audplexus/internal/audnexus"
-	"github.com/mstrhakr/audplexus/internal/database"
-	"github.com/mstrhakr/audplexus/internal/library"
 	"github.com/mstrhakr/audplexus/internal/auth"
+	appcrypto "github.com/mstrhakr/audplexus/internal/crypto"
+	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/hearthshelf"
+	"github.com/mstrhakr/audplexus/internal/library"
 	"github.com/mstrhakr/audplexus/internal/logging"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
 	"github.com/mstrhakr/audplexus/internal/organizer"
@@ -53,13 +54,13 @@ var staticFS embed.FS
 
 // Server is the web UI HTTP server.
 type Server struct {
-	router         *gin.Engine
-	db             database.Database
-	sync           *library.SyncService
-	downloads      *library.DownloadManager
-	sched          *scheduler.Scheduler
-	audnexus       *audnexus.Client
-	organizer      *organizer.PlexOrganizer
+	router    *gin.Engine
+	db        database.Database
+	sync      *library.SyncService
+	downloads *library.DownloadManager
+	sched     *scheduler.Scheduler
+	audnexus  *audnexus.Client
+	organizer *organizer.PlexOrganizer
 	// audible is the PRIMARY account's client, kept in sync with accounts by
 	// refreshPrimaryAudible(). Legacy single-client call sites (health badges,
 	// activation bytes, marketplace display) read this; it may be nil before
@@ -71,6 +72,11 @@ type Server struct {
 	// credBox encrypts secrets at rest (Audible creds, OIDC client secret).
 	// Shared with the AccountManager; same key file (audplexus.key).
 	credBox *appcrypto.Box
+	// Short-lived cache of HearthShelf-created destination ids - see
+	// hearthShelfManaged. Cosmetic data only (drives the card logo).
+	hsManagedMu    sync.Mutex
+	hsManaged      map[string]hearthshelf.Connection
+	hsManagedAt    time.Time
 	port           int
 	audiobooksPath string
 	downloadsPath  string
@@ -418,6 +424,8 @@ func (s *Server) setupTemplates() {
 				return "/static/jellyfin.png"
 			case "abs", "audiobookshelf":
 				return "/static/audiobookshelf.png"
+			case "hearthshelf":
+				return "/static/hearthshelf.png"
 			}
 			return ""
 		},
@@ -906,10 +914,16 @@ func mediaServerLabel(t mediaserver.Type) (string, string) {
 // destinationSummaryView is the per-destination card rendered on the
 // dashboard. Sensitive fields are intentionally absent; only display info.
 type destinationSummaryView struct {
-	ID              string
-	DisplayName     string
-	Type            string
-	TypeLabel       string
+	ID          string
+	DisplayName string
+	Type        string
+	TypeLabel   string
+	// ViaHearthShelf marks a row created by the HearthShelf connect flow. The
+	// row's Type is still `abs` (HearthShelf serves the ABS API and every push
+	// path treats it as one) - this only changes how it is LABELLED, so a
+	// connection the user made by clicking "HearthShelf" does not come back
+	// wearing an Audiobookshelf logo.
+	ViaHearthShelf  bool
 	Enabled         bool
 	Configured      bool
 	HasCredential   bool // API key for Emby/Jellyfin/ABS, token for Plex
@@ -977,11 +991,19 @@ func (s *Server) singleDestinationSummary(ctx context.Context, id string) *desti
 // a disabled row stays cheap.
 func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, libraryTotal int, basis string) destinationSummaryView {
 	hasCred := row.APIKey != "" || row.PlexToken != ""
+	// Set for rows the HearthShelf connect flow created, so the card can show a
+	// HearthShelf logo and label instead of an Audiobookshelf one. Cosmetic only
+	// - Type stays `abs` and every push path is unchanged.
+	viaHS := false
+	if row.Type == database.LibraryDestinationTypeABS {
+		_, viaHS = s.hearthShelfManaged(ctx)[row.ID]
+	}
 	v := destinationSummaryView{
 		ID:              row.ID,
 		DisplayName:     row.DisplayName,
 		Type:            string(row.Type),
 		TypeLabel:       destinationTypeLabel(row.Type),
+		ViaHearthShelf:  viaHS,
 		Enabled:         row.Enabled,
 		Configured:      destinationConfigured(row),
 		HasCredential:   hasCred,
@@ -2378,11 +2400,18 @@ func (s *Server) computeBookPresence(ctx context.Context, books []database.Book)
 			for _, ss := range syncs {
 				byDestID[ss.DestinationID] = ss
 			}
+			managed := s.hearthShelfManaged(ctx)
 			for _, d := range enabled {
+				// A HearthShelf connection is an `abs` row; badge it as
+				// HearthShelf so the chip matches what the user connected.
+				kind := string(d.Type)
+				if _, ok := managed[d.ID]; ok && d.Type == database.LibraryDestinationTypeABS {
+					kind = "hearthshelf"
+				}
 				chip := bookPresenceChip{
 					Kind:        "destination",
-					Type:        string(d.Type),
-					LogoURL:     destinationLogoPath(string(d.Type)),
+					Type:        kind,
+					LogoURL:     destinationLogoPath(kind),
 					DisplayName: d.DisplayName,
 					State:       "pending",
 				}
@@ -2408,6 +2437,25 @@ func (s *Server) computeBookPresence(ctx context.Context, books []database.Book)
 	return out
 }
 
+// hearthShelfManaged returns the destinations the HearthShelf connect flow
+// created, cached for a short window.
+//
+// The cache exists because the destinations page builds a summary per row and
+// each lookup otherwise decrypts the stored connections blob again. The window
+// is deliberately tiny - this only drives a logo, so briefly stale is harmless,
+// while a long TTL would leave a just-connected destination wearing the wrong
+// icon until it expired.
+func (s *Server) hearthShelfManaged(ctx context.Context) map[string]hearthshelf.Connection {
+	s.hsManagedMu.Lock()
+	defer s.hsManagedMu.Unlock()
+	if s.hsManaged != nil && time.Since(s.hsManagedAt) < 2*time.Second {
+		return s.hsManaged
+	}
+	s.hsManaged = hearthshelf.ManagedDestinationIDs(ctx, s.db, s.credBox)
+	s.hsManagedAt = time.Now()
+	return s.hsManaged
+}
+
 // destinationLogoPath mirrors the destLogo template func so the Go-side
 // presence builder can reuse the same URL mapping without going through
 // the template layer.
@@ -2421,6 +2469,8 @@ func destinationLogoPath(t string) string {
 		return "/static/jellyfin.png"
 	case "abs", "audiobookshelf":
 		return "/static/audiobookshelf.png"
+	case "hearthshelf":
+		return "/static/hearthshelf.png"
 	}
 	return ""
 }

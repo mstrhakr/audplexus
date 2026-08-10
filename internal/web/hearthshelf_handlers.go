@@ -26,6 +26,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/mstrhakr/audplexus/internal/hearthshelf"
+	"github.com/mstrhakr/audplexus/internal/mediaserver"
 )
 
 // controlPlaneURL is the configured control plane, or the hosted default.
@@ -166,6 +167,9 @@ func (s *Server) handleHearthShelfConnectPoll(c *gin.Context) {
 
 	var connected []string
 	var failed []string
+	// Servers where we had to choose between several book libraries - worth
+	// telling the user, since we picked for them.
+	var multi []string
 	for _, in := range intros {
 		// Prefer the LAN address when its identity checks out - it is the common
 		// case for a same-network install and it survives an internet outage.
@@ -194,10 +198,53 @@ func (s *Server) handleHearthShelfConnectPoll(c *gin.Context) {
 				conn.DestinationID = existing.DestinationID
 			}
 		}
-		// Library is chosen afterwards, so the destination starts disabled -
-		// enabling something that cannot route a book would only manufacture
-		// failures the user did not ask for.
-		if err := hearthshelf.EnsureDestination(ctx, s.db, &conn, tokens.AccessToken, ""); err != nil {
+		// Resolve the audiobook library NOW, while we hold a working token.
+		//
+		// The schema requires a library_id on every abs destination (the CHECK in
+		// 005_library_destinations), so "create it disabled and let the user pick
+		// later" is not possible - the insert is rejected outright. It is also the
+		// wrong shape for a one-click flow: we are already authenticated against
+		// the server, so asking the user to go and find a UUID would give back the
+		// busywork this whole feature exists to remove.
+		//
+		// One book library is the overwhelmingly common case and is chosen
+		// silently. With several we still have to pick one to satisfy the
+		// constraint, so we take the first and say so - the destination can be
+		// edited afterwards like any other.
+		// ABS credential, NOT the HearthShelf access token - /api/* is
+		// Audiobookshelf's own surface and does not know our token. Using the
+		// wrong one here returned 401 from every server.
+		absKey := tokens.ABSAPIKey
+		if absKey == "" {
+			failed = append(failed, in.ServerName+" (server did not return an Audiobookshelf key)")
+			continue
+		}
+		// Keep using the address we reached the server on. The box deliberately
+		// does NOT tell us where its ABS lives, because that is its own internal
+		// address (127.0.0.1 inside the all-in-one container) - nginx serves ABS's
+		// /api/* on the same origin we already reached, which is the address that
+		// actually works from out here.
+		libs, libErr := mediaserver.ListLibraries(ctx, base, absKey)
+		if libErr != nil {
+			failed = append(failed, in.ServerName+" (could not list libraries: "+libErr.Error()+")")
+			continue
+		}
+		var books []mediaserver.ABSLibrary
+		for _, l := range libs {
+			if strings.EqualFold(l.MediaType, "book") {
+				books = append(books, l)
+			}
+		}
+		if len(books) == 0 {
+			failed = append(failed, in.ServerName+" (no audiobook library on that server)")
+			continue
+		}
+		if len(books) > 1 {
+			multi = append(multi, in.ServerName+" -> "+books[0].Name)
+		}
+
+		// The destination stores the ABS key - it is what the push path uses.
+		if err := hearthshelf.EnsureDestination(ctx, s.db, &conn, absKey, books[0].ID); err != nil {
 			failed = append(failed, in.ServerName+" ("+err.Error()+")")
 			continue
 		}
@@ -210,6 +257,13 @@ func (s *Server) handleHearthShelfConnectPoll(c *gin.Context) {
 		return
 	}
 
+	writeSensitiveHTML(c, renderHSConnectResult(connected, failed, multi))
+}
+
+// renderHSConnectResult builds the fragment shown when the flow finishes.
+// Extracted so the modal-close and library-choice behaviour can be tested
+// directly - both were bugs that only showed up in a real browser.
+func renderHSConnectResult(connected, failed, multi []string) string {
 	var sb strings.Builder
 	if len(connected) > 0 {
 		sb.WriteString(`<div class="info-box" style="border-color:var(--success);margin:.5rem 0" role="status" aria-live="polite">`)
@@ -218,19 +272,43 @@ func (s *Server) handleHearthShelfConnectPoll(c *gin.Context) {
 		sb.WriteString(`.</strong> Pick a library below to start sending books.`)
 		sb.WriteString(`</div>`)
 	}
+	if len(multi) > 0 {
+		sb.WriteString(`<div class="info-box" style="border-color:var(--info);margin:.5rem 0" role="status" aria-live="polite">`)
+		sb.WriteString(`<strong>Picked a library for you:</strong> `)
+		sb.WriteString(htmlEscape(strings.Join(multi, ", ")))
+		sb.WriteString(`. That server has more than one audiobook library - edit the destination to change it.`)
+		sb.WriteString(`</div>`)
+	}
 	if len(failed) > 0 {
 		sb.WriteString(`<div class="info-box" style="border-color:var(--error);margin:.5rem 0" role="status" aria-live="polite">`)
 		sb.WriteString(`<strong>Could not finish:</strong> `)
 		sb.WriteString(htmlEscape(strings.Join(failed, "; ")))
 		sb.WriteString(`</div>`)
 	}
-	// Close the approval popup and refresh the destinations list so the new rows
-	// appear without a manual reload.
+	// Close the approval popup either way - the browser side of the flow is over.
 	sb.WriteString(`<script>(function(){`)
 	sb.WriteString(`try{var w=window.__audplexusHSPopup;if(w&&!w.closed){w.close();}}catch(e){}`)
-	sb.WriteString(`try{document.body.dispatchEvent(new CustomEvent('dest-created'));}catch(e){}`)
+	// dest-created closes this modal and refreshes the list, so fire it ONLY when
+	// something actually connected. Firing it on failure tore the modal down
+	// before the user could read (or copy) the error - which is exactly what you
+	// most need when a connection fails.
+	if len(connected) > 0 && len(failed) == 0 {
+		sb.WriteString(`try{document.body.dispatchEvent(new CustomEvent('dest-created'));}catch(e){}`)
+	}
 	sb.WriteString(`})();</script>`)
-	writeSensitiveHTML(c, sb.String())
+	// A partial or total failure leaves the modal open with the message in it, so
+	// add a way out that does not depend on the user finding the close button.
+	if len(failed) > 0 {
+		sb.WriteString(`<div style="margin-top:.75rem;display:flex;gap:.5rem">`)
+		sb.WriteString(`<button type="button" class="btn" hx-post="/destinations/hearthshelf/start" `)
+		sb.WriteString(`hx-target="#dest-modal-content" hx-swap="innerHTML">Try again</button>`)
+		if len(connected) > 0 {
+			// Some servers did connect; let the user accept that and see the list.
+			sb.WriteString(`<button type="button" class="btn" onclick="try{document.body.dispatchEvent(new CustomEvent('dest-created'));}catch(e){}">Done</button>`)
+		}
+		sb.WriteString(`</div>`)
+	}
+	return sb.String()
 }
 
 // renderHSPollerDiv is the self-firing poller: HTMX re-POSTs it every `interval`
@@ -239,15 +317,19 @@ func renderHSPollerDiv(deviceCode string, interval int) string {
 	if interval < 1 {
 		interval = 5
 	}
+	// hx-vals, NOT hidden <input>s. HTMX serializes form fields from an enclosing
+	// <form>; loose inputs inside a bare <div> are not included, so the poll
+	// arrived with an empty device_code and the handler immediately gave up with
+	// "lost track of this connection" on the very first tick. hx-vals is what the
+	// Plex PIN poller beside this uses, for the same reason.
 	var sb strings.Builder
 	sb.WriteString(`<div hx-post="/destinations/hearthshelf/poll" hx-trigger="load delay:`)
 	sb.WriteString(strconv.Itoa(interval))
-	sb.WriteString(`s" hx-target="#hs-connect-result" hx-swap="innerHTML" style="display:none">`)
-	sb.WriteString(`<input type="hidden" name="device_code" value="`)
+	sb.WriteString(`s" hx-target="#hs-connect-result" hx-swap="innerHTML" hx-vals='{"device_code":"`)
 	sb.WriteString(htmlEscape(deviceCode))
-	sb.WriteString(`"><input type="hidden" name="interval" value="`)
+	sb.WriteString(`","interval":"`)
 	sb.WriteString(strconv.Itoa(interval))
-	sb.WriteString(`"></div>`)
+	sb.WriteString(`"}' style="display:none"></div>`)
 	return sb.String()
 }
 

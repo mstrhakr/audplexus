@@ -235,14 +235,33 @@ func (c *Client) WaitForApproval(ctx context.Context, appID, secret string, dc *
 
 // --- introduction to a server ----------------------------------------------
 
-// TokenSet is the credential a HearthShelf server issued us. The refresh token
-// is long-lived and MUST be persisted encrypted; the access token is short-lived
-// and can be kept in memory.
+// TokenSet is the credential a HearthShelf server issued us.
+//
+// TWO DIFFERENT CREDENTIALS COME BACK, and using the wrong one is a silent 401:
+//
+//   AccessToken is a HEARTHSHELF token. It authenticates the server's own /hs/*
+//   routes and nothing else.
+//
+//   ABSAPIKey is an Audiobookshelf API key for the user we were authorized as.
+//   THIS is what talks to /api/* - listing libraries, uploading, triggering a
+//   scan - because ABS has never heard of the HearthShelf token. It is the same
+//   key the user would otherwise have pasted in by hand, which is the whole
+//   thing this flow removes. Use it against the address you reached the server
+//   on: the all-in-one image serves ABS on that same origin.
+//
+// RefreshToken is long-lived and MUST be persisted encrypted; the access token
+// and the ABS key are re-issued on every refresh.
 type TokenSet struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int    `json:"expires_in"`
 	Scope        string `json:"scope"`
+
+	// The Audiobookshelf credential. Use this for /api/* calls, against the same
+	// origin you reached the server on - the box does not send its ABS address,
+	// because that is its own internal one.
+	ABSAPIKey string `json:"abs_api_key"`
+	ABSUserID string `json:"abs_user_id"`
 }
 
 // Introduce presents an introduction token to a server and receives our real
