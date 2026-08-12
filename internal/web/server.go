@@ -75,9 +75,12 @@ type Server struct {
 	credBox *appcrypto.Box
 	// Short-lived cache of HearthShelf-created destination ids - see
 	// hearthShelfManaged. Cosmetic data only (drives the card logo).
-	hsManagedMu    sync.Mutex
-	hsManaged      map[string]hearthshelf.Connection
-	hsManagedAt    time.Time
+	//
+	// Held as an immutable snapshot behind an atomic pointer: the map is
+	// published once and never written again, so concurrent request handlers
+	// can read the same instance without a lock. A refresh swaps in a NEW map
+	// rather than mutating the live one.
+	hsManaged      atomic.Pointer[hsManagedSnapshot]
 	port           int
 	audiobooksPath string
 	downloadsPath  string
@@ -2451,6 +2454,16 @@ func (s *Server) computeBookPresence(ctx context.Context, books []database.Book)
 	return out
 }
 
+// hsManagedSnapshot is one cached read of the HearthShelf connection list.
+//
+// Both fields are written once, before the snapshot is published, and never
+// touched again - that immutability is what makes it safe to hand the same map
+// to concurrent readers.
+type hsManagedSnapshot struct {
+	byDestID map[string]hearthshelf.Connection
+	at       time.Time
+}
+
 // hearthShelfManaged returns the destinations the HearthShelf connect flow
 // created, cached for a short window.
 //
@@ -2459,15 +2472,24 @@ func (s *Server) computeBookPresence(ctx context.Context, books []database.Book)
 // is deliberately tiny - this only drives a logo, so briefly stale is harmless,
 // while a long TTL would leave a just-connected destination wearing the wrong
 // icon until it expired.
+//
+// The returned map MUST NOT be mutated by callers: it is shared by every
+// concurrent reader of the current snapshot. Refreshing builds a new map and
+// swaps the pointer, so a reader holding the old one is unaffected.
+//
+// A racing refresh may run the lookup twice and one result is discarded. That
+// is deliberate - this is a 2-second cosmetic cache, and a mutex here would
+// serialize every destination card behind a DB read plus a decrypt.
 func (s *Server) hearthShelfManaged(ctx context.Context) map[string]hearthshelf.Connection {
-	s.hsManagedMu.Lock()
-	defer s.hsManagedMu.Unlock()
-	if s.hsManaged != nil && time.Since(s.hsManagedAt) < 2*time.Second {
-		return s.hsManaged
+	if snap := s.hsManaged.Load(); snap != nil && time.Since(snap.at) < 2*time.Second {
+		return snap.byDestID
 	}
-	s.hsManaged = hearthshelf.ManagedDestinationIDs(ctx, s.db, s.credBox)
-	s.hsManagedAt = time.Now()
-	return s.hsManaged
+	fresh := &hsManagedSnapshot{
+		byDestID: hearthshelf.ManagedDestinationIDs(ctx, s.db, s.credBox),
+		at:       time.Now(),
+	}
+	s.hsManaged.Store(fresh)
+	return fresh.byDestID
 }
 
 // destinationLogoPath mirrors the destLogo template func so the Go-side
