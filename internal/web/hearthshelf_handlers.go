@@ -191,6 +191,12 @@ func (s *Server) handleHearthShelfConnectPoll(c *gin.Context) {
 			RefreshToken: tokens.RefreshToken,
 			Scopes:       tokens.Scope,
 		}
+		// Record when the credential lapses so the renewal path knows to act
+		// before a push fails. Zero means the server stated no lifetime, which
+		// RenewDestination reads as "do not refresh speculatively".
+		if tokens.ExpiresIn > 0 {
+			conn.CredentialExpiresAt = time.Now().Add(time.Duration(tokens.ExpiresIn) * time.Second).Unix()
+		}
 		// Carry over an existing destination id so reconnecting updates the row
 		// rather than leaving an orphan beside a new one.
 		for _, existing := range conns {

@@ -168,7 +168,11 @@ func main() {
 	// Multi-destination fan-out for per-book post-organize work. Reads from
 	// library_destinations, runs each destination concurrently (bounded),
 	// records per-destination outcomes in book_library_destinations.
-	destinations := library.NewDestinationManager(db, anClient, cfg.Paths.Audiobooks, 0)
+	// The credential box lets the manager renew a HearthShelf-issued key before
+	// a push, so a one-click destination keeps working without the user
+	// reconnecting by hand when its credential lapses.
+	destinations := library.NewDestinationManager(db, anClient, cfg.Paths.Audiobooks, 0).
+		WithCredentialBox(credBox)
 
 	dlMgr := library.NewDownloadManager(
 		db,

@@ -60,6 +60,14 @@ type Connection struct {
 	// created, so disconnecting can clean up and reconnecting can update in
 	// place rather than leaving a stale duplicate.
 	DestinationID string `json:"destination_id,omitempty"`
+	// CredentialExpiresAt is the Unix time the stored destination credential
+	// stops being accepted, or 0 when the server did not state a lifetime.
+	// Drives renewal - see RenewDestination.
+	CredentialExpiresAt int64 `json:"credential_expires_at,omitempty"`
+	// NeedsReconnect is set when the server rejected our refresh token. Retrying
+	// cannot clear it; only a fresh authorization can, so it is persisted to stop
+	// every push re-attempting a refresh that will never succeed.
+	NeedsReconnect bool `json:"needs_reconnect,omitempty"`
 }
 
 // Identity is this install's own app registration.
