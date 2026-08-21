@@ -41,7 +41,7 @@ func (s *SQLiteDB) Close() error {
 }
 
 func (s *SQLiteDB) Reset(ctx context.Context) error {
-	tables := []string{"download_queue", "sync_history", "settings", "devices", "books"}
+	tables := []string{"sessions", "users", "download_queue", "sync_history", "settings", "devices", "audible_accounts", "books"}
 	for _, t := range tables {
 		if _, err := s.db.ExecContext(ctx, "DELETE FROM "+t); err != nil {
 			return fmt.Errorf("reset table %s: %w", t, err)
@@ -565,6 +565,178 @@ func (s *SQLiteDB) DeleteDevice(ctx context.Context, id int64) error {
 	return err
 }
 
+// --- Audible accounts ---
+
+const audibleAccountColumns = `id, display_name, marketplace, customer_id, credentials, enabled, created_at, updated_at`
+
+func (s *SQLiteDB) CreateAudibleAccount(ctx context.Context, a *AudibleAccount) error {
+	now := time.Now()
+	a.UpdatedAt = now
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = now
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO audible_accounts (`+audibleAccountColumns+`)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.DisplayName, a.Marketplace, a.CustomerID, a.Credentials, a.Enabled, a.CreatedAt, a.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("insert audible account: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteDB) GetAudibleAccount(ctx context.Context, id string) (*AudibleAccount, error) {
+	return s.scanAudibleAccount(s.db.QueryRowContext(ctx,
+		`SELECT `+audibleAccountColumns+` FROM audible_accounts WHERE id = ?`, id))
+}
+
+func (s *SQLiteDB) GetAudibleAccountByCustomerID(ctx context.Context, customerID string) (*AudibleAccount, error) {
+	if strings.TrimSpace(customerID) == "" {
+		return nil, nil
+	}
+	return s.scanAudibleAccount(s.db.QueryRowContext(ctx,
+		`SELECT `+audibleAccountColumns+` FROM audible_accounts WHERE customer_id = ? LIMIT 1`, customerID))
+}
+
+func (s *SQLiteDB) ListAudibleAccounts(ctx context.Context) ([]AudibleAccount, error) {
+	return s.queryAudibleAccounts(ctx, `SELECT `+audibleAccountColumns+` FROM audible_accounts ORDER BY created_at`)
+}
+
+func (s *SQLiteDB) ListEnabledAudibleAccounts(ctx context.Context) ([]AudibleAccount, error) {
+	return s.queryAudibleAccounts(ctx, `SELECT `+audibleAccountColumns+` FROM audible_accounts WHERE enabled = 1 ORDER BY created_at`)
+}
+
+func (s *SQLiteDB) UpdateAudibleAccount(ctx context.Context, a *AudibleAccount) error {
+	a.UpdatedAt = time.Now()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE audible_accounts SET display_name = ?, marketplace = ?, customer_id = ?,
+		    credentials = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+		a.DisplayName, a.Marketplace, a.CustomerID, a.Credentials, a.Enabled, a.UpdatedAt, a.ID)
+	if err != nil {
+		return fmt.Errorf("update audible account: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteDB) DeleteAudibleAccount(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM audible_accounts WHERE id = ?`, id)
+	return err
+}
+
+func (s *SQLiteDB) SetBookAccount(ctx context.Context, asin, accountID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE books SET account_id = ? WHERE asin = ?`, accountID, asin)
+	return err
+}
+
+func (s *SQLiteDB) GetBookAccount(ctx context.Context, asin string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT account_id FROM books WHERE asin = ?`, asin).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
+func (s *SQLiteDB) ReplaceBookAccounts(ctx context.Context, asin string, accountIDs []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM book_audible_accounts WHERE asin = ?`, asin); err != nil {
+		return fmt.Errorf("clear book accounts: %w", err)
+	}
+	for _, id := range accountIDs {
+		if id == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO book_audible_accounts (asin, account_id) VALUES (?, ?) ON CONFLICT DO NOTHING`,
+			asin, id); err != nil {
+			return fmt.Errorf("insert book account: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *SQLiteDB) ListASINsForAccount(ctx context.Context, accountID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT asin FROM book_audible_accounts WHERE account_id = ? ORDER BY asin`, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("list asins for account: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteDB) GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(asins))
+	if len(asins) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(asins))
+	args := make([]interface{}, len(asins))
+	for i, a := range asins {
+		placeholders[i] = "?"
+		args[i] = a
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT asin, account_id FROM book_audible_accounts WHERE asin IN (`+strings.Join(placeholders, ",")+`) ORDER BY account_id`,
+		args...)
+	if err != nil {
+		return nil, fmt.Errorf("get book accounts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var asin, id string
+		if err := rows.Scan(&asin, &id); err != nil {
+			return nil, err
+		}
+		out[asin] = append(out[asin], id)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteDB) queryAudibleAccounts(ctx context.Context, query string, args ...any) ([]AudibleAccount, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list audible accounts: %w", err)
+	}
+	defer rows.Close()
+	var out []AudibleAccount
+	for rows.Next() {
+		var a AudibleAccount
+		if err := rows.Scan(&a.ID, &a.DisplayName, &a.Marketplace, &a.CustomerID,
+			&a.Credentials, &a.Enabled, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan audible account: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteDB) scanAudibleAccount(row *sql.Row) (*AudibleAccount, error) {
+	var a AudibleAccount
+	err := row.Scan(&a.ID, &a.DisplayName, &a.Marketplace, &a.CustomerID,
+		&a.Credentials, &a.Enabled, &a.CreatedAt, &a.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan audible account: %w", err)
+	}
+	return &a, nil
+}
+
 // --- Helpers ---
 
 func (s *SQLiteDB) scanBook(row *sql.Row) (*Book, error) {
@@ -678,9 +850,191 @@ func buildBookWhere(filter BookFilter) (string, []interface{}) {
 		clauses = append(clauses, "NOT EXISTS (SELECT 1 FROM book_library_destinations bld WHERE bld.book_id = books.id AND bld.destination_id = ? AND bld.sync_state IN ('synced','syncing'))")
 		args = append(args, destID)
 	}
+	if filter.AccountID != "" {
+		// books.account_id is the legacy single-owner fallback for rows
+		// synced before the junction existed.
+		clauses = append(clauses, "(EXISTS (SELECT 1 FROM book_audible_accounts baa WHERE baa.asin = books.asin AND baa.account_id = ?) OR books.account_id = ?)")
+		args = append(args, filter.AccountID, filter.AccountID)
+	}
 
 	if len(clauses) == 0 {
 		return "", nil
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
 }
+
+// --- Users ---
+
+const userColumns = `id, username, password, salt, iterations, identifier,
+	oidc_subject, oidc_issuer, auth_source, created_at, updated_at`
+
+func (s *SQLiteDB) scanUser(row *sql.Row) (*User, error) {
+	var u User
+	err := row.Scan(&u.ID, &u.Username, &u.Password, &u.Salt, &u.Iterations,
+		&u.Identifier, &u.OIDCSubject, &u.OIDCIssuer, &u.AuthSource,
+		&u.CreatedAt, &u.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (s *SQLiteDB) GetUserByUsername(ctx context.Context, username string) (*User, error) {
+	return s.scanUser(s.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+`
+		 FROM users WHERE username = ? COLLATE NOCASE LIMIT 1`, username))
+}
+
+func (s *SQLiteDB) GetUserByID(ctx context.Context, id int64) (*User, error) {
+	return s.scanUser(s.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+` FROM users WHERE id = ?`, id))
+}
+
+func (s *SQLiteDB) GetFirstUser(ctx context.Context) (*User, error) {
+	return s.scanUser(s.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+` FROM users ORDER BY id ASC LIMIT 1`))
+}
+
+func (s *SQLiteDB) GetUserByOIDC(ctx context.Context, issuer, subject string) (*User, error) {
+	if subject == "" {
+		return nil, nil
+	}
+	return s.scanUser(s.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+`
+		 FROM users WHERE oidc_issuer = ? AND oidc_subject = ? AND oidc_subject <> '' LIMIT 1`,
+		issuer, subject))
+}
+
+func (s *SQLiteDB) CountUsers(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)
+	return n, err
+}
+
+func (s *SQLiteDB) UpsertUser(ctx context.Context, user *User) error {
+	now := time.Now()
+	user.UpdatedAt = now
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = now
+	}
+	if user.AuthSource == "" {
+		user.AuthSource = "forms"
+	}
+	if user.ID == 0 {
+		res, err := s.db.ExecContext(ctx,
+			`INSERT INTO users (username, password, salt, iterations, identifier,
+			                    oidc_subject, oidc_issuer, auth_source, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
+			user.OIDCSubject, user.OIDCIssuer, user.AuthSource,
+			user.CreatedAt, user.UpdatedAt)
+		if err != nil {
+			if isSQLiteUniqueErr(err) {
+				return ErrDuplicateUser
+			}
+			return fmt.Errorf("insert user: %w", err)
+		}
+		user.ID, _ = res.LastInsertId()
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET username = ?, password = ?, salt = ?, iterations = ?,
+		                  identifier = ?, oidc_subject = ?, oidc_issuer = ?,
+		                  auth_source = ?, updated_at = ?
+		 WHERE id = ?`,
+		user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
+		user.OIDCSubject, user.OIDCIssuer, user.AuthSource,
+		user.UpdatedAt, user.ID)
+	if err != nil {
+		if isSQLiteUniqueErr(err) {
+			return ErrDuplicateUser
+		}
+		return fmt.Errorf("update user: %w", err)
+	}
+	return nil
+}
+
+// isSQLiteUniqueErr reports whether err is the SQLite "UNIQUE constraint
+// failed" error. We match on the string because the modernc.org/sqlite driver
+// (the only one we use) doesn't expose a typed constraint error and pulling
+// in a vendor-specific dependency just for this is overkill.
+func isSQLiteUniqueErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+func (s *SQLiteDB) RotateUserIdentifier(ctx context.Context, userID int64, newIdentifier string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET identifier = ?, updated_at = ? WHERE id = ?`,
+		newIdentifier, time.Now(), userID)
+	return err
+}
+
+func (s *SQLiteDB) DeleteUser(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	return err
+}
+
+// --- Sessions ---
+
+func (s *SQLiteDB) CreateSession(ctx context.Context, sess *Session) error {
+	now := time.Now()
+	if sess.CreatedAt.IsZero() {
+		sess.CreatedAt = now
+	}
+	if sess.LastSeen.IsZero() {
+		sess.LastSeen = now
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO sessions (token, user_id, identifier, expires_at, last_seen, created_at, user_agent, ip)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		sess.Token, sess.UserID, sess.Identifier, sess.ExpiresAt, sess.LastSeen,
+		sess.CreatedAt, sess.UserAgent, sess.IP)
+	if err != nil {
+		return fmt.Errorf("insert session: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteDB) GetSession(ctx context.Context, token string) (*Session, error) {
+	var sess Session
+	err := s.db.QueryRowContext(ctx,
+		`SELECT token, user_id, identifier, expires_at, last_seen, created_at, user_agent, ip
+		 FROM sessions WHERE token = ?`, token).Scan(
+		&sess.Token, &sess.UserID, &sess.Identifier, &sess.ExpiresAt, &sess.LastSeen,
+		&sess.CreatedAt, &sess.UserAgent, &sess.IP)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sess, nil
+}
+
+func (s *SQLiteDB) TouchSession(ctx context.Context, token string, lastSeen time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET last_seen = ? WHERE token = ?`, lastSeen, token)
+	return err
+}
+
+func (s *SQLiteDB) DeleteSession(ctx context.Context, token string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token = ?`, token)
+	return err
+}
+
+func (s *SQLiteDB) DeleteSessionsForUser(ctx context.Context, userID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID)
+	return err
+}
+
+func (s *SQLiteDB) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ?`, now)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+

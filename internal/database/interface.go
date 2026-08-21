@@ -1,6 +1,9 @@
 package database
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Database defines the storage interface for the application.
 // Implementations exist for both SQLite and PostgreSQL.
@@ -47,6 +50,32 @@ type Database interface {
 	ListDevices(ctx context.Context) ([]Device, error)
 	DeleteDevice(ctx context.Context, id int64) error
 
+	// Audible accounts (multi-account model). Most installs have one; the
+	// schema + UI support several, each with its own credentials/marketplace.
+	CreateAudibleAccount(ctx context.Context, a *AudibleAccount) error
+	GetAudibleAccount(ctx context.Context, id string) (*AudibleAccount, error)
+	GetAudibleAccountByCustomerID(ctx context.Context, customerID string) (*AudibleAccount, error)
+	ListAudibleAccounts(ctx context.Context) ([]AudibleAccount, error)
+	ListEnabledAudibleAccounts(ctx context.Context) ([]AudibleAccount, error)
+	UpdateAudibleAccount(ctx context.Context, a *AudibleAccount) error
+	DeleteAudibleAccount(ctx context.Context, id string) error
+
+	// Per-book owning account. Kept off the hot book-scan paths; resolve on
+	// demand. SetBookAccount stamps the owning account during sync;
+	// GetBookAccount resolves it for download routing.
+	SetBookAccount(ctx context.Context, asin, accountID string) error
+	GetBookAccount(ctx context.Context, asin string) (string, error)
+
+	// Full book↔account ownership (a book can be in several accounts'
+	// libraries). ReplaceBookAccounts rewrites the owner set for one ASIN
+	// during sync; GetBookAccountsForASINs bulk-resolves owners for a page
+	// of books (map key = asin, values = account ids).
+	ReplaceBookAccounts(ctx context.Context, asin string, accountIDs []string) error
+	GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error)
+	// ListASINsForAccount returns every ASIN stamped to one account. Used by
+	// diagnostics to reconcile the live library against stored ownership.
+	ListASINsForAccount(ctx context.Context, accountID string) ([]string, error)
+
 	// Library destinations (multi-destination model — replaces single-active
 	// MEDIA_SERVER selector). Multiple destinations of the same type are
 	// allowed.
@@ -56,6 +85,30 @@ type Database interface {
 	ListEnabledLibraryDestinations(ctx context.Context) ([]LibraryDestination, error)
 	UpdateLibraryDestination(ctx context.Context, d *LibraryDestination) error
 	DeleteLibraryDestination(ctx context.Context, id string) error
+
+	// Auth: single-admin Forms login + cookie sessions. The schema supports
+	// multiple users but the UI exposes one. Identifier rotation on the
+	// users row invalidates every session whose snapshot no longer matches.
+	GetUserByUsername(ctx context.Context, username string) (*User, error)
+	GetUserByID(ctx context.Context, id int64) (*User, error)
+	// GetFirstUser returns the oldest user row (lowest id), or nil when no
+	// users exist. Used by the single-admin UI to surface the admin without
+	// hardcoding id=1 (which breaks if the row was ever rotated).
+	GetFirstUser(ctx context.Context) (*User, error)
+	// GetUserByOIDC returns the user matched on (issuer, subject), or nil.
+	// Used by the OIDC callback to find an already-provisioned account.
+	GetUserByOIDC(ctx context.Context, issuer, subject string) (*User, error)
+	CountUsers(ctx context.Context) (int, error)
+	UpsertUser(ctx context.Context, user *User) error
+	RotateUserIdentifier(ctx context.Context, userID int64, newIdentifier string) error
+	DeleteUser(ctx context.Context, id int64) error
+
+	CreateSession(ctx context.Context, session *Session) error
+	GetSession(ctx context.Context, token string) (*Session, error)
+	TouchSession(ctx context.Context, token string, lastSeen time.Time) error
+	DeleteSession(ctx context.Context, token string) error
+	DeleteSessionsForUser(ctx context.Context, userID int64) error
+	DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error)
 
 	// Per-(book, destination) state. Used by the post-organize fan-out
 	// (recording outcomes) and reconcile (matching server-side items back
@@ -93,4 +146,8 @@ type BookFilter struct {
 	OnDisk                  *bool
 	PresentInDestinations   []string
 	MissingFromDestinations []string
+
+	// AccountID keeps only books present in that Audible account's library
+	// (via book_audible_accounts). Empty = no account filter.
+	AccountID string
 }

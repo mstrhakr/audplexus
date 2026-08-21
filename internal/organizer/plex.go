@@ -370,23 +370,10 @@ func (o *PlexOrganizer) OrganizeMultiFile(ctx context.Context, book *database.Bo
 	return bookDir, nil
 }
 
-// ReorganizeInPlaceWithProgress re-maps an already-organized library path to
-// the current naming templates using atomic renames where possible. For
-// single-file books it performs bottom-up updates: file base rename first,
-// then book folder rename/move, and finally old parent cleanup.
-func (o *PlexOrganizer) ReorganizeInPlaceWithProgress(ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, onMoveProgress func(moved, total int64), onStage func(stage string)) (string, error) {
-	if book == nil || enriched == nil {
-		return "", fmt.Errorf("book metadata is required")
-	}
-	sourcePath := filepath.Clean(strings.TrimSpace(book.FilePath))
-	if sourcePath == "" {
-		return "", fmt.Errorf("book %s has no file path", book.ASIN)
-	}
-	st, err := os.Stat(sourcePath)
-	if err != nil {
-		return "", err
-	}
-
+// reorganizeNaming builds the naming data for a book using the same
+// metadata-resolution rules the move stage applies, so previews and actual
+// reorganize runs always agree on destinations.
+func (o *PlexOrganizer) reorganizeNaming(book *database.Book, enriched *audnexus.EnrichedBook) namingData {
 	author := strings.TrimSpace(enriched.Author())
 	title := strings.TrimSpace(enriched.Title())
 	subtitle := strings.TrimSpace(enriched.Subtitle())
@@ -409,8 +396,71 @@ func (o *PlexOrganizer) ReorganizeInPlaceWithProgress(ctx context.Context, book 
 	if !book.PurchaseDate.IsZero() {
 		purchaseDate = book.PurchaseDate.Format("2006-01-02")
 	}
-	naming := buildNamingData(author, book.AuthorASIN, title, subtitle, series, seriesPosition, asin, region,
+	return buildNamingData(author, book.AuthorASIN, title, subtitle, series, seriesPosition, asin, region,
 		enriched.Narrator(), book.Publisher, book.Language, duration, releaseDate, purchaseDate, book.DRMType)
+}
+
+// ReorganizePlan describes where a book currently lives on disk and where
+// the current naming templates would place it. Produced by PlanReorganize
+// without touching the filesystem beyond a single stat of the source path.
+type ReorganizePlan struct {
+	SourcePath string
+	TargetPath string
+	IsDir      bool
+	Changed    bool
+}
+
+// PlanReorganize computes the destination a book would be moved to under the
+// current naming templates. It performs no writes — safe to call for dry-run
+// previews. Returns an error if the book has no file path or the source path
+// does not exist on disk.
+func (o *PlexOrganizer) PlanReorganize(book *database.Book, enriched *audnexus.EnrichedBook) (*ReorganizePlan, error) {
+	if book == nil || enriched == nil {
+		return nil, fmt.Errorf("book metadata is required")
+	}
+	sourcePath := filepath.Clean(strings.TrimSpace(book.FilePath))
+	if sourcePath == "" {
+		return nil, fmt.Errorf("book %s has no file path", book.ASIN)
+	}
+	st, err := os.Stat(sourcePath)
+	if err != nil {
+		return nil, err
+	}
+
+	naming := o.reorganizeNaming(book, enriched)
+	targetBookDir := filepath.Join(o.libraryRoot, o.renderAuthorDirName(naming), o.renderBookDirName(naming))
+	targetPath := targetBookDir
+	if !st.IsDir() {
+		ext := filepath.Ext(sourcePath)
+		targetPath = filepath.Join(targetBookDir, sanitizePath(o.renderFileName(naming))+ext)
+	}
+
+	return &ReorganizePlan{
+		SourcePath: sourcePath,
+		TargetPath: targetPath,
+		IsDir:      st.IsDir(),
+		Changed:    filepath.Clean(targetPath) != sourcePath,
+	}, nil
+}
+
+// ReorganizeInPlaceWithProgress re-maps an already-organized library path to
+// the current naming templates using atomic renames where possible. For
+// single-file books it performs bottom-up updates: file base rename first,
+// then book folder rename/move, and finally old parent cleanup.
+func (o *PlexOrganizer) ReorganizeInPlaceWithProgress(ctx context.Context, book *database.Book, enriched *audnexus.EnrichedBook, onMoveProgress func(moved, total int64), onStage func(stage string)) (string, error) {
+	if book == nil || enriched == nil {
+		return "", fmt.Errorf("book metadata is required")
+	}
+	sourcePath := filepath.Clean(strings.TrimSpace(book.FilePath))
+	if sourcePath == "" {
+		return "", fmt.Errorf("book %s has no file path", book.ASIN)
+	}
+	st, err := os.Stat(sourcePath)
+	if err != nil {
+		return "", err
+	}
+
+	naming := o.reorganizeNaming(book, enriched)
 	bookDirName := o.renderBookDirName(naming)
 	authorDirName := o.renderAuthorDirName(naming)
 	targetBookDir := filepath.Join(o.libraryRoot, authorDirName, bookDirName)

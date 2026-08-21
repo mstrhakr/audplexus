@@ -3,6 +3,7 @@ package mediaserver
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/mstrhakr/audplexus/internal/database"
 )
@@ -130,6 +131,40 @@ func (s *settingsOnlyStubDB) ListDevices(ctx context.Context) ([]database.Device
 	return nil, nil
 }
 func (s *settingsOnlyStubDB) DeleteDevice(ctx context.Context, id int64) error { return nil }
+func (s *settingsOnlyStubDB) CreateAudibleAccount(ctx context.Context, a *database.AudibleAccount) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) GetAudibleAccount(ctx context.Context, id string) (*database.AudibleAccount, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) GetAudibleAccountByCustomerID(ctx context.Context, customerID string) (*database.AudibleAccount, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) ListAudibleAccounts(ctx context.Context) ([]database.AudibleAccount, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) ListEnabledAudibleAccounts(ctx context.Context) ([]database.AudibleAccount, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) UpdateAudibleAccount(ctx context.Context, a *database.AudibleAccount) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) DeleteAudibleAccount(ctx context.Context, id string) error { return nil }
+func (s *settingsOnlyStubDB) SetBookAccount(ctx context.Context, asin, accountID string) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) GetBookAccount(ctx context.Context, asin string) (string, error) {
+	return "", nil
+}
+func (s *settingsOnlyStubDB) ReplaceBookAccounts(ctx context.Context, asin string, accountIDs []string) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error) {
+	return map[string][]string{}, nil
+}
+func (s *settingsOnlyStubDB) ListASINsForAccount(ctx context.Context, accountID string) ([]string, error) {
+	return nil, nil
+}
 
 // Library destinations + book destinations (PR-B). Stub returns zero values.
 func (s *settingsOnlyStubDB) CreateLibraryDestination(ctx context.Context, d *database.LibraryDestination) error {
@@ -161,4 +196,40 @@ func (s *settingsOnlyStubDB) GetBookDestination(ctx context.Context, bookID int6
 }
 func (s *settingsOnlyStubDB) ListBookDestinationsBy(ctx context.Context, destID string, state *database.BookDestinationSyncState) ([]database.BookDestination, error) {
 	return nil, nil
+}
+
+// Auth methods — backends never touch them; empty defaults satisfy the interface.
+func (s *settingsOnlyStubDB) GetUserByUsername(ctx context.Context, u string) (*database.User, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) GetUserByID(ctx context.Context, id int64) (*database.User, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) GetFirstUser(ctx context.Context) (*database.User, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) GetUserByOIDC(ctx context.Context, issuer, subject string) (*database.User, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) CountUsers(ctx context.Context) (int, error)            { return 0, nil }
+func (s *settingsOnlyStubDB) UpsertUser(ctx context.Context, u *database.User) error { return nil }
+func (s *settingsOnlyStubDB) RotateUserIdentifier(ctx context.Context, id int64, ident string) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) DeleteUser(ctx context.Context, id int64) error { return nil }
+func (s *settingsOnlyStubDB) CreateSession(ctx context.Context, sess *database.Session) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) GetSession(ctx context.Context, token string) (*database.Session, error) {
+	return nil, nil
+}
+func (s *settingsOnlyStubDB) TouchSession(ctx context.Context, token string, t time.Time) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) DeleteSession(ctx context.Context, token string) error { return nil }
+func (s *settingsOnlyStubDB) DeleteSessionsForUser(ctx context.Context, userID int64) error {
+	return nil
+}
+func (s *settingsOnlyStubDB) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error) {
+	return 0, nil
 }

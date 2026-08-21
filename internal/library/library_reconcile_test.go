@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mstrhakr/audplexus/internal/database"
 )
@@ -668,6 +669,40 @@ func (m *reconcileMockDB) ListDevices(ctx context.Context) ([]database.Device, e
 	return nil, nil
 }
 func (m *reconcileMockDB) DeleteDevice(ctx context.Context, id int64) error { return nil }
+func (m *reconcileMockDB) CreateAudibleAccount(ctx context.Context, a *database.AudibleAccount) error {
+	return nil
+}
+func (m *reconcileMockDB) GetAudibleAccount(ctx context.Context, id string) (*database.AudibleAccount, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) GetAudibleAccountByCustomerID(ctx context.Context, customerID string) (*database.AudibleAccount, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) ListAudibleAccounts(ctx context.Context) ([]database.AudibleAccount, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) ListEnabledAudibleAccounts(ctx context.Context) ([]database.AudibleAccount, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) UpdateAudibleAccount(ctx context.Context, a *database.AudibleAccount) error {
+	return nil
+}
+func (m *reconcileMockDB) DeleteAudibleAccount(ctx context.Context, id string) error { return nil }
+func (m *reconcileMockDB) SetBookAccount(ctx context.Context, asin, accountID string) error {
+	return nil
+}
+func (m *reconcileMockDB) GetBookAccount(ctx context.Context, asin string) (string, error) {
+	return "", nil
+}
+func (m *reconcileMockDB) ReplaceBookAccounts(ctx context.Context, asin string, accountIDs []string) error {
+	return nil
+}
+func (m *reconcileMockDB) GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error) {
+	return map[string][]string{}, nil
+}
+func (m *reconcileMockDB) ListASINsForAccount(ctx context.Context, accountID string) ([]string, error) {
+	return nil, nil
+}
 
 // Library destinations + book destinations (introduced PR-B). Test mock
 // returns zero values; tests that exercise these methods will replace the
@@ -702,4 +737,22 @@ func (m *reconcileMockDB) GetBookDestination(ctx context.Context, bookID int64, 
 func (m *reconcileMockDB) ListBookDestinationsBy(ctx context.Context, destID string, state *database.BookDestinationSyncState) ([]database.BookDestination, error) {
 	return nil, nil
 }
+
+// Auth interface stubs — reconcile never touches them.
+func (m *reconcileMockDB) GetUserByUsername(ctx context.Context, u string) (*database.User, error) { return nil, nil }
+func (m *reconcileMockDB) GetUserByID(ctx context.Context, id int64) (*database.User, error)      { return nil, nil }
+func (m *reconcileMockDB) GetFirstUser(ctx context.Context) (*database.User, error)               { return nil, nil }
+func (m *reconcileMockDB) GetUserByOIDC(ctx context.Context, issuer, subject string) (*database.User, error) {
+	return nil, nil
+}
+func (m *reconcileMockDB) CountUsers(ctx context.Context) (int, error)                            { return 0, nil }
+func (m *reconcileMockDB) UpsertUser(ctx context.Context, u *database.User) error                 { return nil }
+func (m *reconcileMockDB) RotateUserIdentifier(ctx context.Context, id int64, ident string) error { return nil }
+func (m *reconcileMockDB) DeleteUser(ctx context.Context, id int64) error                         { return nil }
+func (m *reconcileMockDB) CreateSession(ctx context.Context, sess *database.Session) error        { return nil }
+func (m *reconcileMockDB) GetSession(ctx context.Context, token string) (*database.Session, error) { return nil, nil }
+func (m *reconcileMockDB) TouchSession(ctx context.Context, token string, t time.Time) error      { return nil }
+func (m *reconcileMockDB) DeleteSession(ctx context.Context, token string) error                  { return nil }
+func (m *reconcileMockDB) DeleteSessionsForUser(ctx context.Context, userID int64) error          { return nil }
+func (m *reconcileMockDB) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error) { return 0, nil }
 

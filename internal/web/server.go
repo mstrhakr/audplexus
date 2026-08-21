@@ -3,8 +3,8 @@ package web
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -30,7 +31,10 @@ import (
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/mstrhakr/audplexus/internal/audio"
 	"github.com/mstrhakr/audplexus/internal/audnexus"
+	"github.com/mstrhakr/audplexus/internal/auth"
+	appcrypto "github.com/mstrhakr/audplexus/internal/crypto"
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/hearthshelf"
 	"github.com/mstrhakr/audplexus/internal/library"
 	"github.com/mstrhakr/audplexus/internal/logging"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
@@ -41,6 +45,7 @@ import (
 )
 
 var webLog = logging.Component("web")
+var authLog = logging.Component("auth")
 
 //go:embed templates/*.html
 var templateFS embed.FS
@@ -50,16 +55,32 @@ var staticFS embed.FS
 
 // Server is the web UI HTTP server.
 type Server struct {
-	router         *gin.Engine
-	db             database.Database
-	sync           *library.SyncService
-	downloads      *library.DownloadManager
-	sched          *scheduler.Scheduler
-	audnexus       *audnexus.Client
-	organizer      *organizer.PlexOrganizer
-	audible        *audible.Client
-	ffmpeg         *audio.FFmpeg
-	credPath       string
+	router    *gin.Engine
+	db        database.Database
+	sync      *library.SyncService
+	downloads *library.DownloadManager
+	sched     *scheduler.Scheduler
+	audnexus  *audnexus.Client
+	organizer *organizer.PlexOrganizer
+	// audible is the PRIMARY account's client, kept in sync with accounts by
+	// refreshPrimaryAudible(). Legacy single-client call sites (health badges,
+	// activation bytes, marketplace display) read this; it may be nil before
+	// any account is connected, so those sites nil-guard.
+	audible  *audible.Client
+	accounts *library.AccountManager
+	ffmpeg   *audio.FFmpeg
+	credPath string
+	// credBox encrypts secrets at rest (Audible creds, OIDC client secret).
+	// Shared with the AccountManager; same key file (audplexus.key).
+	credBox *appcrypto.Box
+	// Short-lived cache of HearthShelf-created destination ids - see
+	// hearthShelfManaged. Cosmetic data only (drives the card logo).
+	//
+	// Held as an immutable snapshot behind an atomic pointer: the map is
+	// published once and never written again, so concurrent request handlers
+	// can read the same instance without a lock. A refresh swaps in a NEW map
+	// rather than mutating the live one.
+	hsManaged      atomic.Pointer[hsManagedSnapshot]
 	port           int
 	audiobooksPath string
 	downloadsPath  string
@@ -75,6 +96,10 @@ type Server struct {
 	// underlying setting. atomic.Bool because reads are middleware and
 	// writes are spread across a handful of handler goroutines.
 	onboarded atomic.Bool
+	// authMgr owns Authenticate/Require/CSRF middleware + the login
+	// throttle. Wired before firstRunGate so unauth'd visitors hit /login,
+	// not /setup.
+	authMgr *auth.Manager
 	// destItemCountCache caches per-destination LibraryItemCount results
 	// (30s TTL) so the dashboard's 12s poll doesn't hammer remote servers.
 	// Keyed by destination ID; entries expire independently.
@@ -82,6 +107,20 @@ type Server struct {
 		mu      sync.Mutex
 		entries map[string]destCountEntry
 	}
+
+	// pendingAuth holds in-flight OAuth state (PKCE verifier + device serial)
+	// keyed by account id, so the callback can complete even when the browser
+	// returns via a GET redirect from Amazon (wizard flow) that can't carry the
+	// values in a POST body. Populated whenever an auth URL is generated.
+	pendingAuth struct {
+		mu      sync.Mutex
+		entries map[string]pendingAuthState
+	}
+}
+
+type pendingAuthState struct {
+	codeVerifier string
+	deviceSerial string
 }
 
 type destCountEntry struct {
@@ -99,8 +138,10 @@ func NewServer(
 	anClient *audnexus.Client,
 	org *organizer.PlexOrganizer,
 	audibleClient *audible.Client,
+	accounts *library.AccountManager,
 	ffmpeg *audio.FFmpeg,
 	credPath string,
+	credBox *appcrypto.Box,
 	port int,
 	audiobooksPath string,
 	downloadsPath string,
@@ -108,7 +149,7 @@ func NewServer(
 ) *Server {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
-	router.Use(ginLogger(), gin.Recovery())
+	router.Use(ginLogger())
 
 	s := &Server{
 		router:         router,
@@ -119,13 +160,16 @@ func NewServer(
 		audnexus:       anClient,
 		organizer:      org,
 		audible:        audibleClient,
+		accounts:       accounts,
 		ffmpeg:         ffmpeg,
 		credPath:       credPath,
+		credBox:        credBox,
 		port:           port,
 		audiobooksPath: audiobooksPath,
 		downloadsPath:  downloadsPath,
 		configPath:     configPath,
 		startedAt:      time.Now(),
+		authMgr:        auth.NewManager(db),
 	}
 
 	// Seed the onboarded flag from the DB once. firstRunGate (which
@@ -134,6 +178,10 @@ func NewServer(
 	if v, err := db.GetSetting(context.Background(), settingKeyOnboarded); err == nil && (v == "true" || v == "1") {
 		s.onboarded.Store(true)
 	}
+
+	// Point the legacy single-client field at the primary account so the
+	// health/marketplace call sites keep working in the multi-account world.
+	s.refreshPrimaryAudible()
 
 	// Wire up the media-server sync callbacks. With multi-destination, the
 	// Library Scan phase fans out to every enabled destination instead of
@@ -200,6 +248,16 @@ func NewServer(
 		}
 		return backend.ReconcileLibrary(ctx, progressFn)
 	})
+
+	// Error-handling middleware. Interceptor is OUTERMOST so it wraps
+	// c.Writer in a buffer before recovery runs — that way, when recovery
+	// catches a panic and renders the styled error page, the page lands in
+	// the buffer and the interceptor flushes it on the unwind. If recovery
+	// were outermost, the interceptor's buffer swap would happen inside
+	// it and the panic-rendered page would be stranded in a buffer that
+	// never gets flushed.
+	s.router.Use(s.errorPageInterceptor())
+	s.router.Use(s.recoveryMiddleware())
 
 	s.setupTemplates()
 	s.setupRoutes()
@@ -370,6 +428,8 @@ func (s *Server) setupTemplates() {
 				return "/static/jellyfin.png"
 			case "abs", "audiobookshelf":
 				return "/static/audiobookshelf.png"
+			case "hearthshelf":
+				return "/static/hearthshelf.png"
 			}
 			return ""
 		},
@@ -400,7 +460,7 @@ func (s *Server) setupTemplates() {
 	base := template.Must(template.New("base").Funcs(funcMap).ParseFS(templateFS, "templates/base.html"))
 
 	// Parse all partial/fragment templates that may be referenced by page templates
-	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/book_detail_modal.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html", "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html", "templates/destinations_card.html", "templates/amazon_auth_flow.html"}
+	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/book_detail_modal.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html", "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html", "templates/destinations_card.html", "templates/reorganize_modal.html", "templates/reorganize_preview.html", "templates/amazon_auth_flow.html"}
 	baseWithPartials := template.Must(template.Must(base.Clone()).ParseFS(templateFS, partials...))
 
 	r := &multiRender{templates: make(map[string]*template.Template)}
@@ -471,6 +531,25 @@ func (s *Server) setupRoutes() {
 	})
 	static.StaticFS("/", http.FS(staticSub))
 
+	// Browser-friendly CSRF failure page. Wired before the middleware is
+	// installed so the very first failed POST already routes through it.
+	s.authMgr.OnCSRFFailure = s.handleCSRFFailure
+
+	// Unmatched routes get the shared error page (HTML) for browsers and a
+	// JSON 404 for API/XHR callers.
+	s.router.NoRoute(s.handleNotFound)
+
+	// Auth pipeline (must run BEFORE firstRunGate — otherwise an
+	// unauthenticated visitor to a freshly-upgraded install gets bounced
+	// into /setup and can create their own admin account before the legit
+	// operator does):
+	//   1. CSRF      stamps a token cookie, verifies it on non-GET (skipped for API-key)
+	//   2. Authenticate resolves identity, never blocks
+	//   3. Require   enforces auth_method/auth_required (exempts /login, /static, ...)
+	s.router.Use(s.authMgr.CSRF(csrfExemptPath))
+	s.router.Use(s.authMgr.Authenticate())
+	s.router.Use(s.authMgr.Require(s.authExemptPath))
+
 	// First-run gate — runs before page handlers and redirects to the
 	// setup wizard on fresh installs (no auth + no "onboarded" setting).
 	// Settings, diagnostics, the wizard itself, and POST/api routes pass
@@ -488,21 +567,88 @@ func (s *Server) setupRoutes() {
 	// Setup wizard (5 steps). State is server-driven via ?step= so no JS
 	// is needed; "onboarded" setting tracks completion.
 	s.router.GET("/setup", s.handleSetupWizard)
+	s.router.GET("/setup/restore", s.handleSetupRestorePage)
+	s.router.POST("/setup/restore", s.handleDBRestore)
 	s.router.POST("/setup/marketplace", s.handleSetupMarketplace)
 	s.router.POST("/setup/finish", s.handleSetupFinish)
 	s.router.GET("/setup/skip", s.handleSetupSkip)
 	s.router.POST("/setup/restart", s.handleSetupRestart)
+	// Admin creation lives inside the wizard as a step, not a standalone
+	// page. These are just the form submission targets — /setup itself
+	// renders the panel. Both must be auth-exempt so the very first
+	// visitor can post without already being authenticated.
+	s.router.POST("/setup/admin", s.handleSetupAdminPost)
+	s.router.GET("/setup/admin/skip", s.handleSetupAdminSkip)
 
-	// Auth
+	// App authentication (Sonarr/Radarr-style Forms login + API key).
+	// /login, /logout are exempt from Require (see authExemptPath). The
+	// Security settings page is gated normally — when auth_method=none it
+	// is reachable, when forms it requires an authenticated session.
+	s.router.GET("/login", s.handleLoginGet)
+	s.router.POST("/login", s.handleLoginPost)
+	s.router.POST("/logout", s.handleLogout)
+	s.router.POST("/settings/security/auth-method", s.handleSecurityAuthMethod)
+	s.router.POST("/settings/security/api-key/rotate", s.handleSecurityAPIKeyRotate)
+	s.router.POST("/settings/security/password", s.handleSecurityPassword)
+	s.router.POST("/settings/security/sessions/revoke-all", s.handleSecurityRevokeAllSessions)
+	s.router.POST("/settings/security/oidc", s.handleSecurityOIDC)
+
+	// OIDC/OAuth login flow (e.g. Authentik). Both GET; the callback validates
+	// state from the sealed oidcFlow cookie, so it needs no CSRF token. Both
+	// must be auth-exempt (see authExemptPath) so unauthenticated visitors can
+	// start and complete the flow.
+	s.router.GET("/auth/oidc/login", s.handleOIDCLogin)
+	s.router.GET("/auth/oidc/callback", s.handleOIDCCallback)
+	// Security lives as a section on the main Settings page. Keep the old
+	// /settings/security URL working by bouncing it to the anchor.
+	s.router.GET("/settings/security", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/settings#section-security")
+	})
+
+	// The form POST targets below render the settings page directly in the
+	// POST response, which leaves the browser's address bar on the POST URL.
+	// Refreshing then GETs a route that only exists as POST → 404. Bounce
+	// those GETs back to the section the form lives in. 303 (not 301) so
+	// browsers don't cache the redirect against a future route change.
+	settingsGETFallback := func(path, section string) {
+		s.router.GET(path, func(c *gin.Context) {
+			c.Redirect(http.StatusSeeOther, "/settings#"+section)
+		})
+	}
+	settingsGETFallback("/settings/security/auth-method", "section-security")
+	settingsGETFallback("/settings/security/api-key/rotate", "section-security")
+	settingsGETFallback("/settings/security/password", "section-security")
+	settingsGETFallback("/settings/security/sessions/revoke-all", "section-security")
+	settingsGETFallback("/settings/security/oidc", "section-security")
+
+	// Audible OAuth flow — distinct from app auth above. Kept under
+	// /auth/* for backwards compatibility with the URL the existing
+	// settings page POSTs to.
 	s.router.POST("/auth/marketplace", s.handleAudibleMarketplaceSelect)
 	s.router.POST("/auth/start", s.handleAuthStart)
 	s.router.POST("/auth/callback", s.handleAuthCallback)
+
+	// Multiple Audible accounts. Single-account installs keep using the
+	// /auth/* forms above (which target the primary account); these add the
+	// management affordances for connecting / re-authing / removing extras.
+	s.router.POST("/accounts/add", s.handleAccountAdd)
+	s.router.POST("/accounts/remove", s.handleAccountRemove)
+	s.router.POST("/accounts/region", s.handleAccountRegion)
+	// Refresh-after-POST fallbacks for the Audible forms (same 404 fix as the
+	// security section above).
+	settingsGETFallback("/auth/marketplace", "section-audible")
+	settingsGETFallback("/auth/start", "section-audible")
+	settingsGETFallback("/auth/callback", "section-audible")
+	settingsGETFallback("/accounts/add", "section-audible")
+	settingsGETFallback("/accounts/remove", "section-audible")
+	settingsGETFallback("/accounts/region", "section-audible")
 	// Legacy /auth/plex/*, /auth/emby/* and /auth/media-server/select removed:
 	// the UI surfaces that posted to them (Plex PIN sign-in panel, dedicated
 	// Emby panel, Active Media Server radio) are gone in favor of
 	// /destinations/* CRUD. Plex sign-in is re-introduced as a per-
 	// destination affordance — see /destinations/plex/* below.
 	s.router.POST("/settings/tag-profile", s.handleTagProfileSelect)
+	settingsGETFallback("/settings/tag-profile", "section-library")
 
 	// Library destinations CRUD (multi-destination model). Modal-only —
 	// New / Edit / Delete all open inside the global #dest-modal-content
@@ -539,6 +685,10 @@ func (s *Server) setupRoutes() {
 	s.router.POST("/destinations/discover/abs", s.handleDestinationsDiscoverABS)
 	s.router.POST("/destinations/discover/emby", s.handleDestinationsDiscoverEmby)
 	s.router.POST("/destinations/discover/jellyfin", s.handleDestinationsDiscoverJellyfin)
+	// HearthShelf one-click connect (OAuth device grant). Same shape as the Plex
+	// PIN flow below: start shows a code, poll waits for the user to approve it.
+	s.router.POST("/destinations/hearthshelf/start", s.handleHearthShelfConnectStart)
+	s.router.POST("/destinations/hearthshelf/poll", s.handleHearthShelfConnectPoll)
 	s.router.POST("/destinations/plex/pin/start", s.handleDestinationsPlexPinStart)
 	s.router.POST("/destinations/plex/pin/poll", s.handleDestinationsPlexPinPoll)
 	s.router.POST("/destinations/plex/discover/servers", s.handleDestinationsPlexDiscoverServers)
@@ -561,6 +711,7 @@ func (s *Server) setupRoutes() {
 		api.POST("/sync/retry", s.handleSyncRetry)
 		api.POST("/sync/phase/:phase", s.handleRunPhase)
 		api.GET("/sync/status", s.handleSyncStatus)
+		api.GET("/sync/status.json", s.handleSyncStatusJSON)
 		api.GET("/dashboard/summary", s.handleDashboardSummary)
 		api.GET("/dashboard/downloads", s.handleDashboardDownloads)
 		api.POST("/downloads/queue-all", s.handleQueueAll)
@@ -577,13 +728,19 @@ func (s *Server) setupRoutes() {
 
 		api.GET("/events", s.handleSSE)
 		api.POST("/settings", s.handleSaveSettings)
+		api.GET("/library/reorganize/preview", s.handleReorganizePreview)
 		api.POST("/library/reorganize", s.handleReorganizeLibrary)
 		api.POST("/restart", s.handleRestart)
 		api.GET("/settings/db-backup", s.handleDBBackup)
+		api.POST("/settings/db-restore", s.handleDBRestore)
 		api.POST("/settings/factory-reset", s.handleFactoryReset)
 
 		api.GET("/diagnostics/compare", s.handleDiagnosticsCompare)
 		api.POST("/diagnostics/targeted-scan", s.handleDiagnosticsTargetedScan)
+		// Per-account ASIN probe — answers "I own this, why isn't it synced?"
+		api.GET("/diagnostics/asin/:asin", s.handleDiagnosticsASINProbe)
+		// Account inventory reconciliation — live library vs stamped ownership.
+		api.GET("/diagnostics/account-inventory", s.handleDiagnosticsAccountInventory)
 		// DS-style ops tab — read-only system state. JSON so the
 		// browser can pretty-render in the diagnostics page.
 		api.GET("/diagnostics/env", s.handleDiagnosticsEnv)
@@ -603,6 +760,13 @@ func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
 	webLog.Info().Str("addr", addr).Msg("starting web server")
 	return s.router.Run(addr)
+}
+
+// AuthManager exposes the auth manager so the main package can wire its
+// background goroutines (e.g. the login throttle GC sweep) to the same
+// lifecycle context the rest of the server uses.
+func (s *Server) AuthManager() *auth.Manager {
+	return s.authMgr
 }
 
 // ginLogger returns a gin middleware that logs via our logging package.
@@ -690,7 +854,7 @@ func normalizeClientIPForLog(ip string) string {
 func (s *Server) handleDashboard(c *gin.Context) {
 	ctx := c.Request.Context()
 	_, _ = s.clearStaleFailedDownloads(ctx)
-	c.HTML(http.StatusOK, "dashboard.html", s.withSidebar(ctx, s.getDashboardData(ctx)))
+	c.HTML(http.StatusOK, "dashboard.html", s.withSidebar(c, s.getDashboardData(ctx)))
 }
 
 func (s *Server) getDashboardData(ctx context.Context) gin.H {
@@ -754,10 +918,20 @@ func mediaServerLabel(t mediaserver.Type) (string, string) {
 // destinationSummaryView is the per-destination card rendered on the
 // dashboard. Sensitive fields are intentionally absent; only display info.
 type destinationSummaryView struct {
-	ID              string
-	DisplayName     string
-	Type            string
-	TypeLabel       string
+	ID          string
+	DisplayName string
+	Type        string
+	TypeLabel   string
+	// AddressNote explains the stored URL in words when the raw address would be
+	// confusing on its own (a Docker bridge or LAN IP from a HearthShelf
+	// connection). Empty for destinations the user typed an address for.
+	AddressNote string
+	// ViaHearthShelf marks a row created by the HearthShelf connect flow. The
+	// row's Type is still `abs` (HearthShelf serves the ABS API and every push
+	// path treats it as one) - this only changes how it is LABELLED, so a
+	// connection the user made by clicking "HearthShelf" does not come back
+	// wearing an Audiobookshelf logo.
+	ViaHearthShelf  bool
 	Enabled         bool
 	Configured      bool
 	HasCredential   bool // API key for Emby/Jellyfin/ABS, token for Plex
@@ -825,11 +999,28 @@ func (s *Server) singleDestinationSummary(ctx context.Context, id string) *desti
 // a disabled row stays cheap.
 func (s *Server) buildDestinationSummary(ctx context.Context, row *database.LibraryDestination, libraryTotal int, basis string) destinationSummaryView {
 	hasCred := row.APIKey != "" || row.PlexToken != ""
+	// Set for rows the HearthShelf connect flow created, so the card can show a
+	// HearthShelf logo and label instead of an Audiobookshelf one. Cosmetic only
+	// - Type stays `abs` and every push path is unchanged.
+	viaHS := false
+	// How the address is DESCRIBED, for HearthShelf rows. The stored URL is
+	// whatever route actually works - often a Docker bridge or LAN IP, which is
+	// correct for routing but meaningless as an identity. A user who connected
+	// "Unraid" through app.hearthshelf.com should see that, not 172.17.0.13.
+	viaHSDetail := ""
+	if row.Type == database.LibraryDestinationTypeABS {
+		_, viaHS = s.hearthShelfManaged(ctx)[row.ID]
+		if viaHS {
+			viaHSDetail = describeHearthShelfAddress(row.URL)
+		}
+	}
 	v := destinationSummaryView{
 		ID:              row.ID,
 		DisplayName:     row.DisplayName,
 		Type:            string(row.Type),
 		TypeLabel:       destinationTypeLabel(row.Type),
+		ViaHearthShelf:  viaHS,
+		AddressNote:     viaHSDetail,
 		Enabled:         row.Enabled,
 		Configured:      destinationConfigured(row),
 		HasCredential:   hasCred,
@@ -1081,12 +1272,19 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		}
 	}
 
+	// Account filter — only meaningful (and only rendered) when more than
+	// one Audible account is connected.
+	accountFilter := c.Query("account")
+	filter.AccountID = accountFilter
+
 	books, total, err := s.db.ListBooks(ctx, filter)
 	if err != nil {
 		webLog.Error().Err(err).Msg("failed to list books")
 		c.HTML(http.StatusInternalServerError, "library.html", gin.H{"Error": "Failed to load library"})
 		return
 	}
+
+	accountOpts, bookAccounts := s.libraryAccountData(ctx, books)
 
 	counts := s.libraryStatusCounts(ctx)
 	coverageBasis := s.coverageBasis(ctx)
@@ -1114,6 +1312,9 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		"CoverageBasis":   coverageBasis,
 		"PresenceFilters": s.libraryPresenceFilterOpts(ctx, destFilterState),
 		"OnDiskFilter":    c.Query("on_disk"),
+		"AccountFilters":  accountOpts,
+		"AccountFilter":   accountFilter,
+		"BookAccounts":    bookAccounts,
 		"PageNum":         pageNum,
 		"TotalPages":      totalPages,
 		"PageSize":        pageSize,
@@ -1127,7 +1328,61 @@ func (s *Server) handleLibrary(c *gin.Context) {
 		c.HTML(http.StatusOK, "library_table.html", data)
 		return
 	}
-	c.HTML(http.StatusOK, "library.html", s.withSidebar(ctx, data))
+	c.HTML(http.StatusOK, "library.html", s.withSidebar(c, data))
+}
+
+// libraryAccountOption is one row in the Audible-account filter dropdown.
+type libraryAccountOption struct {
+	ID          string
+	DisplayName string
+}
+
+// libraryAccountData returns the account filter options plus a per-book map
+// of owning-account display names ("Jeremy, Josh") for the current page.
+// Both are nil/empty when zero or one account is connected — single-account
+// installs keep the exact pre-multi-account UI.
+func (s *Server) libraryAccountData(ctx context.Context, books []database.Book) ([]libraryAccountOption, map[int64]string) {
+	accounts, err := s.db.ListAudibleAccounts(ctx)
+	if err != nil || len(accounts) <= 1 {
+		return nil, nil
+	}
+	opts := make([]libraryAccountOption, 0, len(accounts))
+	names := make(map[string]string, len(accounts))
+	for i := range accounts {
+		a := &accounts[i]
+		name := accountDisplayName(a)
+		names[a.ID] = name
+		opts = append(opts, libraryAccountOption{ID: a.ID, DisplayName: name})
+	}
+
+	asins := make([]string, 0, len(books))
+	for _, b := range books {
+		if b.ASIN != "" {
+			asins = append(asins, b.ASIN)
+		}
+	}
+	ownersByASIN, err := s.db.GetBookAccountsForASINs(ctx, asins)
+	if err != nil {
+		webLog.Warn().Err(err).Msg("failed to resolve book account owners")
+		return opts, nil
+	}
+	out := make(map[int64]string, len(books))
+	for _, b := range books {
+		ids := ownersByASIN[b.ASIN]
+		if len(ids) == 0 {
+			continue
+		}
+		parts := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if n, ok := names[id]; ok {
+				parts = append(parts, n)
+			}
+		}
+		if len(parts) > 0 {
+			out[b.ID] = strings.Join(parts, ", ")
+		}
+	}
+	return opts, out
 }
 
 // libraryPresenceFilterOption is one row in the per-destination presence
@@ -1347,6 +1602,7 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 
 	folderPath, files := buildBookFileDetails(book.FilePath)
 	fileInfo := s.buildBookFileInfo(ctx, book)
+	_, detailAccounts := s.libraryAccountData(ctx, []database.Book{*book})
 
 	data := gin.H{
 		"Book":                    book,
@@ -1357,6 +1613,7 @@ func (s *Server) handleBookDetail(c *gin.Context) {
 		"BookFileInfo":            fileInfo,
 		"BookAction":              buildLibraryBookActions([]database.Book{*book}, s.settingBool(ctx, library.SettingKeyAutoQueueNewBooks, false))[book.ID],
 		"BookDestinationStatuses": s.bookDestinationStatuses(ctx, book.ID),
+		"BookAccountNames":        detailAccounts[book.ID],
 	}
 
 	if c.Query("view") == "modal" || c.GetHeader("HX-Request") == "true" {
@@ -1768,7 +2025,7 @@ func (s *Server) handleDownloads(c *gin.Context) {
 		tab = "active"
 	}
 
-	c.HTML(http.StatusOK, "downloads.html", s.withSidebar(ctx, gin.H{
+	c.HTML(http.StatusOK, "downloads.html", s.withSidebar(c, gin.H{
 		"Active":              active,
 		"Pending":             pending,
 		"Complete":            complete,
@@ -1912,7 +2169,19 @@ func (s *Server) clearStaleFailedDownloads(ctx context.Context) (int, error) {
 func (s *Server) handleSettings(c *gin.Context) {
 	ctx := c.Request.Context()
 	data := s.settingsPageData(ctx)
-	c.HTML(http.StatusOK, "settings.html", s.withSidebar(ctx, data))
+	// Security lives as a section on this page, so pull in its fields too
+	// (AuthMethod, AuthRequired, APIKey, Username, etc). Without this the
+	// <select>s would render empty and default to the first <option>, and
+	// the API key field would look blank even though it's seeded.
+	for k, v := range s.securityPageData(ctx, c) {
+		// Don't let Page="security" leak in from securityPageData — the
+		// sidebar highlight needs to stay on Settings.
+		if k == "Page" {
+			continue
+		}
+		data[k] = v
+	}
+	c.HTML(http.StatusOK, "settings.html", s.withSidebar(c, data))
 }
 
 // handleTagProfileSelect persists the active tag profile. Strict validation
@@ -2148,11 +2417,18 @@ func (s *Server) computeBookPresence(ctx context.Context, books []database.Book)
 			for _, ss := range syncs {
 				byDestID[ss.DestinationID] = ss
 			}
+			managed := s.hearthShelfManaged(ctx)
 			for _, d := range enabled {
+				// A HearthShelf connection is an `abs` row; badge it as
+				// HearthShelf so the chip matches what the user connected.
+				kind := string(d.Type)
+				if _, ok := managed[d.ID]; ok && d.Type == database.LibraryDestinationTypeABS {
+					kind = "hearthshelf"
+				}
 				chip := bookPresenceChip{
 					Kind:        "destination",
-					Type:        string(d.Type),
-					LogoURL:     destinationLogoPath(string(d.Type)),
+					Type:        kind,
+					LogoURL:     destinationLogoPath(kind),
 					DisplayName: d.DisplayName,
 					State:       "pending",
 				}
@@ -2178,6 +2454,44 @@ func (s *Server) computeBookPresence(ctx context.Context, books []database.Book)
 	return out
 }
 
+// hsManagedSnapshot is one cached read of the HearthShelf connection list.
+//
+// Both fields are written once, before the snapshot is published, and never
+// touched again - that immutability is what makes it safe to hand the same map
+// to concurrent readers.
+type hsManagedSnapshot struct {
+	byDestID map[string]hearthshelf.Connection
+	at       time.Time
+}
+
+// hearthShelfManaged returns the destinations the HearthShelf connect flow
+// created, cached for a short window.
+//
+// The cache exists because the destinations page builds a summary per row and
+// each lookup otherwise decrypts the stored connections blob again. The window
+// is deliberately tiny - this only drives a logo, so briefly stale is harmless,
+// while a long TTL would leave a just-connected destination wearing the wrong
+// icon until it expired.
+//
+// The returned map MUST NOT be mutated by callers: it is shared by every
+// concurrent reader of the current snapshot. Refreshing builds a new map and
+// swaps the pointer, so a reader holding the old one is unaffected.
+//
+// A racing refresh may run the lookup twice and one result is discarded. That
+// is deliberate - this is a 2-second cosmetic cache, and a mutex here would
+// serialize every destination card behind a DB read plus a decrypt.
+func (s *Server) hearthShelfManaged(ctx context.Context) map[string]hearthshelf.Connection {
+	if snap := s.hsManaged.Load(); snap != nil && time.Since(snap.at) < 2*time.Second {
+		return snap.byDestID
+	}
+	fresh := &hsManagedSnapshot{
+		byDestID: hearthshelf.ManagedDestinationIDs(ctx, s.db, s.credBox),
+		at:       time.Now(),
+	}
+	s.hsManaged.Store(fresh)
+	return fresh.byDestID
+}
+
 // destinationLogoPath mirrors the destLogo template func so the Go-side
 // presence builder can reuse the same URL mapping without going through
 // the template layer.
@@ -2191,6 +2505,8 @@ func destinationLogoPath(t string) string {
 		return "/static/jellyfin.png"
 	case "abs", "audiobookshelf":
 		return "/static/audiobookshelf.png"
+	case "hearthshelf":
+		return "/static/hearthshelf.png"
 	}
 	return ""
 }
@@ -2241,7 +2557,7 @@ func (s *Server) computeSidebar(ctx context.Context) sidebarData {
 		}
 	}
 
-	out.Healthy = out.FailedDestAlert == 0 && s.audible.IsAuthenticated()
+	out.Healthy = out.FailedDestAlert == 0 && s.audibleAuthenticated()
 	return out
 }
 
@@ -2278,12 +2594,21 @@ func formatUptime(d time.Duration) string {
 
 // withSidebar merges the sidebar snapshot into the page data map. Use on
 // every full-page render so base.html can render the nav badges + footer.
-// Safe to call with a nil/empty map.
-func (s *Server) withSidebar(ctx context.Context, data gin.H) gin.H {
+// Plumbs the per-request CSRF token and current user from the gin context.
+// Safe to call with a nil/empty data map.
+func (s *Server) withSidebar(c *gin.Context, data gin.H) gin.H {
 	if data == nil {
 		data = gin.H{}
 	}
+	ctx := c.Request.Context()
+	data["CSRFToken"] = auth.CSRFToken(c)
+	if u := auth.CurrentUser(c); u != nil {
+		data["CurrentUser"] = u
+	}
 	data["Sidebar"] = s.computeSidebar(ctx)
+	if s.authMgr != nil && s.authMgr.CurrentMethod(ctx) == auth.AuthMethodNone {
+		data["AuthNagShow"] = true
+	}
 	return data
 }
 
@@ -2406,7 +2731,7 @@ func (s *Server) handleSyncRetry(c *gin.Context) {
 }
 
 func (s *Server) triggerSync(c *gin.Context, mode library.SyncMode) {
-	if !s.audible.IsAuthenticated() {
+	if !s.audibleAuthenticated() {
 		msg := "Not authenticated — please sign in on the Settings page first."
 		if c.GetHeader("HX-Request") == "true" {
 			c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(library.SyncProgress{
@@ -2601,7 +2926,7 @@ func (s *Server) handleRunPhase(c *gin.Context) {
 	}
 
 	// Audible sync requires authentication
-	if phase == library.PhaseAudibleSync && !s.audible.IsAuthenticated() {
+	if phase == library.PhaseAudibleSync && !s.audibleAuthenticated() {
 		msg := "Not authenticated \u2014 please sign in on the Settings page first."
 		if c.GetHeader("HX-Request") == "true" {
 			c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(library.SyncProgress{
@@ -2647,6 +2972,45 @@ func (s *Server) handleRunPhase(c *gin.Context) {
 func (s *Server) handleSyncStatus(c *gin.Context) {
 	progress := s.sync.GetProgress()
 	c.HTML(http.StatusOK, "sync_status.html", s.syncStatusData(progress))
+}
+
+// handleSyncStatusJSON returns a machine-readable sync-status + library-health
+// summary for external consumers (e.g. HearthShelf's admin integration card).
+// Unlike handleSyncStatus this emits JSON, not an HTMX fragment, and unlike the
+// full diagnostics compare it stays cheap: sync progress is in-memory and the
+// status counts are a single grouped DB query (no remote inventory fetches).
+func (s *Server) handleSyncStatusJSON(c *gin.Context) {
+	progress := s.sync.GetProgress()
+
+	counts, err := s.db.CountBooksByStatus(c.Request.Context())
+	if err != nil {
+		webLog.Warn().Err(err).Msg("sync status json: failed to count books by status")
+		counts = map[database.BookStatus]int{}
+	}
+
+	statusCounts := make(map[string]int, len(counts))
+	total := 0
+	for status, n := range counts {
+		statusCounts[string(status)] = n
+		total += n
+	}
+	// "Failed" books are the actionable health signal an admin should be alerted
+	// to; the full per-destination drift list remains behind /api/diagnostics/compare.
+	failed := counts[database.BookStatusFailed]
+
+	resp := gin.H{
+		"running":       progress.Running,
+		"status":        progress.Status,
+		"message":       progress.Message,
+		"error":         progress.Error,
+		"started_at":    progress.StartedAt,
+		"completed_at":  progress.CompletedAt,
+		"books_total":   total,
+		"books_failed":  failed,
+		"status_counts": statusCounts,
+		"has_issues":    failed > 0 || progress.Error != "",
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // plexSyncForSync is the callback used by SyncService to perform a full Plex scan and then query the library.
@@ -3233,6 +3597,152 @@ func (s *Server) handleDBBackup(c *gin.Context) {
 	c.File(dbPath)
 }
 
+// handleDBRestore replaces the live SQLite database with an uploaded backup.
+//
+// The flow: validate upload is a real SQLite file with integrity_check passing
+// and the schema_migrations table present, write it to a temp path, stop the
+// pipeline, close the DB handle, rename the current DB aside as a pre-restore
+// safety copy, move the uploaded file into place, then SIGTERM ourselves so
+// the process supervisor brings us back with the new file. Restart-on-exit is
+// the same pattern handleRestart uses — re-opening the DB in-process would
+// require rewiring every cached handle held by sync/downloads/scheduler.
+func (s *Server) handleDBRestore(c *gin.Context) {
+	dbPath := filepath.Join(s.configPath, "audible.db")
+	// dbPath may or may not exist: it's absent on a fresh install where the
+	// user is restoring from the setup wizard. We just need configPath itself
+	// to be writable — SQLite (modernc) creates the file on first open.
+
+	fileHeader, err := c.FormFile("backup")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing backup file: " + err.Error()})
+		return
+	}
+	// 2 GiB ceiling — backups are typically a few MB to low hundreds of MB.
+	const maxRestoreBytes = 2 << 30
+	if fileHeader.Size > maxRestoreBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "backup file is too large"})
+		return
+	}
+
+	tmpPath := dbPath + ".restore-upload"
+	if err := c.SaveUploadedFile(fileHeader, tmpPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save upload: " + err.Error()})
+		return
+	}
+	// On any failure path below, remove the staged upload.
+	cleanupTmp := func() { _ = os.Remove(tmpPath) }
+
+	if err := validateSQLiteBackup(tmpPath); err != nil {
+		cleanupTmp()
+		webLog.Warn().Err(err).Msg("db restore: upload rejected")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid backup: " + err.Error()})
+		return
+	}
+
+	webLog.Warn().Msg("db restore: stopping all pipeline workers")
+	s.downloads.StopAndWait()
+
+	// Close the live DB so SQLite releases the file (Windows can't rename
+	// open files). After this point we must SIGTERM regardless — the
+	// in-process handle is unusable.
+	if err := s.db.Close(); err != nil {
+		webLog.Warn().Err(err).Msg("db restore: error closing live db (continuing)")
+	}
+
+	ts := time.Now().Format("20060102-150405")
+	safetyPath := dbPath + ".pre-restore-" + ts
+
+	// Move the live DB aside as a safety backup. WAL/SHM sidecars must
+	// move with it — leaving them next to a different .db would corrupt
+	// the restored database on first open. On a fresh install dbPath may
+	// not exist yet; that's fine, just skip the move.
+	hadLiveDB := false
+	if _, statErr := os.Stat(dbPath); statErr == nil {
+		hadLiveDB = true
+		if err := os.Rename(dbPath, safetyPath); err != nil {
+			cleanupTmp()
+			webLog.Error().Err(err).Msg("db restore: failed to move current db aside — restart to recover")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to set aside current database: " + err.Error()})
+			s.scheduleRestart()
+			return
+		}
+		for _, ext := range []string{"-wal", "-shm"} {
+			if _, err := os.Stat(dbPath + ext); err == nil {
+				_ = os.Rename(dbPath+ext, safetyPath+ext)
+			}
+		}
+	}
+
+	if err := os.Rename(tmpPath, dbPath); err != nil {
+		// Rollback: put the safety copy back so the next start is healthy.
+		if hadLiveDB {
+			_ = os.Rename(safetyPath, dbPath)
+			for _, ext := range []string{"-wal", "-shm"} {
+				_ = os.Rename(safetyPath+ext, dbPath+ext)
+			}
+		}
+		cleanupTmp()
+		webLog.Error().Err(err).Msg("db restore: failed to install uploaded db, rolled back")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to install uploaded database: " + err.Error()})
+		s.scheduleRestart()
+		return
+	}
+
+	webLog.Info().Str("safety_backup", safetyPath).Msg("db restore: complete, restarting service")
+	s.scheduleRestart()
+
+	if c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": "Database restored. Restarting service..."})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Database restored, restarting service", "safety_backup": filepath.Base(safetyPath)})
+}
+
+// scheduleRestart fires SIGTERM after a short delay so the in-flight response
+// can finish. Mirrors handleRestart's restart trigger.
+func (s *Server) scheduleRestart() {
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		proc, err := os.FindProcess(os.Getpid())
+		if err != nil {
+			webLog.Error().Err(err).Msg("restart failed: could not find current process")
+			return
+		}
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			webLog.Warn().Err(err).Msg("restart SIGTERM failed, attempting interrupt")
+			_ = proc.Signal(os.Interrupt)
+		}
+	}()
+}
+
+// validateSQLiteBackup opens path read-only and confirms it's a real SQLite
+// database with our migration table present and PRAGMA integrity_check OK.
+// The migration table check rejects unrelated SQLite files (someone else's
+// browser history, an empty db, etc.) before we replace the live database.
+func validateSQLiteBackup(path string) error {
+	db, err := sql.Open("sqlite", path+"?mode=ro&_pragma=journal_mode%3DDELETE")
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("not a valid SQLite file: %w", err)
+	}
+	var integrity string
+	if err := db.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil {
+		return fmt.Errorf("integrity check failed: %w", err)
+	}
+	if !strings.EqualFold(integrity, "ok") {
+		return fmt.Errorf("integrity check returned %q", integrity)
+	}
+	var name string
+	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'`).Scan(&name)
+	if err != nil {
+		return fmt.Errorf("not an audplexus database (missing schema_migrations table)")
+	}
+	return nil
+}
+
 // handleFactoryReset wipes all data from the database and re-runs migrations.
 func (s *Server) handleFactoryReset(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -3267,6 +3777,10 @@ func (s *Server) handleFactoryReset(c *gin.Context) {
 	if err := s.db.Migrate(); err != nil {
 		webLog.Error().Err(err).Msg("post-reset migration failed")
 	}
+
+	// db.Reset() wiped the audible_accounts table — drop the in-memory clients
+	// so a fresh connect starts clean.
+	s.reloadAccounts(ctx)
 
 	// Restart the download pipeline with a fresh context.
 	s.downloads.Start(context.Background())
@@ -3321,8 +3835,19 @@ func (s *Server) authBaseData(ctx context.Context) gin.H {
 		currentMarketplace = creds.Marketplace
 	}
 
+	accounts := s.accountsForView(ctx)
+	authenticated := false
+	if s.accounts != nil {
+		authenticated = s.accounts.IsAuthenticated()
+	} else if s.audible != nil {
+		authenticated = s.audible.IsAuthenticated()
+	}
+
 	data := gin.H{
-		"Authenticated":         s.audible.IsAuthenticated(),
+		"Authenticated":         authenticated,
+		"Accounts":              accounts,
+		"AccountCount":          len(accounts),
+		"MultiAccount":          len(accounts) > 1,
 		"PlexURL":               plexURL,
 		"PlexTokenSet":          plexToken != "",
 		"PlexConfigured":        plexConfigured,
@@ -3362,7 +3887,7 @@ func (s *Server) renderAuthPage(c *gin.Context, status int, extra gin.H) {
 		data[k] = v
 	}
 	data["Page"] = "settings"
-	c.HTML(status, "settings.html", s.withSidebar(ctx, data))
+	c.HTML(status, "settings.html", s.withSidebar(c, data))
 }
 
 // handleAudibleMarketplaceSelect updates the preferred Audible marketplace.
@@ -3384,44 +3909,61 @@ func (s *Server) handleAudibleMarketplaceSelect(c *gin.Context) {
 		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to save Audible region: " + err.Error()})
 		return
 	}
+	// Reflect the region onto the primary account row (multi-account source of
+	// truth) so a later re-auth uses the right marketplace.
+	if id := s.ensurePrimaryAccount(ctx); id != "" {
+		if acct, _ := s.db.GetAudibleAccount(ctx, id); acct != nil {
+			acct.Marketplace = mp
+			_ = s.db.UpdateAudibleAccount(ctx, acct)
+			s.reloadAccounts(ctx)
+		}
+	}
 
 	s.renderAuthPage(c, http.StatusOK, gin.H{
 		"Success": "Audible region updated to " + strings.ToUpper(mp) + ".",
 	})
 }
 
-// handleAuthStart generates an OAuth URL and shows it to the user.
+// handleAuthStart generates an OAuth URL and shows it to the user. Account-
+// scoped: operates on the account identified by account_id (or the primary
+// account for the legacy single-account forms that omit it). If no account row
+// exists yet (very first connect during setup), it creates one.
 func (s *Server) handleAuthStart(c *gin.Context) {
+	ctx := c.Request.Context()
 	mp := strings.ToLower(strings.TrimSpace(c.PostForm("marketplace")))
 	if mp == "" {
-		mp, _ = s.db.GetSetting(c.Request.Context(), "audible_marketplace")
+		mp, _ = s.db.GetSetting(ctx, "audible_marketplace")
 		mp = strings.ToLower(strings.TrimSpace(mp))
 	}
-	if mp != "" {
-		if market, ok := audible.GetMarketplace(mp); ok {
-			s.audible.SetMarketplace(market)
-			_ = s.db.SetSetting(c.Request.Context(), "audible_marketplace", mp)
-			webLog.Info().Str("marketplace", mp).Msg("marketplace set for auth flow")
-		} else {
-			webLog.Warn().Str("marketplace", mp).Msg("unknown marketplace code, using current")
+	if mp == "" {
+		mp = "us"
+	}
+
+	accountID := s.resolveAccountID(c)
+	if accountID == "" {
+		// First-ever connect (fresh install, no synthesized row): create the
+		// primary account now so the callback has somewhere to store creds.
+		account := &database.AudibleAccount{
+			ID:          library.NewAccountID(),
+			DisplayName: "Audible Account",
+			Marketplace: mp,
+			Enabled:     true,
 		}
-	}
-	authURL, err := s.audible.GetAuthURL()
-	if err != nil {
-		webLog.Error().Err(err).Msg("failed to generate auth URL")
-		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{
-			"Error": "Failed to generate login URL: " + err.Error(),
-		})
-		return
+		if err := s.db.CreateAudibleAccount(ctx, account); err != nil {
+			s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to create account: " + err.Error()})
+			return
+		}
+		_ = s.db.SetSetting(ctx, "audible_marketplace", mp)
+		s.reloadAccounts(ctx)
+		accountID = account.ID
+	} else if acct, _ := s.db.GetAudibleAccount(ctx, accountID); acct != nil && acct.Marketplace != mp {
+		// Honor a region change made in the same form submission.
+		acct.Marketplace = mp
+		_ = s.db.UpdateAudibleAccount(ctx, acct)
 	}
 
-	webLog.Info().Msg("auth URL generated")
-
-	s.renderAuthPage(c, http.StatusOK, gin.H{
-		"AuthURL":      authURL.URL,
-		"CodeVerifier": authURL.CodeVerifier,
-		"DeviceSerial": authURL.DeviceSerial,
-	})
+	webLog.Info().Str("account_id", accountID).Str("marketplace", mp).Msg("auth URL generated")
+	s.startAuthForAccount(c, accountID, mp)
 }
 
 // handleAuthCallback receives the authorization code (via GET redirect from Amazon
@@ -3453,14 +3995,46 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 
 	webLog.Info().Msg("authorization code received, registering device")
 
-	// Authenticate (device registration + token exchange)
 	ctx := c.Request.Context()
-	err := s.audible.Authenticate(ctx, audible.DeviceRegistrationRequest{
+	accountID := s.resolveAccountID(c)
+	if accountID == "" {
+		s.renderAuthPage(c, http.StatusBadRequest, gin.H{
+			"Error": "No account to authenticate. Please restart the connect flow.",
+		})
+		return
+	}
+
+	// Build a client scoped to the account's marketplace. Authenticate uses the
+	// code_verifier/device_serial carried in the form, so a fresh client (no
+	// retained OAuth state) is sufficient.
+	acct, _ := s.db.GetAudibleAccount(ctx, accountID)
+	mp := audible.MarketplaceUS
+	if acct != nil {
+		if found, ok := audible.GetMarketplace(acct.Marketplace); ok {
+			mp = found
+		}
+	}
+	// Prefer the verifier/serial posted with the form; fall back to the
+	// server-side pending-auth state for the GET-redirect (wizard) flow that
+	// can't carry them in a POST body.
+	verifier := c.PostForm("code_verifier")
+	serial := c.PostForm("device_serial")
+	if verifier == "" || serial == "" {
+		pv, ps := s.takePendingAuth(accountID)
+		if verifier == "" {
+			verifier = pv
+		}
+		if serial == "" {
+			serial = ps
+		}
+	}
+
+	client := audible.NewClient(mp)
+	if err := client.Authenticate(ctx, audible.DeviceRegistrationRequest{
 		AuthorizationCode: code,
-		CodeVerifier:      c.PostForm("code_verifier"),
-		DeviceSerial:      c.PostForm("device_serial"),
-	})
-	if err != nil {
+		CodeVerifier:      verifier,
+		DeviceSerial:      serial,
+	}); err != nil {
 		webLog.Error().Err(err).Msg("authentication failed")
 		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{
 			"Error": "Authentication failed: " + err.Error(),
@@ -3468,20 +4042,21 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 		return
 	}
 
-	// Save credentials to disk
-	creds := s.audible.GetCredentials()
-	if creds != nil && s.credPath != "" {
-		data, err := json.MarshalIndent(creds, "", "  ")
-		if err == nil {
-			if err := os.WriteFile(s.credPath, data, 0600); err != nil {
-				webLog.Error().Err(err).Msg("failed to save credentials")
-			} else {
-				webLog.Info().Str("path", s.credPath).Msg("credentials saved")
-			}
-		}
+	// Persist credentials to the account row (source of truth for the client
+	// set) and reload so the new client goes live immediately.
+	if err := s.persistAccountCredentials(ctx, accountID, client); err != nil {
+		webLog.Error().Err(err).Str("account_id", accountID).Msg("failed to persist account credentials")
+		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{
+			"Error": "Authenticated, but failed to save credentials: " + err.Error(),
+		})
+		return
 	}
 
-	webLog.Info().Msg("authentication successful")
+	// No plaintext credentials.json mirror: the encrypted DB row is the only
+	// copy of fresh tokens. A legacy credentials.json (pre-multi-account) is
+	// still read once by first-boot synthesis, but never written anew.
+
+	webLog.Info().Str("account_id", accountID).Msg("authentication successful")
 
 	// If the user is still in onboarding, bounce back into the wizard at
 	// the Destinations step rather than dropping them on Settings — the
@@ -3666,10 +4241,12 @@ func (s *Server) handleDeleteBookMedia(c *gin.Context) {
 	}
 	if c.Query("view") == "row" {
 		presence := s.computeBookPresence(ctx, []database.Book{*book})
+		_, rowAccounts := s.libraryAccountData(ctx, []database.Book{*book})
 		c.HTML(http.StatusOK, "library_row.html", gin.H{
 			"Book":       book,
 			"BookAction": buildLibraryBookActions([]database.Book{*book}, autoQueueNew)[book.ID],
 			"Presence":   presence[book.ID],
+			"Accounts":   rowAccounts[book.ID],
 		})
 		return
 	}
@@ -3740,56 +4317,271 @@ func (s *Server) handleConvertBook(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "format": target})
 }
 
-// handleReorganizeLibrary queues complete books for reorganization through
-// the download pipeline's move stage, respecting current naming templates.
-func (s *Server) handleReorganizeLibrary(c *gin.Context) {
-	ctx := context.Background()
+// reorgMove is one book's dry-run reorganize outcome: where it lives now and
+// where the current naming templates would place it. Prefix holds the shared
+// leading directory of both paths so the UI can de-emphasize it and highlight
+// only the parts that actually change.
+type reorgMove struct {
+	BookID   int64  `json:"-"`
+	Title    string `json:"title"`
+	Author   string `json:"author"`
+	ASIN     string `json:"asin"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Prefix   string `json:"-"`
+	FromRest string `json:"-"`
+	ToRest   string `json:"-"`
+}
+
+// reorgPlanSummary aggregates the dry-run evaluation across the library.
+type reorgPlanSummary struct {
+	Moves     []reorgMove
+	Unchanged int
+	Missing   int
+	Total     int
+}
+
+// commonDirPrefix returns the longest shared leading directory of two paths
+// (including the trailing separator), or "" if they diverge immediately.
+func commonDirPrefix(a, b string) string {
+	max := len(a)
+	if len(b) < max {
+		max = len(b)
+	}
+	last := 0
+	for i := 0; i < max; i++ {
+		if a[i] != b[i] {
+			break
+		}
+		if a[i] == '/' || a[i] == '\\' {
+			last = i + 1
+		}
+	}
+	return a[:last]
+}
+
+// buildReorganizePlans evaluates every complete book against the current
+// naming templates without moving anything. It enriches naming metadata from
+// audnexus the same way the move stage does (tolerating lookup failures), so
+// the preview and the real reorganize always agree on destinations.
+func (s *Server) buildReorganizePlans(ctx context.Context) (*reorgPlanSummary, error) {
 	status := database.BookStatusComplete
 	books, _, err := s.db.ListBooks(ctx, database.BookFilter{Status: &status})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list books: " + err.Error()})
+		return nil, err
+	}
+
+	sum := &reorgPlanSummary{Total: len(books)}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+
+	for i := range books {
+		b := &books[i]
+		if strings.TrimSpace(b.FilePath) == "" {
+			sum.Missing++
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(b *database.Book) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			// Naming-relevant enrichment matches the pipeline's prefetch:
+			// audnexus book data is preferred, DB record is the fallback
+			// when the lookup fails (same fallback the move stage uses).
+			enriched := &audnexus.EnrichedBook{Book: b}
+			if anBook, anErr := s.audnexus.GetBook(ctx, b.ASIN); anErr == nil {
+				enriched.AudnexusBook = anBook
+			}
+
+			plan, planErr := s.organizer.PlanReorganize(b, enriched)
+			mu.Lock()
+			defer mu.Unlock()
+			if planErr != nil {
+				sum.Missing++
+				return
+			}
+			if !plan.Changed {
+				sum.Unchanged++
+				return
+			}
+			prefix := commonDirPrefix(plan.SourcePath, plan.TargetPath)
+			sum.Moves = append(sum.Moves, reorgMove{
+				BookID:   b.ID,
+				Title:    b.Title,
+				Author:   b.Author,
+				ASIN:     b.ASIN,
+				From:     plan.SourcePath,
+				To:       plan.TargetPath,
+				Prefix:   prefix,
+				FromRest: plan.SourcePath[len(prefix):],
+				ToRest:   plan.TargetPath[len(prefix):],
+			})
+		}(b)
+	}
+	wg.Wait()
+
+	sort.Slice(sum.Moves, func(i, j int) bool {
+		if sum.Moves[i].Author != sum.Moves[j].Author {
+			return sum.Moves[i].Author < sum.Moves[j].Author
+		}
+		return sum.Moves[i].Title < sum.Moves[j].Title
+	})
+	return sum, nil
+}
+
+// handleReorganizePreview is the dry-run half of the reorganize flow: it
+// reports exactly which books would move and where, without touching disk.
+func (s *Server) handleReorganizePreview(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	defer cancel()
+
+	sum, err := s.buildReorganizePlans(ctx)
+	if err != nil {
+		if c.GetHeader("HX-Request") == "true" {
+			c.HTML(http.StatusInternalServerError, "reorganize_preview.html", gin.H{"Error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to evaluate library: " + err.Error()})
+		return
+	}
+
+	if c.GetHeader("HX-Request") == "true" {
+		c.HTML(http.StatusOK, "reorganize_preview.html", gin.H{
+			"Moves":     sum.Moves,
+			"MoveCount": len(sum.Moves),
+			"Unchanged": sum.Unchanged,
+			"Missing":   sum.Missing,
+			"Total":     sum.Total,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"moves":     sum.Moves,
+		"unchanged": sum.Unchanged,
+		"missing":   sum.Missing,
+		"total":     sum.Total,
+	})
+}
+
+// handleReorganizeLibrary applies a reorganize: it re-evaluates the dry-run
+// plan and queues only the books whose on-disk paths differ from the current
+// naming templates. Books that already match are left untouched.
+func (s *Server) handleReorganizeLibrary(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	sum, err := s.buildReorganizePlans(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to evaluate library: " + err.Error()})
 		return
 	}
 
 	queued := 0
-	skipped := 0
 	failed := 0
-
-	for i := range books {
-		b := books[i]
-		if strings.TrimSpace(b.FilePath) == "" {
-			skipped++
-			continue
-		}
-		if _, statErr := os.Stat(b.FilePath); statErr != nil {
-			skipped++
-			continue
-		}
-
+	for i := range sum.Moves {
+		m := &sum.Moves[i]
 		dl := &database.DownloadQueue{
-			BookID: b.ID,
-			ASIN:   b.ASIN,
+			BookID: m.BookID,
+			ASIN:   m.ASIN,
 			Status: database.DownloadStatusReorganize,
 		}
 		if insertErr := s.db.EnqueueDownload(ctx, dl); insertErr != nil {
 			failed++
-			webLog.Warn().Err(insertErr).Str("asin", b.ASIN).Msg("reorganize: queue insert failed")
+			webLog.Warn().Err(insertErr).Str("asin", m.ASIN).Msg("reorganize: queue insert failed")
 			continue
 		}
-
 		queued++
 	}
 
-	msg := fmt.Sprintf("Reorganize queued: %d books, skipped %d (no file or missing), failed %d (queue insert)", queued, skipped, failed)
+	msg := fmt.Sprintf("Queued %d book(s) to move; %d already organized, %d missing on disk", queued, sum.Unchanged, sum.Missing)
+	if failed > 0 {
+		msg += fmt.Sprintf(", %d failed to queue", failed)
+	}
 	if c.GetHeader("HX-Request") == "true" {
 		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": msg})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": msg,
-		"queued":  queued,
-		"skipped": skipped,
-		"failed":  failed,
+		"success":   true,
+		"message":   msg,
+		"queued":    queued,
+		"unchanged": sum.Unchanged,
+		"missing":   sum.Missing,
+		"failed":    failed,
 	})
+}
+
+// describeHearthShelfAddress turns the route a HearthShelf connection actually
+// uses into something a person can read.
+//
+// The stored URL is chosen for REACHABILITY, not for display: on a container
+// host it is usually a Docker bridge address like http://172.17.0.13, and on a
+// home LAN a private IP. Both are correct - they are the fastest route and they
+// keep working when the internet is down - but shown bare they look like a
+// misconfiguration, because nothing about "172.17.0.13" says "the Unraid server
+// I connected through HearthShelf".
+//
+// So the card shows the explanation and keeps the raw address as a title
+// attribute for anyone debugging.
+func describeHearthShelfAddress(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return "via HearthShelf"
+	}
+	host := u.Hostname()
+	switch {
+	case isDockerBridgeHost(host):
+		return "via HearthShelf - direct on this Docker network"
+	case isPrivateHostname(host):
+		return "via HearthShelf - direct on your local network"
+	default:
+		return "via HearthShelf"
+	}
+}
+
+func isDockerBridgeHost(host string) bool {
+	o := strings.Split(host, ".")
+	if len(o) != 4 {
+		return false
+	}
+	a, err1 := strconv.Atoi(o[0])
+	b, err2 := strconv.Atoi(o[1])
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return a == 172 && b >= 17 && b <= 31
+}
+
+// isPrivateHostname reports RFC1918 / loopback / link-local / .local hosts.
+func isPrivateHostname(host string) bool {
+	h := strings.ToLower(host)
+	if h == "localhost" || strings.HasSuffix(h, ".local") {
+		return true
+	}
+	o := strings.Split(h, ".")
+	if len(o) != 4 {
+		return false
+	}
+	n := make([]int, 4)
+	for i, part := range o {
+		v, err := strconv.Atoi(part)
+		if err != nil || v < 0 || v > 255 {
+			return false
+		}
+		n[i] = v
+	}
+	switch {
+	case n[0] == 10, n[0] == 127:
+		return true
+	case n[0] == 172 && n[1] >= 16 && n[1] <= 31:
+		return true
+	case n[0] == 192 && n[1] == 168:
+		return true
+	case n[0] == 169 && n[1] == 254:
+		return true
+	}
+	return false
 }

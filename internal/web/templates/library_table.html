@@ -28,7 +28,7 @@
         </thead>
         <tbody>
             {{range .Books}}
-            {{template "library_row.html" (dict "Book" . "BookAction" (index $.BookActions .ID) "Presence" (index $.BookPresence .ID))}}
+            {{template "library_row.html" (dict "Book" . "BookAction" (index $.BookActions .ID) "Presence" (index $.BookPresence .ID) "Accounts" (index $.BookAccounts .ID))}}
             {{else}}
             <tr><td colspan="9" class="empty">No books match these filters.</td></tr>
             {{end}}

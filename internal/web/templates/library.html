@@ -64,6 +64,18 @@
             <option value="yes" {{if eq $onDisk "yes"}}selected{{end}}>On disk</option>
             <option value="no" {{if eq $onDisk "no"}}selected{{end}}>Not on disk</option>
         </select>
+        {{if .AccountFilters}}
+        <select name="account" aria-label="Filter by Audible account"
+                class="lib-filter"
+                hx-get="/library" hx-target="#book-table" hx-swap="innerHTML"
+                hx-trigger="change"
+                hx-include=".lib-filter">
+            <option value="" {{if eq $.AccountFilter ""}}selected{{end}}>All accounts</option>
+            {{range .AccountFilters}}
+            <option value="{{.ID}}" {{if eq $.AccountFilter .ID}}selected{{end}}>{{.DisplayName}}</option>
+            {{end}}
+        </select>
+        {{end}}
         {{range .PresenceFilters}}
         <select name="presence_{{.ID}}" aria-label="Filter by presence in {{.DisplayName}}"
                 class="lib-filter"

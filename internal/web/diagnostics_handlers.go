@@ -22,6 +22,7 @@ import (
 	"github.com/mstrhakr/audplexus/internal/library"
 	"github.com/mstrhakr/audplexus/internal/logging"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
+	audible "github.com/mstrhakr/go-audible"
 )
 
 type diagnosticsDestinationCard struct {
@@ -87,12 +88,11 @@ type diagnosticsDestinationInventory struct {
 }
 
 func (s *Server) handleDiagnostics(c *gin.Context) {
-	ctx := c.Request.Context()
 	marketplace := "us"
 	if creds := s.audible.GetCredentials(); creds != nil && creds.Marketplace != "" {
 		marketplace = creds.Marketplace
 	}
-	c.HTML(http.StatusOK, "diagnostics.html", s.withSidebar(ctx, gin.H{
+	c.HTML(http.StatusOK, "diagnostics.html", s.withSidebar(c, gin.H{
 		"Page":            "diagnostics",
 		"UserMarketplace": marketplace,
 	}))
@@ -1086,4 +1086,211 @@ func (s *Server) handleDiagnosticsLogsSSE(c *gin.Context) {
 			return true
 		}
 	})
+}
+
+// diagnosticsAccountProbe is one account's view of a single ASIN, fetched live
+// from the per-item library endpoint (/1.0/library/{asin}). Exists to answer
+// "account X owns this title, why doesn't it sync?" — the LIST endpoint
+// applies server-side filters the item endpoint doesn't, so a title can probe
+// fine here yet never appear in a sync.
+type diagnosticsAccountProbe struct {
+	AccountID    string `json:"account_id"`
+	AccountName  string `json:"account_name"`
+	Found        bool   `json:"found"`
+	Error        string `json:"error,omitempty"`
+	Title        string `json:"title,omitempty"`
+	ContentType  string `json:"content_type,omitempty"`
+	FormatType   string `json:"format_type,omitempty"`
+	DeliveryType string `json:"delivery_type,omitempty"`
+	Downloadable bool   `json:"downloadable"`
+	Entitled     bool   `json:"entitled"`
+	EntitleError string `json:"entitle_error,omitempty"`
+}
+
+// handleDiagnosticsASINProbe checks one ASIN against every connected account
+// plus the local DB. GET /api/diagnostics/asin/:asin
+func (s *Server) handleDiagnosticsASINProbe(c *gin.Context) {
+	ctx := c.Request.Context()
+	asin := strings.TrimSpace(c.Param("asin"))
+	if asin == "" || len(asin) > 20 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid ASIN"})
+		return
+	}
+
+	var probes []diagnosticsAccountProbe
+	if s.accounts != nil {
+		for _, acct := range s.accounts.EnabledAccounts() {
+			p := diagnosticsAccountProbe{AccountID: acct.ID, AccountName: acct.Name}
+			if acct.Client == nil || !acct.Client.IsAuthenticated() {
+				p.Error = "not authenticated"
+				probes = append(probes, p)
+				continue
+			}
+			probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			item, err := acct.Client.GetBook(probeCtx, asin)
+			if err != nil {
+				p.Error = errs.CleanForDisplay(err.Error())
+			} else if item == nil || item.ASIN == "" {
+				p.Error = "not in this account's library"
+			} else {
+				p.Found = true
+				p.Title = item.Title
+				p.ContentType = item.ContentType
+				p.FormatType = item.FormatType
+				p.DeliveryType = item.ContentDeliveryType
+				p.Downloadable = item.Downloadable()
+				if ok, cdErr := acct.Client.CanDownload(probeCtx, *item); cdErr != nil {
+					p.EntitleError = errs.CleanEntitlementReason(cdErr.Error())
+				} else {
+					p.Entitled = ok
+				}
+			}
+			cancel()
+			probes = append(probes, p)
+		}
+	}
+
+	// Local DB view: does a row exist, and which accounts are stamped on it.
+	localStatus := ""
+	localReason := ""
+	var localOwners []string
+	if book, err := s.db.GetBookByASIN(ctx, asin); err == nil && book != nil {
+		localStatus = string(book.Status)
+		localReason = book.UnavailableReason
+		if owners, err := s.db.GetBookAccountsForASINs(ctx, []string{asin}); err == nil {
+			localOwners = owners[asin]
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"asin":         asin,
+		"accounts":     probes,
+		"local_status": localStatus,
+		"local_reason": localReason,
+		"local_owners": localOwners,
+	})
+}
+
+// diagnosticsAccountInventory reconciles one account's live Audible library
+// against what the local DB has stamped for it. Answers "the account owns N
+// titles but the Library filter shows M — which ones, and why."
+type diagnosticsAccountInventory struct {
+	AccountID    string   `json:"account_id"`
+	AccountName  string   `json:"account_name"`
+	Error        string   `json:"error,omitempty"`
+	APICount     int      `json:"api_count"`      // distinct ASINs the library API returned (full response_groups)
+	MinimalCount int      `json:"minimal_count"`  // same fetch with minimal response_groups — if higher, groups are filtering
+	TotalResults int      `json:"total_results"`  // what the API itself reports as the library size
+	StampedCount int      `json:"stamped_count"`  // rows in book_audible_accounts for this account
+	InAPINotDB   []string `json:"in_api_not_db"`  // API returned it, but it's not stamped (the bug surface)
+	InDBNotAPI   []string `json:"in_db_not_api"`  // stamped, but the API no longer returns it
+	OnlyInMinimal []string `json:"only_in_minimal"` // ASINs the minimal fetch surfaced that the full one dropped
+	Downloadable int      `json:"downloadable"`   // of APICount, how many pass Downloadable()
+	NonDownload  int      `json:"non_download"`   // of APICount, how many fail it
+}
+
+// handleDiagnosticsAccountInventory fetches every connected account's full
+// library live and reconciles it against the DB ownership junction. This is
+// the ground-truth tool for "owned vs shown" gaps. GET
+// /api/diagnostics/account-inventory
+func (s *Server) handleDiagnosticsAccountInventory(c *gin.Context) {
+	ctx := c.Request.Context()
+	if s.accounts == nil {
+		c.JSON(http.StatusOK, gin.H{"accounts": []diagnosticsAccountInventory{}})
+		return
+	}
+
+	libraryGroups := append([]string{}, audible.DefaultResponseGroups...)
+	libraryGroups = append(libraryGroups, "relationships")
+
+	out := make([]diagnosticsAccountInventory, 0)
+	for _, acct := range s.accounts.EnabledAccounts() {
+		inv := diagnosticsAccountInventory{AccountID: acct.ID, AccountName: acct.Name}
+		if acct.Client == nil || !acct.Client.IsAuthenticated() {
+			inv.Error = "not authenticated"
+			out = append(out, inv)
+			continue
+		}
+
+		fetchCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+		books, total, err := library.FetchEntireLibraryWithTotal(fetchCtx, acct.Client, libraryGroups)
+		cancel()
+		if err != nil {
+			inv.Error = errs.CleanForDisplay(err.Error())
+			out = append(out, inv)
+			continue
+		}
+		inv.TotalResults = total
+
+		apiASINs := make(map[string]struct{}, len(books))
+		for _, b := range books {
+			if b.ASIN == "" {
+				continue
+			}
+			if _, dup := apiASINs[b.ASIN]; dup {
+				continue
+			}
+			apiASINs[b.ASIN] = struct{}{}
+			if b.Downloadable() {
+				inv.Downloadable++
+			} else {
+				inv.NonDownload++
+			}
+		}
+		inv.APICount = len(apiASINs)
+
+		// Second fetch with MINIMAL response_groups. The Audible library
+		// endpoint can omit items whose product data doesn't satisfy the
+		// requested groups (delisted/rights-changed titles often lack
+		// product_plans/price). If the bare fetch surfaces ASINs the full
+		// one dropped, response_groups is the filter and the fix is to
+		// trim them. This is a diagnostic comparison only.
+		minCtx, minCancel := context.WithTimeout(ctx, 120*time.Second)
+		minBooks, _, minErr := library.FetchEntireLibraryWithTotal(minCtx, acct.Client, []string{"product_desc", "product_attrs"})
+		minCancel()
+		if minErr == nil {
+			minSet := make(map[string]struct{}, len(minBooks))
+			for _, b := range minBooks {
+				if b.ASIN != "" {
+					minSet[b.ASIN] = struct{}{}
+				}
+			}
+			inv.MinimalCount = len(minSet)
+			for a := range minSet {
+				if _, ok := apiASINs[a]; !ok {
+					inv.OnlyInMinimal = append(inv.OnlyInMinimal, a)
+				}
+			}
+			sort.Strings(inv.OnlyInMinimal)
+		}
+
+		// What the DB has stamped for this account.
+		stamped, err := s.db.ListASINsForAccount(ctx, acct.ID)
+		if err != nil {
+			inv.Error = "stamped-lookup failed: " + errs.CleanForDisplay(err.Error())
+			out = append(out, inv)
+			continue
+		}
+		stampedSet := make(map[string]struct{}, len(stamped))
+		for _, a := range stamped {
+			stampedSet[a] = struct{}{}
+		}
+		inv.StampedCount = len(stampedSet)
+
+		for a := range apiASINs {
+			if _, ok := stampedSet[a]; !ok {
+				inv.InAPINotDB = append(inv.InAPINotDB, a)
+			}
+		}
+		for a := range stampedSet {
+			if _, ok := apiASINs[a]; !ok {
+				inv.InDBNotAPI = append(inv.InDBNotAPI, a)
+			}
+		}
+		sort.Strings(inv.InAPINotDB)
+		sort.Strings(inv.InDBNotAPI)
+		out = append(out, inv)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"accounts": out})
 }

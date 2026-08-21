@@ -13,7 +13,9 @@ import (
 
 	"github.com/mstrhakr/audplexus/internal/audio"
 	"github.com/mstrhakr/audplexus/internal/audnexus"
+	"github.com/mstrhakr/audplexus/internal/auth"
 	"github.com/mstrhakr/audplexus/internal/config"
+	appcrypto "github.com/mstrhakr/audplexus/internal/crypto"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/library"
 	"github.com/mstrhakr/audplexus/internal/logging"
@@ -59,6 +61,13 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to run migrations")
 	}
 	log.Info().Msg("database migrations complete")
+
+	// Auth bootstrap: seed the API key (idempotent), pick a sane default
+	// auth_method for the install kind, and launch the session GC.
+	if _, err := auth.SeedAPIKey(context.Background(), db); err != nil {
+		log.Warn().Err(err).Msg("seed api key failed")
+	}
+	seedAuthDefaults(context.Background(), db)
 
 	// One-shot startup pass: decode HTML entities (e.g. "&amp;", "&uacute;")
 	// that older sync runs left in book text fields. Idempotent — books that
@@ -119,6 +128,32 @@ func main() {
 		log.Warn().Err(err).Msg("first-boot library_destinations synthesis failed; continuing")
 	}
 
+	// Per-install encryption key for credentials at rest. Generated on first
+	// boot; losing it means re-authenticating each account (tokens become
+	// undecryptable), so it lives next to the DB in the config dir.
+	encKey, err := appcrypto.LoadOrCreateKey(filepath.Join(cfg.Paths.Config, "audplexus.key"))
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load/create encryption key")
+	}
+	credBox, err := appcrypto.NewBox(encKey)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to initialize credential encryption")
+	}
+
+	// First-boot synthesis for multiple Audible accounts: if audible_accounts
+	// is empty AND a legacy credentials.json exists, create one account row
+	// from it (encrypted) so single-account installs upgrade seamlessly.
+	// No-op once any account exists.
+	if err := library.SynthesizeAudibleAccountIfEmpty(context.Background(), db, credPath, credBox); err != nil {
+		log.Warn().Err(err).Msg("first-boot audible account synthesis failed; continuing")
+	}
+
+	// AccountManager owns one Audible client per connected account and is the
+	// source of truth for download/sync routing. Built after synthesis so it
+	// picks up the migrated account.
+	accountMgr := library.NewAccountManager(context.Background(), db, credBox)
+	syncSvc.SetAccountManager(accountMgr)
+
 	// Legacy single-backend selection — still used by Settings UI rendering,
 	// reconcile, and diagnostics until those paths read from
 	// library_destinations directly. The DOWNLOAD pipeline, however, fans
@@ -133,7 +168,11 @@ func main() {
 	// Multi-destination fan-out for per-book post-organize work. Reads from
 	// library_destinations, runs each destination concurrently (bounded),
 	// records per-destination outcomes in book_library_destinations.
-	destinations := library.NewDestinationManager(db, anClient, cfg.Paths.Audiobooks, 0)
+	// The credential box lets the manager renew a HearthShelf-issued key before
+	// a push, so a one-click destination keeps working without the user
+	// reconnecting by hand when its credential lapses.
+	destinations := library.NewDestinationManager(db, anClient, cfg.Paths.Audiobooks, 0).
+		WithCredentialBox(credBox)
 
 	dlMgr := library.NewDownloadManager(
 		db,
@@ -151,6 +190,7 @@ func main() {
 		mediaSvr,
 		destinations,
 	)
+	dlMgr.SetAccountManager(accountMgr)
 
 	// Start download manager
 	ctx, cancel := context.WithCancel(context.Background())
@@ -158,6 +198,11 @@ func main() {
 	dlMgr.Start(ctx)
 	defer dlMgr.Stop()
 	log.Info().Msg("download manager started")
+
+	// Session garbage collector — reaps expired session rows hourly.
+	// Already-expired sessions fail ResolveSession the moment they pass
+	// their deadline, so this is purely housekeeping.
+	auth.StartGC(ctx, db, 0)
 
 	// Start scheduler
 	sched := scheduler.New(syncSvc, dlMgr)
@@ -175,7 +220,12 @@ func main() {
 	log.Info().Bool("enabled", cfg.Sync.Enabled).Str("schedule", cfg.Sync.Schedule).Msg("scheduler started")
 
 	// Start web server
-	webServer := web.NewServer(db, syncSvc, dlMgr, sched, anClient, org, audibleClient, ffmpeg, credPath, cfg.Server.Port, cfg.Paths.Audiobooks, cfg.Paths.Downloads, cfg.Paths.Config)
+	webServer := web.NewServer(db, syncSvc, dlMgr, sched, anClient, org, audibleClient, accountMgr, ffmpeg, credPath, credBox, cfg.Server.Port, cfg.Paths.Audiobooks, cfg.Paths.Downloads, cfg.Paths.Config)
+
+	// Login throttle GC — drops expired (ip, username) buckets so the map
+	// doesn't grow unbounded during a username-enumeration attack. Sweeps
+	// every 5 minutes; entries naturally expire after the throttle window.
+	webServer.AuthManager().Throttle.StartGC(ctx, 0)
 	go func() {
 		if err := webServer.Start(); err != nil {
 			log.Fatal().Err(err).Msg("web server failed")
@@ -222,6 +272,40 @@ func loadCredentials(client *audible.Client, path string) error {
 	}
 	client.SetCredentials(&creds)
 	return nil
+}
+
+// seedAuthDefaults picks an initial auth_method for the installation.
+//
+//   - Fresh install (no books, no destinations, no settings → no auth_method
+//     yet and no "onboarded" marker): default to forms + enabled. The setup
+//     wizard funnels the user to /setup/admin so they create an admin row
+//     before they can finish onboarding.
+//
+//   - Upgrade install (has data but no auth_method): default to none with
+//     auth_required=disabled_for_localhost so loopback integrations keep
+//     working without surprises. A nag banner appears on every page until
+//     the operator switches it on under Settings → Security.
+//
+// Already-configured installs (auth_method already set) are left alone.
+func seedAuthDefaults(ctx context.Context, db database.Database) {
+	existing, _ := db.GetSetting(ctx, auth.SettingKeyAuthMethod)
+	if existing != "" {
+		return
+	}
+	// "Has any prior state" heuristic. onboarded is set by the setup wizard
+	// completion handler — its presence is the most reliable upgrade
+	// indicator since brand-new DBs always start with it empty.
+	onboarded, _ := db.GetSetting(ctx, "onboarded")
+	isFresh := onboarded == ""
+	if isFresh {
+		_ = db.SetSetting(ctx, auth.SettingKeyAuthMethod, string(auth.AuthMethodForms))
+		_ = db.SetSetting(ctx, auth.SettingKeyAuthRequired, string(auth.AuthRequiredEnabled))
+		log.Info().Msg("auth defaults seeded: forms + required")
+		return
+	}
+	_ = db.SetSetting(ctx, auth.SettingKeyAuthMethod, string(auth.AuthMethodNone))
+	_ = db.SetSetting(ctx, auth.SettingKeyAuthRequired, string(auth.AuthRequiredDisabledForLocalhost))
+	log.Warn().Msg("auth defaults seeded: NONE (upgrade install) — enable via Settings → Security")
 }
 
 func getConfigDir() string {

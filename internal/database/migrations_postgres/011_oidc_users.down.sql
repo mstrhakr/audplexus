@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS idx_users_oidc;
+ALTER TABLE users DROP COLUMN IF EXISTS auth_source;
+ALTER TABLE users DROP COLUMN IF EXISTS oidc_issuer;
+ALTER TABLE users DROP COLUMN IF EXISTS oidc_subject;

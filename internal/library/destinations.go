@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/mstrhakr/audplexus/internal/audnexus"
+	"github.com/mstrhakr/audplexus/internal/crypto"
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/audplexus/internal/hearthshelf"
 	"github.com/mstrhakr/audplexus/internal/mediaserver"
 	"golang.org/x/sync/semaphore"
 )
@@ -26,6 +28,20 @@ type DestinationManager struct {
 	audnexus       *audnexus.Client
 	libraryDir     string
 	maxConcurrency int
+	// credBox decrypts the stored HearthShelf connections so a destination the
+	// one-click flow created can have its credential renewed before it is used.
+	// Nil is allowed and simply skips renewal - the right behaviour for callers
+	// (tests, tools) that never push to HearthShelf.
+	credBox *crypto.Box
+}
+
+// WithCredentialBox enables HearthShelf credential renewal on this manager.
+//
+// Optional on purpose: without it the manager behaves exactly as before, so a
+// caller that has no crypto box (or no HearthShelf destinations) is unaffected.
+func (m *DestinationManager) WithCredentialBox(box *crypto.Box) *DestinationManager {
+	m.credBox = box
+	return m
 }
 
 // NewDestinationManager builds a manager. maxConcurrency caps the number
@@ -55,6 +71,10 @@ func (m *DestinationManager) ListEnabled(ctx context.Context) []DestinationBacke
 	out := make([]DestinationBackend, 0, len(rows))
 	for _, r := range rows {
 		row := r
+		// Renew a HearthShelf-issued credential BEFORE the backend is built:
+		// the backend captures the row, so a key refreshed afterwards would not
+		// reach the push. No-op for every other destination type.
+		m.renewHearthShelf(ctx, &row)
 		b, err := m.BuildBackend(&row)
 		if err != nil {
 			dlLog.Warn().Err(err).Str("destination_id", row.ID).Str("type", string(row.Type)).Msg("destinations: build backend failed; skipping")
@@ -63,6 +83,32 @@ func (m *DestinationManager) ListEnabled(ctx context.Context) []DestinationBacke
 		out = append(out, DestinationBackend{Row: row, Backend: b})
 	}
 	return out
+}
+
+// renewHearthShelf refreshes the stored credential for a HearthShelf-managed
+// destination when it is at or near expiry.
+//
+// Best-effort by design. A renewal failure is logged and the existing key is
+// used anyway: it may still work (the expiry is the server's claim, not a
+// guarantee we have observed), and failing the push here would turn a
+// recoverable network blip into a delivery failure. A revoked connection is
+// logged at warn because only the user can fix it.
+func (m *DestinationManager) renewHearthShelf(ctx context.Context, row *database.LibraryDestination) {
+	if m.credBox == nil || row == nil {
+		return
+	}
+	res, err := hearthshelf.RenewDestination(ctx, m.db, m.credBox, nil, row)
+	switch {
+	case err != nil:
+		dlLog.Warn().Err(err).Str("destination_id", row.ID).
+			Msg("destinations: hearthshelf credential renewal failed; using existing key")
+	case res.NeedsReconnect:
+		dlLog.Warn().Str("destination_id", row.ID).Str("destination", row.DisplayName).
+			Msg("destinations: hearthshelf connection was revoked; reconnect required")
+	case res.Renewed:
+		dlLog.Info().Str("destination_id", row.ID).Str("destination", row.DisplayName).
+			Msg("destinations: renewed hearthshelf credential")
+	}
 }
 
 // DestinationBackend pairs a destination row with its constructed Backend.

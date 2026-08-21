@@ -1,0 +1,162 @@
+{{define "reorganize_modal.html"}}
+<!-- Reorganize library: dry-run preview + confirm modal (shared by dashboard & settings) -->
+<div id="reorg-modal" class="modal-overlay" style="display:none" aria-hidden="true">
+    <div class="modal-backdrop" onclick="closeReorgModal()"></div>
+    <div class="modal-dialog reorg-dialog" role="dialog" aria-modal="true" aria-labelledby="reorg-modal-title">
+        <button type="button" class="modal-close" onclick="closeReorgModal()" aria-label="Close">&times;</button>
+        <div class="modal-body">
+            <h2 id="reorg-modal-title" style="margin:0 0 .25rem">Reorganize library</h2>
+            <p class="muted" style="margin:0 0 1rem;font-size:.85rem">Dry run — nothing has been moved yet. Review the plan below, then approve it.</p>
+            <div id="reorg-preview-body" aria-live="polite">
+                <div class="reorg-loading">
+                    <span class="reorg-spinner" aria-hidden="true"></span>
+                    Evaluating your library against the current naming templates&hellip;
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.reorg-dialog { width: min(760px, calc(100vw - 2rem)); }
+.reorg-loading {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    padding: 2rem 1rem;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: .9rem;
+}
+.reorg-spinner {
+    width: 1rem;
+    height: 1rem;
+    border-radius: 999px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    animation: reorg-spin .8s linear infinite;
+    flex: none;
+}
+@keyframes reorg-spin { to { transform: rotate(360deg); } }
+.reorg-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    margin: 0 0 .9rem;
+}
+.reorg-stat {
+    display: flex;
+    align-items: baseline;
+    gap: .4rem;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: .45rem .75rem;
+    font-size: .8rem;
+    color: var(--text-muted);
+}
+.reorg-stat .num {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text-strong);
+}
+.reorg-stat.move .num { color: var(--accent); }
+.reorg-stat.ok .num { color: var(--audible-teal); }
+.reorg-stat.warn .num { color: var(--warning); }
+.reorg-list {
+    max-height: min(44vh, 420px);
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+    margin: 0 0 .9rem;
+}
+.reorg-item {
+    padding: .6rem .75rem;
+    border-bottom: 1px solid var(--border);
+}
+.reorg-item:last-child { border-bottom: none; }
+.reorg-item-title {
+    font-size: .85rem;
+    font-weight: 600;
+    color: var(--text-strong);
+    margin: 0 0 .3rem;
+}
+.reorg-item-title .by {
+    font-weight: 400;
+    color: var(--text-muted);
+}
+.reorg-path {
+    display: flex;
+    align-items: baseline;
+    gap: .45rem;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: .72rem;
+    line-height: 1.5;
+    word-break: break-all;
+}
+.reorg-path .tag {
+    flex: none;
+    width: 2.6em;
+    text-align: right;
+    font-family: var(--font-sans);
+    font-size: .62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+}
+.reorg-path.from .tag { color: var(--text-muted); }
+.reorg-path.to .tag { color: var(--audible-teal); }
+.reorg-path.from { color: var(--text-muted); }
+.reorg-path.from .rest { text-decoration: line-through; text-decoration-color: rgba(233, 69, 96, .55); }
+.reorg-path.to .rest { color: var(--audible-teal); }
+.reorg-path .shared { opacity: .55; }
+.reorg-actions {
+    display: flex;
+    gap: .5rem;
+    justify-content: flex-end;
+    align-items: center;
+}
+#reorg-apply-result { font-size: .8rem; margin-right: auto; }
+</style>
+
+<script>
+function openReorgModal() {
+    var modal = document.getElementById('reorg-modal');
+    var body = document.getElementById('reorg-preview-body');
+    if (!modal || !body) return;
+    body.innerHTML = '<div class="reorg-loading"><span class="reorg-spinner" aria-hidden="true"></span>Evaluating your library against the current naming templates&hellip;</div>';
+    modal.style.display = 'flex';
+    htmx.ajax('GET', '/api/library/reorganize/preview', {
+        target: '#reorg-preview-body',
+        swap: 'innerHTML'
+    }).catch(function() {
+        body.innerHTML = '<div class="alert err"><span class="ico">!</span><div>Could not evaluate the library. Please try again.</div></div>' +
+            '<div class="reorg-actions" style="margin-top:.75rem"><button class="btn btn-outline-ds" type="button" onclick="closeReorgModal()">Close</button></div>';
+    });
+}
+function closeReorgModal() {
+    var modal = document.getElementById('reorg-modal');
+    if (modal) modal.style.display = 'none';
+}
+function confirmReorg() {
+    var btn = document.getElementById('reorg-confirm-btn');
+    var result = document.getElementById('reorg-apply-result');
+    if (btn) { btn.disabled = true; btn.textContent = 'Queuing…'; }
+    htmx.ajax('POST', '/api/library/reorganize', {
+        target: '#reorg-apply-result',
+        swap: 'innerHTML'
+    }).then(function() {
+        if (btn) btn.textContent = 'Queued ✓';
+        ['dashboard-summary', 'dashboard-downloads'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el && window.htmx) htmx.trigger(el, 'queue:last');
+        });
+        setTimeout(closeReorgModal, 1800);
+    }).catch(function() {
+        if (result) result.innerHTML = '<span class="status-msg error">Request failed. Please try again.</span>';
+        if (btn) { btn.disabled = false; btn.textContent = 'Move books'; }
+    });
+}
+</script>
+{{end}}

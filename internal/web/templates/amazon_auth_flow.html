@@ -1,13 +1,12 @@
 {{define "amazon_auth_connected_or_callback"}}
-{{if .Authenticated}}
-<div class="alert ok" role="status">
-    <span class="ico">✓</span>
-    <div><strong>Authenticated</strong> — connected to Audible.</div>
-</div>
-{{else if .AuthURL}}
+{{/* An in-flight auth flow (AuthURL set) must take priority over the
+     "already authenticated" badge — when adding or re-authing a SECOND
+     account, the primary is authenticated, and checking Authenticated
+     first swallowed the sign-in panel entirely. */}}
+{{if .AuthURL}}
 <div class="alert" role="status" style="margin-bottom:1rem">
     <div>
-        <strong>Sign in with Amazon</strong>
+        <strong>Sign in with Amazon</strong>{{if .AuthAccountName}} — connecting <strong>{{.AuthAccountName}}</strong>{{end}}
         <ol style="margin:.5rem 0 .25rem 1.1rem;font-size:.85rem;line-height:1.6">
             <li>Open Amazon login in a new tab.</li>
             <li>Sign in and finish any prompts.</li>
@@ -36,6 +35,7 @@
 <form method="POST" action="/auth/callback">
     <input type="hidden" name="code_verifier" value="{{.CodeVerifier}}">
     <input type="hidden" name="device_serial" value="{{.DeviceSerial}}">
+    <input type="hidden" name="account_id" value="{{.AuthAccountID}}">
     <div class="form-row">
         <label for="redirect_url">Redirect URL</label>
         <input class="input" type="text" id="redirect_url" name="redirect_url"
@@ -80,5 +80,10 @@
     validateRedirect();
 })();
 </script>
+{{else if .Authenticated}}
+<div class="alert ok" role="status">
+    <span class="ico">✓</span>
+    <div><strong>Authenticated</strong> — connected to Audible.</div>
+</div>
 {{end}}
 {{end}}

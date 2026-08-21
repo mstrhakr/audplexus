@@ -10,7 +10,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 // PostgresDB implements Database using PostgreSQL.
@@ -38,7 +38,7 @@ func (p *PostgresDB) Close() error {
 }
 
 func (p *PostgresDB) Reset(ctx context.Context) error {
-	_, err := p.db.ExecContext(ctx, `TRUNCATE books, download_queue, sync_history, settings, devices RESTART IDENTITY CASCADE`)
+	_, err := p.db.ExecContext(ctx, `TRUNCATE books, download_queue, sync_history, settings, devices, users, sessions RESTART IDENTITY CASCADE`)
 	if err != nil {
 		return fmt.Errorf("reset postgres: %w", err)
 	}
@@ -538,6 +538,176 @@ func (p *PostgresDB) DeleteDevice(ctx context.Context, id int64) error {
 	return err
 }
 
+// --- Audible accounts ---
+
+func (p *PostgresDB) CreateAudibleAccount(ctx context.Context, a *AudibleAccount) error {
+	now := time.Now()
+	a.UpdatedAt = now
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = now
+	}
+	_, err := p.db.ExecContext(ctx,
+		`INSERT INTO audible_accounts (id, display_name, marketplace, customer_id, credentials, enabled, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		a.ID, a.DisplayName, a.Marketplace, a.CustomerID, a.Credentials, a.Enabled, a.CreatedAt, a.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("insert audible account: %w", err)
+	}
+	return nil
+}
+
+func (p *PostgresDB) GetAudibleAccount(ctx context.Context, id string) (*AudibleAccount, error) {
+	return p.scanAudibleAccount(p.db.QueryRowContext(ctx,
+		`SELECT id, display_name, marketplace, customer_id, credentials, enabled, created_at, updated_at
+		 FROM audible_accounts WHERE id = $1`, id))
+}
+
+func (p *PostgresDB) GetAudibleAccountByCustomerID(ctx context.Context, customerID string) (*AudibleAccount, error) {
+	if strings.TrimSpace(customerID) == "" {
+		return nil, nil
+	}
+	return p.scanAudibleAccount(p.db.QueryRowContext(ctx,
+		`SELECT id, display_name, marketplace, customer_id, credentials, enabled, created_at, updated_at
+		 FROM audible_accounts WHERE customer_id = $1 LIMIT 1`, customerID))
+}
+
+func (p *PostgresDB) ListAudibleAccounts(ctx context.Context) ([]AudibleAccount, error) {
+	return p.queryAudibleAccounts(ctx,
+		`SELECT id, display_name, marketplace, customer_id, credentials, enabled, created_at, updated_at
+		 FROM audible_accounts ORDER BY created_at`)
+}
+
+func (p *PostgresDB) ListEnabledAudibleAccounts(ctx context.Context) ([]AudibleAccount, error) {
+	return p.queryAudibleAccounts(ctx,
+		`SELECT id, display_name, marketplace, customer_id, credentials, enabled, created_at, updated_at
+		 FROM audible_accounts WHERE enabled = TRUE ORDER BY created_at`)
+}
+
+func (p *PostgresDB) UpdateAudibleAccount(ctx context.Context, a *AudibleAccount) error {
+	a.UpdatedAt = time.Now()
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE audible_accounts SET display_name = $1, marketplace = $2, customer_id = $3,
+		    credentials = $4, enabled = $5, updated_at = $6 WHERE id = $7`,
+		a.DisplayName, a.Marketplace, a.CustomerID, a.Credentials, a.Enabled, a.UpdatedAt, a.ID)
+	if err != nil {
+		return fmt.Errorf("update audible account: %w", err)
+	}
+	return nil
+}
+
+func (p *PostgresDB) DeleteAudibleAccount(ctx context.Context, id string) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM audible_accounts WHERE id = $1`, id)
+	return err
+}
+
+func (p *PostgresDB) SetBookAccount(ctx context.Context, asin, accountID string) error {
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE books SET account_id = $1 WHERE asin = $2`, accountID, asin)
+	return err
+}
+
+func (p *PostgresDB) GetBookAccount(ctx context.Context, asin string) (string, error) {
+	var id string
+	err := p.db.QueryRowContext(ctx, `SELECT account_id FROM books WHERE asin = $1`, asin).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
+func (p *PostgresDB) ReplaceBookAccounts(ctx context.Context, asin string, accountIDs []string) error {
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM book_audible_accounts WHERE asin = $1`, asin); err != nil {
+		return fmt.Errorf("clear book accounts: %w", err)
+	}
+	for _, id := range accountIDs {
+		if id == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO book_audible_accounts (asin, account_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			asin, id); err != nil {
+			return fmt.Errorf("insert book account: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (p *PostgresDB) ListASINsForAccount(ctx context.Context, accountID string) ([]string, error) {
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT asin FROM book_audible_accounts WHERE account_id = $1 ORDER BY asin`, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("list asins for account: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (p *PostgresDB) GetBookAccountsForASINs(ctx context.Context, asins []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(asins))
+	if len(asins) == 0 {
+		return out, nil
+	}
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT asin, account_id FROM book_audible_accounts WHERE asin = ANY($1) ORDER BY account_id`,
+		pq.Array(asins))
+	if err != nil {
+		return nil, fmt.Errorf("get book accounts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var asin, id string
+		if err := rows.Scan(&asin, &id); err != nil {
+			return nil, err
+		}
+		out[asin] = append(out[asin], id)
+	}
+	return out, rows.Err()
+}
+
+func (p *PostgresDB) queryAudibleAccounts(ctx context.Context, query string, args ...any) ([]AudibleAccount, error) {
+	rows, err := p.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list audible accounts: %w", err)
+	}
+	defer rows.Close()
+	var out []AudibleAccount
+	for rows.Next() {
+		var a AudibleAccount
+		if err := rows.Scan(&a.ID, &a.DisplayName, &a.Marketplace, &a.CustomerID,
+			&a.Credentials, &a.Enabled, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan audible account: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (p *PostgresDB) scanAudibleAccount(row *sql.Row) (*AudibleAccount, error) {
+	var a AudibleAccount
+	err := row.Scan(&a.ID, &a.DisplayName, &a.Marketplace, &a.CustomerID,
+		&a.Credentials, &a.Enabled, &a.CreatedAt, &a.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan audible account: %w", err)
+	}
+	return &a, nil
+}
+
 // --- Helpers ---
 
 func (p *PostgresDB) scanBook(row *sql.Row) (*Book, error) {
@@ -636,9 +806,195 @@ func buildBookWherePostgres(filter BookFilter) (string, []interface{}) {
 		args = append(args, destID)
 		paramIdx++
 	}
+	if filter.AccountID != "" {
+		// books.account_id is the legacy single-owner fallback for rows
+		// synced before the junction existed.
+		clauses = append(clauses, fmt.Sprintf("(EXISTS (SELECT 1 FROM book_audible_accounts baa WHERE baa.asin = books.asin AND baa.account_id = $%d) OR books.account_id = $%d)", paramIdx, paramIdx+1))
+		args = append(args, filter.AccountID, filter.AccountID)
+		paramIdx += 2
+	}
 
 	if len(clauses) == 0 {
 		return "", nil
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
 }
+
+// --- Users ---
+
+const pgUserColumns = `id, username, password, salt, iterations, identifier,
+	oidc_subject, oidc_issuer, auth_source, created_at, updated_at`
+
+func (p *PostgresDB) scanUser(row *sql.Row) (*User, error) {
+	var u User
+	err := row.Scan(&u.ID, &u.Username, &u.Password, &u.Salt, &u.Iterations,
+		&u.Identifier, &u.OIDCSubject, &u.OIDCIssuer, &u.AuthSource,
+		&u.CreatedAt, &u.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (p *PostgresDB) GetUserByUsername(ctx context.Context, username string) (*User, error) {
+	return p.scanUser(p.db.QueryRowContext(ctx,
+		`SELECT `+pgUserColumns+`
+		 FROM users WHERE username = $1 LIMIT 1`, username))
+}
+
+func (p *PostgresDB) GetUserByID(ctx context.Context, id int64) (*User, error) {
+	return p.scanUser(p.db.QueryRowContext(ctx,
+		`SELECT `+pgUserColumns+` FROM users WHERE id = $1`, id))
+}
+
+func (p *PostgresDB) GetFirstUser(ctx context.Context) (*User, error) {
+	return p.scanUser(p.db.QueryRowContext(ctx,
+		`SELECT `+pgUserColumns+` FROM users ORDER BY id ASC LIMIT 1`))
+}
+
+func (p *PostgresDB) GetUserByOIDC(ctx context.Context, issuer, subject string) (*User, error) {
+	if subject == "" {
+		return nil, nil
+	}
+	return p.scanUser(p.db.QueryRowContext(ctx,
+		`SELECT `+pgUserColumns+`
+		 FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2 AND oidc_subject <> '' LIMIT 1`,
+		issuer, subject))
+}
+
+func (p *PostgresDB) CountUsers(ctx context.Context) (int, error) {
+	var n int
+	err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)
+	return n, err
+}
+
+func (p *PostgresDB) UpsertUser(ctx context.Context, user *User) error {
+	now := time.Now()
+	user.UpdatedAt = now
+	if user.CreatedAt.IsZero() {
+		user.CreatedAt = now
+	}
+	if user.AuthSource == "" {
+		user.AuthSource = "forms"
+	}
+	if user.ID == 0 {
+		err := p.db.QueryRowContext(ctx,
+			`INSERT INTO users (username, password, salt, iterations, identifier,
+			                    oidc_subject, oidc_issuer, auth_source, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+			user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
+			user.OIDCSubject, user.OIDCIssuer, user.AuthSource,
+			user.CreatedAt, user.UpdatedAt).Scan(&user.ID)
+		if err != nil {
+			if isPostgresUniqueErr(err) {
+				return ErrDuplicateUser
+			}
+			return fmt.Errorf("insert user: %w", err)
+		}
+		return nil
+	}
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE users SET username = $1, password = $2, salt = $3, iterations = $4,
+		                  identifier = $5, oidc_subject = $6, oidc_issuer = $7,
+		                  auth_source = $8, updated_at = $9
+		 WHERE id = $10`,
+		user.Username, user.Password, user.Salt, user.Iterations, user.Identifier,
+		user.OIDCSubject, user.OIDCIssuer, user.AuthSource,
+		user.UpdatedAt, user.ID)
+	if err != nil {
+		if isPostgresUniqueErr(err) {
+			return ErrDuplicateUser
+		}
+		return fmt.Errorf("update user: %w", err)
+	}
+	return nil
+}
+
+// isPostgresUniqueErr reports whether err carries Postgres SQLSTATE 23505
+// (unique_violation). We match on the error text rather than the driver's
+// typed error so this stays driver-agnostic — every Go pq driver wraps the
+// SQLSTATE into the error message.
+func isPostgresUniqueErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "23505") || strings.Contains(msg, "unique_violation") || strings.Contains(msg, "duplicate key value")
+}
+
+func (p *PostgresDB) RotateUserIdentifier(ctx context.Context, userID int64, newIdentifier string) error {
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE users SET identifier = $1, updated_at = $2 WHERE id = $3`,
+		newIdentifier, time.Now(), userID)
+	return err
+}
+
+func (p *PostgresDB) DeleteUser(ctx context.Context, id int64) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM users WHERE id = $1`, id)
+	return err
+}
+
+// --- Sessions ---
+
+func (p *PostgresDB) CreateSession(ctx context.Context, sess *Session) error {
+	now := time.Now()
+	if sess.CreatedAt.IsZero() {
+		sess.CreatedAt = now
+	}
+	if sess.LastSeen.IsZero() {
+		sess.LastSeen = now
+	}
+	_, err := p.db.ExecContext(ctx,
+		`INSERT INTO sessions (token, user_id, identifier, expires_at, last_seen, created_at, user_agent, ip)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		sess.Token, sess.UserID, sess.Identifier, sess.ExpiresAt, sess.LastSeen,
+		sess.CreatedAt, sess.UserAgent, sess.IP)
+	if err != nil {
+		return fmt.Errorf("insert session: %w", err)
+	}
+	return nil
+}
+
+func (p *PostgresDB) GetSession(ctx context.Context, token string) (*Session, error) {
+	var sess Session
+	err := p.db.QueryRowContext(ctx,
+		`SELECT token, user_id, identifier, expires_at, last_seen, created_at, user_agent, ip
+		 FROM sessions WHERE token = $1`, token).Scan(
+		&sess.Token, &sess.UserID, &sess.Identifier, &sess.ExpiresAt, &sess.LastSeen,
+		&sess.CreatedAt, &sess.UserAgent, &sess.IP)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sess, nil
+}
+
+func (p *PostgresDB) TouchSession(ctx context.Context, token string, lastSeen time.Time) error {
+	_, err := p.db.ExecContext(ctx,
+		`UPDATE sessions SET last_seen = $1 WHERE token = $2`, lastSeen, token)
+	return err
+}
+
+func (p *PostgresDB) DeleteSession(ctx context.Context, token string) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM sessions WHERE token = $1`, token)
+	return err
+}
+
+func (p *PostgresDB) DeleteSessionsForUser(ctx context.Context, userID int64) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID)
+	return err
+}
+
+func (p *PostgresDB) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error) {
+	res, err := p.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < $1`, now)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+

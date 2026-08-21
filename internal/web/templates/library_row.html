@@ -30,8 +30,17 @@
     <td class="cell-mono col-purchased">{{formatDate .Book.PurchaseDate}}</td>
     <td class="col-status"><span class="badge {{statusBadge .Book.Status}}" id="status-book-{{.Book.ID}}">{{.Book.Status}}</span></td>
     <td class="col-presence">
-        {{if .Presence}}
+        {{if or .Presence .Accounts}}
         <div class="presence-cell" role="list" aria-label="Presence">
+            {{if .Accounts}}
+            {{/* Which Audible account(s) this book comes from. Only set when
+                 more than one account is connected. */}}
+            <span class="presence-chip presence-chip--dest is-lit is-synced"
+                  role="listitem"
+                  title="From Audible account(s): {{.Accounts}}">
+                <img src="/static/audible.svg" alt="">
+            </span>
+            {{end}}
             {{range .Presence}}
             {{if eq .Kind "disk"}}
             <span class="presence-chip presence-chip--disk{{if .Lit}} is-lit{{end}}"

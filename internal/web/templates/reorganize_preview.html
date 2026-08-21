@@ -1,0 +1,44 @@
+{{define "reorganize_preview.html"}}
+{{if .Error}}
+<div class="alert err"><span class="ico">!</span><div>Could not evaluate the library: {{.Error}}</div></div>
+<div class="reorg-actions" style="margin-top:.75rem">
+    <button class="btn btn-outline-ds" type="button" onclick="closeReorgModal()">Close</button>
+</div>
+{{else}}
+<div class="reorg-stats">
+    <div class="reorg-stat move"><span class="num">{{.MoveCount}}</span> to move</div>
+    <div class="reorg-stat ok"><span class="num">{{.Unchanged}}</span> already organized</div>
+    {{if .Missing}}<div class="reorg-stat warn"><span class="num">{{.Missing}}</span> missing on disk</div>{{end}}
+    <div class="reorg-stat"><span class="num">{{.Total}}</span> books checked</div>
+</div>
+
+{{if .Moves}}
+<div class="reorg-list">
+    {{range .Moves}}
+    <div class="reorg-item">
+        <div class="reorg-item-title">{{.Title}}{{if .Author}} <span class="by">— {{.Author}}</span>{{end}}</div>
+        <div class="reorg-path from"><span class="tag">from</span><span>{{if .Prefix}}<span class="shared">{{.Prefix}}</span>{{end}}<span class="rest">{{.FromRest}}</span></span></div>
+        <div class="reorg-path to"><span class="tag">to</span><span>{{if .Prefix}}<span class="shared">{{.Prefix}}</span>{{end}}<span class="rest">{{.ToRest}}</span></span></div>
+    </div>
+    {{end}}
+</div>
+<div class="alert warn" style="margin:0 0 .9rem">
+    <span class="ico">!</span>
+    <div>Approving will rename/move these files on disk to match your current naming templates. Books already in the right place are left untouched. Media servers will rescan automatically.</div>
+</div>
+<div class="reorg-actions">
+    <span id="reorg-apply-result"></span>
+    <button class="btn btn-outline-ds" type="button" onclick="closeReorgModal()">Cancel</button>
+    <button class="btn btn-primary" type="button" id="reorg-confirm-btn" onclick="confirmReorg()">Move {{.MoveCount}} book{{if ne .MoveCount 1}}s{{end}}</button>
+</div>
+{{else}}
+<div class="alert ok" style="margin:0 0 .9rem">
+    <span class="ico">✓</span>
+    <div>Everything already matches your current naming templates — there is nothing to reorganize.</div>
+</div>
+<div class="reorg-actions">
+    <button class="btn btn-secondary" type="button" onclick="closeReorgModal()">Close</button>
+</div>
+{{end}}
+{{end}}
+{{end}}

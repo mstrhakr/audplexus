@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <!-- Generic headphones-over-circle mark used as the "from Audible account"
+       presence chip. Original art, not the Audible trademark. -->
+  <circle cx="12" cy="12" r="11" fill="#f8991c"/>
+  <path d="M5.5 13.5v-1a6.5 6.5 0 0 1 13 0v1" fill="none" stroke="#1a1a1a" stroke-width="2" stroke-linecap="round"/>
+  <rect x="4.5" y="12.5" width="3.2" height="5.5" rx="1.4" fill="#1a1a1a"/>
+  <rect x="16.3" y="12.5" width="3.2" height="5.5" rx="1.4" fill="#1a1a1a"/>
+</svg>

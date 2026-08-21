@@ -1,9 +1,15 @@
 package database
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
+
+// ErrDuplicateUser is returned by UpsertUser when a concurrent insert wins
+// the race for the same username. Handlers surface this as a friendly 409
+// instead of leaking the driver-specific "UNIQUE constraint failed" message.
+var ErrDuplicateUser = errors.New("user with that username already exists")
 
 // Book represents an audiobook in the local database.
 type Book struct {
@@ -29,6 +35,12 @@ type Book struct {
 	FileSize           int64      `json:"file_size"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+
+	// AccountID is the Audible account this book was synced from. It is NOT
+	// populated by the normal book scans (to keep those hot paths untouched);
+	// resolve it on demand via GetBookAccount. Empty means "legacy /
+	// single-account" and download routing falls back to the default account.
+	AccountID string `json:"account_id,omitempty"`
 }
 
 // BookStatus represents the processing state of a book.
@@ -112,6 +124,27 @@ type Device struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// AudibleAccount is one connected Audible account. Mirrors the
+// LibraryDestination model: most installs have exactly one, but the schema and
+// UI support several. Credentials holds the full audible.Credentials JSON blob
+// (same shape as the legacy credentials.json file).
+type AudibleAccount struct {
+	ID          string    `json:"id"`
+	DisplayName string    `json:"display_name"`
+	Marketplace string    `json:"marketplace"`
+	CustomerID  string    `json:"customer_id"`
+	Credentials []byte    `json:"-"` // sensitive; never marshal
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// HasCredentials reports whether the account has a stored credential blob,
+// without exposing it. Used by the Settings UI to show auth status.
+func (a *AudibleAccount) HasCredentials() bool {
+	return len(a.Credentials) > 0
+}
+
 // LibraryDestinationType identifies a destination kind. Matches the `type`
 // column on library_destinations and the Go-side Backend.Type() return.
 type LibraryDestinationType string
@@ -174,6 +207,37 @@ func redactToken(s string) string {
 		return "<unset>"
 	}
 	return "<redacted>"
+}
+
+// User is the single-admin auth row. Password/Salt are base64-encoded PBKDF2
+// outputs; never expose Password or Salt in JSON responses or logs.
+type User struct {
+	ID         int64     `json:"id"`
+	Username   string    `json:"username"`
+	Password   string    `json:"-"`
+	Salt       string    `json:"-"`
+	Iterations int       `json:"-"`
+	Identifier string    `json:"-"` // UUID; rotation invalidates sessions
+	// OIDC identity. Empty for forms users. Matched on (OIDCIssuer,
+	// OIDCSubject) when logging in via an OIDC provider.
+	OIDCSubject string    `json:"-"`
+	OIDCIssuer  string    `json:"-"`
+	AuthSource  string    `json:"auth_source,omitempty"` // "forms" | "oidc"
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// Session is one logged-in cookie session. Token is the opaque random value
+// stored in the session cookie; never expose it.
+type Session struct {
+	Token      string    `json:"-"`
+	UserID     int64     `json:"user_id"`
+	Identifier string    `json:"-"` // snapshot of users.identifier at creation
+	ExpiresAt  time.Time `json:"expires_at"`
+	LastSeen   time.Time `json:"last_seen"`
+	CreatedAt  time.Time `json:"created_at"`
+	UserAgent  string    `json:"user_agent,omitempty"`
+	IP         string    `json:"ip,omitempty"`
 }
 
 // BookDestinationSyncState is the per-(book, destination) state machine.

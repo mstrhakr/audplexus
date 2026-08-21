@@ -99,6 +99,7 @@
             <dt>Purchased</dt><dd>{{formatDate .Book.PurchaseDate}}</dd>
             <dt>Publisher</dt><dd>{{if .Book.Publisher}}{{.Book.Publisher}}{{else}}—{{end}}</dd>
             <dt>ASIN</dt><dd class="cell-mono">{{.Book.ASIN}}</dd>
+            {{if .BookAccountNames}}<dt>Audible account(s)</dt><dd>{{.BookAccountNames}}</dd>{{end}}
             {{if .BookFolderPath}}<dt>Folder</dt><dd class="cell-mono" style="font-size:.75rem;word-break:break-all">{{.BookFolderPath}}</dd>{{end}}
         </dl>
 

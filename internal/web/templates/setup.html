@@ -22,7 +22,11 @@
         </ol>
 
         <div class="onboard-body">
-            {{if eq .CurrentStep 0}}
+            {{if .Error}}
+            <div class="alert err" style="margin-bottom:1rem" role="alert"><span class="ico">!</span><div>{{.Error}}</div></div>
+            {{end}}
+
+            {{if eq .StepKind "welcome"}}
                 <h2>Let's get your library moving.</h2>
                 <p class="sub">Audplexus syncs your Audible purchases, decrypts and converts them to m4b, then pushes them into your media servers. Setup takes about 4 minutes.</p>
                 <div class="onboard-feature-grid">
@@ -57,9 +61,44 @@
                 <div class="alert" style="margin-top:1.5rem">
                     <div>You'll need your Audible login and at least one media server URL. We never store your Audible password — only an activation token.</div>
                 </div>
+                <p class="sub" style="margin-top:1rem;font-size:.85rem">
+                    Migrating from another install? <a href="/setup/restore">Restore from backup →</a>
+                </p>
             {{end}}
 
-            {{if eq .CurrentStep 1}}
+            {{if eq .StepKind "admin"}}
+                <h2>Create your admin account</h2>
+                <p class="sub">This account signs you in to Audplexus. It's the only account on the server — you can change auth settings later under Settings → Security.</p>
+
+                {{if .AdminExists}}
+                <div class="alert ok">
+                    <span class="ico">✓</span>
+                    <div><b>Admin account already created</b> as <code>{{.AdminUsername}}</code>. You can change the password from Settings → Security after setup.</div>
+                </div>
+                <p class="hint" style="margin-top:.75rem">To replace it, enter new credentials below.</p>
+                {{end}}
+
+                <form method="POST" action="/setup/admin" class="onboard-form" style="display:grid;gap:.9rem;max-width:420px;margin-top:1rem">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    <label style="display:grid;gap:.3rem">
+                        <span class="row-label">Username</span>
+                        <input type="text" name="username" autocomplete="username" required value="{{.AdminUsername}}">
+                    </label>
+                    <label style="display:grid;gap:.3rem">
+                        <span class="row-label">Password <span class="hint" style="margin:0">(8+ characters)</span></span>
+                        <input type="password" name="password" autocomplete="new-password" minlength="8" required>
+                    </label>
+                    <div style="display:flex;gap:.5rem;align-items:center">
+                        <button type="submit" class="btn btn-primary">{{if .AdminExists}}Update account and continue{{else}}Create account and continue{{end}} →</button>
+                        {{if not .AdminExists}}
+                        <a href="/setup/admin/skip" class="btn btn-ghost"
+                           onclick="return confirm('Skip authentication? Anyone who can reach this server will have full access. You can enable it later from Security.')">Skip — set up later</a>
+                        {{end}}
+                    </div>
+                </form>
+            {{end}}
+
+            {{if eq .StepKind "audible"}}
                 <h2>Connect your Audible account</h2>
                 <p class="sub">Pick your Audible region. The next step redirects you through Amazon's official sign-in to capture an activation token — we never see your password.</p>
 
@@ -90,7 +129,7 @@
                 {{end}}
             {{end}}
 
-            {{if eq .CurrentStep 2}}
+            {{if eq .StepKind "destinations"}}
                 <h2>Add a destination</h2>
                 <p class="sub">Connect at least one media server so Audplexus knows where to push processed files. You can add more later.</p>
 
@@ -126,7 +165,7 @@
                 </div>
             {{end}}
 
-            {{if eq .CurrentStep 3}}
+            {{if eq .StepKind "done"}}
                 <h2>You're all set.</h2>
                 <p class="sub">Audplexus is ready to run its first sync. You can change anything from Settings later.</p>
                 <div class="card">
@@ -168,10 +207,17 @@
             {{end}}
             <div class="right" style="margin-left:auto;display:flex;gap:.5rem">
                 {{if lt .CurrentStep (sub (len .Steps) 1)}}
-                    {{if and (eq .CurrentStep 1) (not .Authenticated)}}
+                    {{if and (eq .StepKind "audible") (not .Authenticated)}}
                         <a href="/setup?step={{add .CurrentStep 1}}" class="btn btn-ghost">Skip sign-in for now</a>
                     {{end}}
-                    <a href="/setup?step={{add .CurrentStep 1}}" class="btn btn-primary">Continue →</a>
+                    {{if and (eq .StepKind "admin") (not .AdminExists)}}
+                        {{/* Continue is intentionally absent: the user must
+                             post the form or hit the inline "Skip" link
+                             above. Showing a generic Continue here would
+                             let them bypass the gate. */}}
+                    {{else}}
+                        <a href="/setup?step={{add .CurrentStep 1}}" class="btn btn-primary">Continue →</a>
+                    {{end}}
                 {{else}}
                     <form method="POST" action="/setup/finish" id="setup-finish-form" style="margin:0">
                         <button type="submit" class="btn btn-primary">Start sync</button>

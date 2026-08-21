@@ -12,7 +12,7 @@
             </div>
             <button hx-post="/api/downloads/queue-all" hx-swap="none" class="btn btn-secondary">Queue All New</button>
             <button hx-post="/api/downloads/retry-all" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-danger">Retry Failed</button>
-            <button hx-post="/api/library/reorganize" hx-target="#sync-status" hx-swap="innerHTML" class="btn btn-secondary">Reorganize</button>
+            <button type="button" onclick="openReorgModal()" class="btn btn-secondary" title="Preview which files would be renamed/moved to match your naming templates — nothing moves until you approve">Reorganize…</button>
             <button id="queue-toggle-btn" data-paused="{{if .QueuePaused}}1{{else}}0{{end}}" class="btn {{if .QueuePaused}}btn-primary{{else}}btn-secondary{{end}}">{{if .QueuePaused}}Resume Queue{{else}}Pause Queue{{end}}</button>
             <span id="dl-status" class="status-msg"></span>
         </div>
@@ -42,6 +42,7 @@
     </div>
 
     {{template "book_detail_modal.html" .}}
+    {{template "reorganize_modal.html" .}}
 </div>
 
 <style>
