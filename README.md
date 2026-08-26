@@ -73,6 +73,8 @@ More details: [Unraid App Store Setup](docs/user/unraid-app-store.md)
 - Open the web UI at `http://localhost:8080`
 - Connect Audible first
 - Add a library destination if you want automatic scans after downloads
+- The web app login is disabled by default on a fresh install. No default username/password is shipped.
+- To enable a bootstrap admin account, set `AUDPLEXUS_ADMIN_USERNAME` and `AUDPLEXUS_ADMIN_PASSWORD` before the first start. If both are set on a brand-new install, Audplexus creates the admin user automatically and turns Forms auth on.
 - Use the user guide for task-by-task help when you need more detail
 
 ## Common Paths

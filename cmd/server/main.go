@@ -277,9 +277,13 @@ func loadCredentials(client *audible.Client, path string) error {
 // seedAuthDefaults picks an initial auth_method for the installation.
 //
 //   - Fresh install (no books, no destinations, no settings → no auth_method
-//     yet and no "onboarded" marker): default to forms + enabled. The setup
-//     wizard funnels the user to /setup/admin so they create an admin row
-//     before they can finish onboarding.
+//     yet and no "onboarded" marker): default to none + disabled_for_localhost
+//     so the app boots without a baked-in admin login.
+//
+//   - If both AUDPLEXUS_ADMIN_USERNAME and AUDPLEXUS_ADMIN_PASSWORD are set,
+//     we treat that as an explicit bootstrap override and enable Forms auth for
+//     the first-user setup. This is the only built-in default path, and it is
+//     intentionally opt-in via environment.
 //
 //   - Upgrade install (has data but no auth_method): default to none with
 //     auth_required=disabled_for_localhost so loopback integrations keep
@@ -292,15 +296,32 @@ func seedAuthDefaults(ctx context.Context, db database.Database) {
 	if existing != "" {
 		return
 	}
+
+	username := strings.TrimSpace(os.Getenv("AUDPLEXUS_ADMIN_USERNAME"))
+	password := strings.TrimSpace(os.Getenv("AUDPLEXUS_ADMIN_PASSWORD"))
+	if username != "" && password != "" {
+		count, err := db.CountUsers(ctx)
+		if err == nil && count == 0 {
+			if _, err := auth.CreateOrUpdateAdmin(ctx, db, username, password); err != nil {
+				log.Warn().Err(err).Str("username", username).Msg("failed to bootstrap admin from env")
+			} else {
+				_ = db.SetSetting(ctx, auth.SettingKeyAuthMethod, string(auth.AuthMethodForms))
+				_ = db.SetSetting(ctx, auth.SettingKeyAuthRequired, string(auth.AuthRequiredEnabled))
+				log.Info().Str("username", username).Msg("auth defaults seeded: forms + required from env bootstrap")
+				return
+			}
+		}
+	}
+
 	// "Has any prior state" heuristic. onboarded is set by the setup wizard
 	// completion handler — its presence is the most reliable upgrade
 	// indicator since brand-new DBs always start with it empty.
 	onboarded, _ := db.GetSetting(ctx, "onboarded")
 	isFresh := onboarded == ""
 	if isFresh {
-		_ = db.SetSetting(ctx, auth.SettingKeyAuthMethod, string(auth.AuthMethodForms))
-		_ = db.SetSetting(ctx, auth.SettingKeyAuthRequired, string(auth.AuthRequiredEnabled))
-		log.Info().Msg("auth defaults seeded: forms + required")
+		_ = db.SetSetting(ctx, auth.SettingKeyAuthMethod, string(auth.AuthMethodNone))
+		_ = db.SetSetting(ctx, auth.SettingKeyAuthRequired, string(auth.AuthRequiredDisabledForLocalhost))
+		log.Info().Msg("auth defaults seeded: NONE (fresh install) — opt in with AUDPLEXUS_ADMIN_USERNAME / AUDPLEXUS_ADMIN_PASSWORD")
 		return
 	}
 	_ = db.SetSetting(ctx, auth.SettingKeyAuthMethod, string(auth.AuthMethodNone))
@@ -420,4 +441,3 @@ func detectMarketplace(credPath string) (audible.Marketplace, string) {
 
 	return audible.MarketplaceUS, "us"
 }
-
