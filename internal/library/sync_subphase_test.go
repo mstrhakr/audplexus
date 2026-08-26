@@ -191,3 +191,35 @@ func TestSetPhaseProgress_ZeroTotalDoesNotPanic(t *testing.T) {
 		t.Fatalf("current = %d, want 0", phase.Current)
 	}
 }
+
+func TestSuspiciousZeroLibrary_ReturnsErrorWhenPriorBooksExist(t *testing.T) {
+	prev := &database.SyncHistory{BooksFound: 5, Status: "complete"}
+
+	err := suspiciousZeroLibrary(0, prev)
+	if err == nil {
+		t.Fatal("expected suspicious-zero error, got nil")
+	}
+	if got, want := err.Error(), "0 books"; got == "" || !contains(got, want) {
+		t.Fatalf("error = %q, want to contain %q", got, want)
+	}
+}
+
+func TestSuspiciousZeroLibrary_AllowsFreshEmptyLibrary(t *testing.T) {
+	if err := suspiciousZeroLibrary(0, nil); err != nil {
+		t.Fatalf("expected no error for a truly empty first sync, got %v", err)
+	}
+	if err := suspiciousZeroLibrary(0, &database.SyncHistory{BooksFound: 0, Status: "complete"}); err != nil {
+		t.Fatalf("expected no error for previously empty library, got %v", err)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(substr) == 0 || (len(s) >= len(substr) && (func() bool {
+		for i := 0; i+len(substr) <= len(s); i++ {
+			if s[i:i+len(substr)] == substr {
+				return true
+			}
+		}
+		return false
+	})())
+}

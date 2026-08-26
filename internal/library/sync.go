@@ -1167,6 +1167,22 @@ func fetchEntireLibraryWithTotal(ctx context.Context, client *audible.Client, re
 	return all, total, nil
 }
 
+func suspiciousZeroLibrary(currentTotal int, previous *database.SyncHistory) error {
+	if currentTotal > 0 {
+		return nil
+	}
+	if previous == nil {
+		return nil
+	}
+	if previous.Status != "complete" && previous.Status != "partial" {
+		return nil
+	}
+	if previous.BooksFound <= 0 {
+		return nil
+	}
+	return fmt.Errorf("audible library unexpectedly returned 0 books after previously syncing %d books; this usually indicates expired or broken Audible auth, account access loss, or a marketplace/session mismatch", previous.BooksFound)
+}
+
 func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.SyncHistory) (int, error) {
 	startTime := time.Now()
 	syncLog.Info().Msg("starting audible library sync")
@@ -1273,11 +1289,19 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			Msg("fetched account library")
 	}
 	if len(entries) == 0 {
+		last, _ := s.db.GetLastSync(ctx)
+		if err := suspiciousZeroLibrary(0, last); err != nil {
+			return 0, err
+		}
 		return 0, fmt.Errorf("audible library fetch failed for all accounts")
 	}
 	fetchMs := time.Since(fetchStart).Milliseconds()
 
 	total := len(entries)
+	last, _ := s.db.GetLastSync(ctx)
+	if err := suspiciousZeroLibrary(total, last); err != nil {
+		return 0, err
+	}
 	syncRecord.BooksFound = total
 	s.mu.Lock()
 	s.progress.BooksFound = total
