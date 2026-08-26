@@ -981,25 +981,24 @@ func setPhaseProgress(phase *PhaseStatus, current, total int, indeterminate bool
 		return
 	}
 
-	if phase.Total > 0 {
-		phase.Percent = float64(phase.Current) / float64(phase.Total)
-		if phase.Percent < 0 {
-			phase.Percent = 0
-		}
-		if phase.Percent > 1 {
+	if phase.Total <= 0 {
+		if status == "complete" || status == "skipped" {
+			phase.Current = 1
+			phase.Total = 1
 			phase.Percent = 1
+			return
 		}
+		phase.Percent = 0
 		return
 	}
 
-	if status == "complete" || status == "skipped" {
-		phase.Current = 1
-		phase.Total = 1
+	phase.Percent = float64(phase.Current) / float64(phase.Total)
+	if phase.Percent < 0 {
+		phase.Percent = 0
+	}
+	if phase.Percent > 1 {
 		phase.Percent = 1
-		return
 	}
-
-	phase.Percent = 0
 }
 
 func (s *SyncService) overallStatus() string {

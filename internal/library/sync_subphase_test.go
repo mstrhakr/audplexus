@@ -169,3 +169,25 @@ func TestSubPhaseFnFor_NoopForUnknownPhase(t *testing.T) {
 		}
 	}
 }
+
+func TestSetPhaseProgress_ZeroTotalDoesNotPanic(t *testing.T) {
+	phase := PhaseStatus{Name: PhaseAudibleSync}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("setPhaseProgress panicked for zero total: %v", r)
+		}
+	}()
+
+	setPhaseProgress(&phase, 0, 0, false, "running")
+
+	if phase.Percent != 0 {
+		t.Fatalf("percent = %f, want 0", phase.Percent)
+	}
+	if phase.Total != 0 {
+		t.Fatalf("total = %d, want 0", phase.Total)
+	}
+	if phase.Current != 0 {
+		t.Fatalf("current = %d, want 0", phase.Current)
+	}
+}
