@@ -593,10 +593,17 @@
                     <div>No API key is stored yet. Generate one to enable external integrations (Sonarr, scripts, mobile apps).</div>
                 </div>
                 {{end}}
-                <form method="POST" action="/settings/security/api-key/rotate" onsubmit="return {{if .APIKey}}confirm('Rotate the API key? Every external integration using the current key will stop working until you update it.'){{else}}true{{end}};">
+                {{if .APIKey}}
+                <form method="POST" action="/settings/security/api-key/rotate" onsubmit="return confirm('Rotate the API key? Every external integration using the current key will stop working until you update it.');">
                     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-                    <button type="submit" class="btn btn-secondary">{{if .APIKey}}Rotate key{{else}}Generate key{{end}}</button>
+                    <button type="submit" class="btn btn-secondary">Rotate key</button>
                 </form>
+                {{else}}
+                <form method="POST" action="/settings/security/api-key/rotate">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    <button type="submit" class="btn btn-secondary">Generate key</button>
+                </form>
+                {{end}}
             </div>
         </div>
 
