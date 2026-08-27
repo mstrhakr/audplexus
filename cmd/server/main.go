@@ -39,7 +39,14 @@ func main() {
 	cfg.LoadFromEnv()
 
 	// Initialize logging (must happen after config is loaded)
-	logging.Init(cfg.Log.Level, cfg.Log.JSON)
+	logging.Init(cfg.Log.Level, cfg.Log.JSON, logging.FileConfig{
+		Enabled:    cfg.Log.FileEnabled,
+		Path:       cfg.Log.FilePath,
+		MaxSizeMB:  cfg.Log.FileMaxSizeMB,
+		MaxBackups: cfg.Log.FileMaxBackups,
+		MaxAgeDays: cfg.Log.FileMaxAgeDays,
+		Compress:   cfg.Log.FileCompress,
+	})
 	log = logging.Component("main")
 
 	log.Info().
@@ -80,6 +87,17 @@ func main() {
 
 	// Apply runtime-configurable settings stored in DB (override config file defaults).
 	applyDBSettings(db, cfg)
+
+	// Re-apply logger configuration after DB settings are merged.
+	logging.Init(cfg.Log.Level, cfg.Log.JSON, logging.FileConfig{
+		Enabled:    cfg.Log.FileEnabled,
+		Path:       cfg.Log.FilePath,
+		MaxSizeMB:  cfg.Log.FileMaxSizeMB,
+		MaxBackups: cfg.Log.FileMaxBackups,
+		MaxAgeDays: cfg.Log.FileMaxAgeDays,
+		Compress:   cfg.Log.FileCompress,
+	})
+	log = logging.Component("main")
 
 	// Ensure directories exist
 	for _, dir := range []string{cfg.Paths.Audiobooks, cfg.Paths.Downloads, cfg.Paths.Config} {
@@ -358,7 +376,12 @@ func applyDBSettings(db database.Database, cfg *config.Config) {
 	cfg.Download.ProcessConcurrency = resolveIntSetting(ctx, db, "process_concurrency", cfg.Download.ProcessConcurrency)
 
 	cfg.Log.Level = resolveStringSetting(ctx, db, "log_level", cfg.Log.Level)
-	logging.SetLevel(cfg.Log.Level)
+	cfg.Log.FileEnabled = resolveBoolSetting(ctx, db, "log_file_enabled", cfg.Log.FileEnabled)
+	cfg.Log.FilePath = resolveStringSetting(ctx, db, "log_file_path", cfg.Log.FilePath)
+	cfg.Log.FileMaxSizeMB = resolveIntSetting(ctx, db, "log_file_max_size_mb", cfg.Log.FileMaxSizeMB)
+	cfg.Log.FileMaxBackups = resolveIntSetting(ctx, db, "log_file_max_backups", cfg.Log.FileMaxBackups)
+	cfg.Log.FileMaxAgeDays = resolveIntSetting(ctx, db, "log_file_max_age_days", cfg.Log.FileMaxAgeDays)
+	cfg.Log.FileCompress = resolveBoolSetting(ctx, db, "log_file_compress", cfg.Log.FileCompress)
 
 	// Seed Plex values from config/env once if DB has not been configured yet.
 	_ = resolveStringSetting(ctx, db, "plex_url", cfg.Plex.URL)

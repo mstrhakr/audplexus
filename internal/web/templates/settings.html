@@ -316,8 +316,47 @@
                     </select>
                     <div class="hint">Minimum severity for log output. Changes take effect immediately.</div>
                 </div>
+
+                <div class="form-row">
+                    <label for="log_file_enabled">Log to rotating file</label>
+                    <input type="hidden" name="log_file_enabled_sent" value="1">
+                    <label class="toggle" style="display:inline-flex;align-items:center;gap:.5rem">
+                        <input type="checkbox" id="log_file_enabled" name="log_file_enabled" value="true" {{if .LogFileEnabled}}checked{{end}}>
+                        <span>Enable file logs</span>
+                    </label>
+                    <div class="hint">Writes logs to disk with rotation. Restart required after changes.</div>
+                </div>
+
+                <div class="form-row">
+                    <label for="log_file_path">Log file path</label>
+                    <input class="input" type="text" id="log_file_path" name="log_file_path" value="{{.LogFilePath}}" placeholder="/config/logs/audplexus.log">
+                </div>
+
+                <div class="form-row">
+                    <label for="log_file_max_size_mb">Rotate at size (MB)</label>
+                    <input class="input" type="number" id="log_file_max_size_mb" name="log_file_max_size_mb" value="{{.LogFileMaxSizeMB}}" min="1" max="1024">
+                </div>
+
+                <div class="form-row">
+                    <label for="log_file_max_backups">Files to keep</label>
+                    <input class="input" type="number" id="log_file_max_backups" name="log_file_max_backups" value="{{.LogFileMaxBackups}}" min="1" max="100">
+                </div>
+
+                <div class="form-row">
+                    <label for="log_file_max_age_days">Max age (days)</label>
+                    <input class="input" type="number" id="log_file_max_age_days" name="log_file_max_age_days" value="{{.LogFileMaxAgeDays}}" min="1" max="3650">
+                </div>
+
+                <div class="form-row">
+                    <label for="log_file_compress">Compress rotated files</label>
+                    <input type="hidden" name="log_file_compress_sent" value="1">
+                    <label class="toggle" style="display:inline-flex;align-items:center;gap:.5rem">
+                        <input type="checkbox" id="log_file_compress" name="log_file_compress" value="true" {{if .LogFileCompress}}checked{{end}}>
+                        <span>Use gzip for old logs</span>
+                    </label>
+                </div>
             </div>
-            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">Worker count changes apply after a restart.</p>
+            <p class="muted" style="font-size:.78rem;margin:.85rem 0 0">Worker count and file-log rotation changes apply after a restart.</p>
         </div>
     </section>
 

@@ -746,6 +746,7 @@ func (s *Server) setupRoutes() {
 		api.GET("/diagnostics/env", s.handleDiagnosticsEnv)
 		api.GET("/diagnostics/destinations", s.handleDiagnosticsDestinations)
 		api.GET("/diagnostics/logs/stream", s.handleDiagnosticsLogsSSE)
+		api.GET("/diagnostics/export", s.handleDiagnosticsExport)
 		api.POST("/downloads/redownload/:asin", s.handleRedownload)
 
 		// Per-book conversion between m4b and chapter-split mp3.
@@ -2242,6 +2243,13 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 	fileNameTemplate := s.settingString(ctx, organizer.SettingKeyFileNameTemplate, organizer.DefaultFileNameTemplate)
 
 	logLevel := logging.GetLevel()
+	logFileCfg := logging.GetFileConfig()
+	logFileEnabled := s.settingBool(ctx, "log_file_enabled", logFileCfg.Enabled)
+	logFilePath := s.settingString(ctx, "log_file_path", logFileCfg.Path)
+	logFileMaxSizeMB := s.settingInt(ctx, "log_file_max_size_mb", logFileCfg.MaxSizeMB)
+	logFileMaxBackups := s.settingInt(ctx, "log_file_max_backups", logFileCfg.MaxBackups)
+	logFileMaxAgeDays := s.settingInt(ctx, "log_file_max_age_days", logFileCfg.MaxAgeDays)
+	logFileCompress := s.settingBool(ctx, "log_file_compress", logFileCfg.Compress)
 
 	hostPath := detectHostMountPath(s.audiobooksPath)
 
@@ -2277,6 +2285,12 @@ func (s *Server) settingsPageData(ctx context.Context) gin.H {
 		"BookDirTemplate":      bookDirTemplate,
 		"FileNameTemplate":     fileNameTemplate,
 		"LogLevel":             logLevel,
+		"LogFileEnabled":       logFileEnabled,
+		"LogFilePath":          logFilePath,
+		"LogFileMaxSizeMB":     logFileMaxSizeMB,
+		"LogFileMaxBackups":    logFileMaxBackups,
+		"LogFileMaxAgeDays":    logFileMaxAgeDays,
+		"LogFileCompress":      logFileCompress,
 		"Devices":              devices,
 		"Page":                 "settings",
 		"AudiobooksPath":       s.audiobooksPath,
@@ -3502,11 +3516,58 @@ func (s *Server) handleSaveSettings(c *gin.Context) {
 		_ = setSetting("log_level", level)
 		logging.SetLevel(level)
 	}
+	if _, ok := c.GetPostForm("log_file_enabled_sent"); ok {
+		enabled := c.PostForm("log_file_enabled") == "true"
+		if setSetting("log_file_enabled", strconv.FormatBool(enabled)) {
+			restartRequired = true
+		}
+	}
+	if _, ok := c.GetPostForm("log_file_path"); ok {
+		if setSetting("log_file_path", strings.TrimSpace(c.PostForm("log_file_path"))) {
+			restartRequired = true
+		}
+	}
+	if _, ok := c.GetPostForm("log_file_max_size_mb"); ok {
+		raw := strings.TrimSpace(c.PostForm("log_file_max_size_mb"))
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			if setSetting("log_file_max_size_mb", strconv.Itoa(n)) {
+				restartRequired = true
+			}
+		} else {
+			webLog.Warn().Str("value", raw).Msg("ignoring invalid log_file_max_size_mb")
+		}
+	}
+	if _, ok := c.GetPostForm("log_file_max_backups"); ok {
+		raw := strings.TrimSpace(c.PostForm("log_file_max_backups"))
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			if setSetting("log_file_max_backups", strconv.Itoa(n)) {
+				restartRequired = true
+			}
+		} else {
+			webLog.Warn().Str("value", raw).Msg("ignoring invalid log_file_max_backups")
+		}
+	}
+	if _, ok := c.GetPostForm("log_file_max_age_days"); ok {
+		raw := strings.TrimSpace(c.PostForm("log_file_max_age_days"))
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			if setSetting("log_file_max_age_days", strconv.Itoa(n)) {
+				restartRequired = true
+			}
+		} else {
+			webLog.Warn().Str("value", raw).Msg("ignoring invalid log_file_max_age_days")
+		}
+	}
+	if _, ok := c.GetPostForm("log_file_compress_sent"); ok {
+		enabled := c.PostForm("log_file_compress") == "true"
+		if setSetting("log_file_compress", strconv.FormatBool(enabled)) {
+			restartRequired = true
+		}
+	}
 
 	if c.GetHeader("HX-Request") == "true" {
 		msg := "Settings saved"
 		if restartRequired {
-			msg = "Settings saved. Worker count changes need a restart to take effect."
+			msg = "Settings saved. Some changes need a restart to take effect."
 		}
 		c.HTML(http.StatusOK, "settings_saved.html", gin.H{"Message": msg, "RestartRequired": restartRequired})
 		return
