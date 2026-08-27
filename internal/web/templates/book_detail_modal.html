@@ -58,7 +58,15 @@
     }
 
     function setErrorState(message) {
-        modalContent.innerHTML = '<div class="info-box" style="border-color: var(--error);"><strong>Error:</strong> ' + message + '</div>';
+        modalContent.textContent = '';
+        var box = document.createElement('div');
+        box.className = 'info-box';
+        box.style.borderColor = 'var(--error)';
+        var strong = document.createElement('strong');
+        strong.textContent = 'Error:';
+        box.appendChild(strong);
+        box.appendChild(document.createTextNode(' ' + String(message || 'Unknown error')));
+        modalContent.appendChild(box);
     }
 
     function loadBookDetails(url, pushHistory) {

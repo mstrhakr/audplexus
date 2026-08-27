@@ -350,8 +350,18 @@
                             note.className = 'alert err';
                             note.setAttribute('data-stale-section', '1');
                             note.style.cssText = 'font-size:.78rem;padding:.45rem .6rem;margin:0 0 .4rem';
-                            note.innerHTML = '<span class="ico">!</span><div>Saved section <code>' +
-                                savedID + '</code> no longer exists on this Plex server. Pick a new library below.</div>';
+                            var icon = document.createElement('span');
+                            icon.className = 'ico';
+                            icon.textContent = '!';
+                            note.appendChild(icon);
+
+                            var msg = document.createElement('div');
+                            msg.appendChild(document.createTextNode('Saved section '));
+                            var code = document.createElement('code');
+                            code.textContent = savedID;
+                            msg.appendChild(code);
+                            msg.appendChild(document.createTextNode(' no longer exists on this Plex server. Pick a new library below.'));
+                            note.appendChild(msg);
                             rs.insertBefore(note, rs.firstChild);
                         }
                     }
