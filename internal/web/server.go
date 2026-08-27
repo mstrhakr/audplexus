@@ -748,6 +748,7 @@ func (s *Server) setupRoutes() {
 		api.GET("/diagnostics/logs/availability", s.handleDiagnosticsLogAvailability)
 		api.GET("/diagnostics/logs/stream", s.handleDiagnosticsLogsSSE)
 		api.GET("/diagnostics/export", s.handleDiagnosticsExport)
+		api.POST("/diagnostics/report-handoff", s.handleDiagnosticsReportHandoff)
 		api.POST("/downloads/redownload/:asin", s.handleRedownload)
 
 		// Per-book conversion between m4b and chapter-split mp3.

@@ -2,8 +2,10 @@ package web
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -1002,16 +1004,21 @@ func diagnosticsEnvPresence() map[string]bool {
 	return out
 }
 
-func diagnosticsExportWindow(c *gin.Context, now time.Time) (*time.Time, *time.Time, string, error) {
+func diagnosticsExportWindowFromInputs(rangeKeyRaw, sinceRaw, untilRaw string, now time.Time) (*time.Time, *time.Time, string, error) {
 	end := now.UTC()
-	rangeKey := strings.ToLower(strings.TrimSpace(c.DefaultQuery("range", "24h")))
-	if sinceRaw := strings.TrimSpace(c.Query("since")); sinceRaw != "" {
+	rangeKey := strings.ToLower(strings.TrimSpace(rangeKeyRaw))
+	if rangeKey == "" {
+		rangeKey = "24h"
+	}
+	sinceRaw = strings.TrimSpace(sinceRaw)
+	untilRaw = strings.TrimSpace(untilRaw)
+	if sinceRaw != "" {
 		since, err := time.Parse(time.RFC3339, sinceRaw)
 		if err != nil {
 			return nil, nil, "", fmt.Errorf("invalid since timestamp")
 		}
 		until := end
-		if untilRaw := strings.TrimSpace(c.Query("until")); untilRaw != "" {
+		if untilRaw != "" {
 			parsed, err := time.Parse(time.RFC3339, untilRaw)
 			if err != nil {
 				return nil, nil, "", fmt.Errorf("invalid until timestamp")
@@ -1044,6 +1051,10 @@ func diagnosticsExportWindow(c *gin.Context, now time.Time) (*time.Time, *time.T
 	default:
 		return nil, nil, "", fmt.Errorf("invalid range; use 1h, 6h, 24h, 7d, 30d, all, or custom since/until")
 	}
+}
+
+func diagnosticsExportWindow(c *gin.Context, now time.Time) (*time.Time, *time.Time, string, error) {
+	return diagnosticsExportWindowFromInputs(c.DefaultQuery("range", "24h"), c.Query("since"), c.Query("until"), now)
 }
 
 func diagnosticsExportRanges(availability logging.LogAvailability, now time.Time) []gin.H {
@@ -1096,6 +1107,125 @@ func writeZipLogLines(zw *zip.Writer, name string, entries []logging.ParsedEntry
 		}
 	}
 	return nil
+}
+
+func ndjsonFromLogEntries(entries []logging.ParsedEntry) string {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	for _, e := range entries {
+		_ = enc.Encode(e)
+	}
+	return b.String()
+}
+
+func prettyJSON(v any) string {
+	buf := &bytes.Buffer{}
+	enc := json.NewEncoder(buf)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(v)
+	return strings.TrimRight(buf.String(), "\n")
+}
+
+func diagnosticsSummaryMarkdown(issueType, expected, notes, gistURL, mode, detail, rangeLabel string, exported int, now time.Time) string {
+	var b strings.Builder
+	b.WriteString("# Audplexus Diagnostics Handover\n\n")
+	b.WriteString("## Summary\n")
+	b.WriteString("- Generated: " + now.Format(time.RFC3339) + "\n")
+	b.WriteString("- Mode: `" + mode + "`\n")
+	b.WriteString("- Detail: `" + detail + "`\n")
+	b.WriteString("- Range: `" + rangeLabel + "`\n")
+	b.WriteString("- Log entries exported: " + strconv.Itoa(exported) + "\n")
+	if issueType != "" {
+		b.WriteString("- Issue type: " + issueType + "\n")
+	}
+	if expected != "" {
+		b.WriteString("- Expected: " + expected + "\n")
+	}
+	if notes != "" {
+		b.WriteString("- Reporter notes: " + notes + "\n")
+	}
+	if gistURL != "" {
+		b.WriteString("- Artifact: " + gistURL + "\n")
+	}
+	b.WriteString("\n## What To Check\n")
+	b.WriteString("1. Inspect the gist artifact and compare destination health, runtime env, and logs around failure time.\n")
+	b.WriteString("2. Correlate warning/error log lines with sync/download events in the same window.\n")
+	b.WriteString("3. Validate destination auth/health and local path configuration from the report snapshot.\n")
+	return b.String()
+}
+
+type diagnosticsProxyRequest struct {
+	Report gin.H `json:"report"`
+}
+
+type diagnosticsProxyResponse struct {
+	Success  bool   `json:"success"`
+	GistURL  string `json:"gist_url,omitempty"`
+	IssueURL string `json:"issue_url,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+const defaultDiagnosticsProxyEndpoint = "https://api.audplexus.dev/diagnostic"
+
+func diagnosticsProxyEndpoint() string {
+	if v := strings.TrimSpace(os.Getenv("AUDPLEXUS_DIAGNOSTIC_PROXY_URL")); v != "" {
+		return v
+	}
+	return defaultDiagnosticsProxyEndpoint
+}
+
+func submitDiagnosticsProxy(ctx context.Context, endpoint string, report gin.H) (diagnosticsProxyResponse, error) {
+	out := diagnosticsProxyResponse{}
+	body, err := json.Marshal(diagnosticsProxyRequest{Report: report})
+	if err != nil {
+		return out, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "audplexus-diagnostics/1.0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return out, fmt.Errorf("decode proxy response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !out.Success {
+		if strings.TrimSpace(out.Error) == "" {
+			out.Error = fmt.Sprintf("proxy request failed (%d)", resp.StatusCode)
+		}
+		return out, errors.New(out.Error)
+	}
+	return out, nil
+}
+
+type diagnosticsHandoffRequest struct {
+	Range         string `json:"range"`
+	Mode          string `json:"mode"`        // logs | package
+	Detail        string `json:"detail"`      // standard | full
+	UploadMode    string `json:"upload_mode"` // none | gist_secret | gist_public
+	IssueType     string `json:"issue_type"`
+	ExpectedValue string `json:"expected_value"`
+	UserNotes     string `json:"user_notes"`
+	IssueTitle    string `json:"issue_title"`
+	ProxyEndpoint string `json:"proxy_endpoint"`
+}
+
+type diagnosticsHandoffResponse struct {
+	Success    bool   `json:"success"`
+	Message    string `json:"message,omitempty"`
+	GistURL    string `json:"gist_url,omitempty"`
+	IssueURL   string `json:"issue_url,omitempty"`
+	IssueBody  string `json:"issue_body,omitempty"`
+	IssueTitle string `json:"issue_title,omitempty"`
 }
 
 // handleDiagnosticsEnv returns a JSON snapshot of runtime + path
@@ -1315,6 +1445,120 @@ func (s *Server) handleDiagnosticsExport(c *gin.Context) {
 			_, _ = w.Write([]byte("Log export warning: " + logErr.Error() + "\n"))
 		}
 	}
+}
+
+func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
+	var req diagnosticsHandoffRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	now := time.Now().UTC()
+
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	if mode == "" {
+		mode = "package"
+	}
+	detail := strings.ToLower(strings.TrimSpace(req.Detail))
+	if detail == "" {
+		detail = "standard"
+	}
+	rangeLabel := strings.TrimSpace(req.Range)
+	if rangeLabel == "" {
+		rangeLabel = "24h"
+	}
+
+	since, until, _, err := diagnosticsExportWindowFromInputs(strings.TrimSpace(req.Range), "", "", now)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	maxLines := 5000
+	if mode == "logs" || detail == "full" {
+		maxLines = 20000
+	}
+	entries, source, logErr := logging.ExportLogs(since, until, maxLines)
+	if logErr != nil {
+		webLog.Warn().Err(logErr).Msg("handoff: log export degraded")
+	}
+
+	ctx := c.Request.Context()
+	envSnapshot := s.diagnosticsEnvSnapshot(ctx)
+	destinationSnapshot := s.diagnosticsDestinationsSnapshot(ctx)
+	envPresence := diagnosticsEnvPresence()
+	uploadMode := strings.ToLower(strings.TrimSpace(req.UploadMode))
+	if uploadMode == "" {
+		uploadMode = "gist_secret"
+	}
+
+	issueTitle := strings.TrimSpace(req.IssueTitle)
+	if issueTitle == "" {
+		issueTitle = fmt.Sprintf("diagnostics: %s (%s)", strings.TrimSpace(req.IssueType), now.Format("2006-01-02"))
+		if strings.TrimSpace(req.IssueType) == "" {
+			issueTitle = fmt.Sprintf("diagnostics handoff (%s)", now.Format("2006-01-02"))
+		}
+	}
+	issueBody := diagnosticsSummaryMarkdown(req.IssueType, req.ExpectedValue, req.UserNotes, "", mode, detail, rangeLabel, len(entries), now)
+	if logErr != nil {
+		issueBody += "\n\n> Note: file log inspection reported an error; export may rely on partial in-memory logs.\n"
+	}
+	if source != "" {
+		issueBody += "\nLog source: `" + source + "`\n"
+	}
+
+	endpoint := strings.TrimSpace(req.ProxyEndpoint)
+	if endpoint == "" {
+		endpoint = diagnosticsProxyEndpoint()
+	}
+
+	logLines := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if strings.TrimSpace(e.RawLine) != "" {
+			logLines = append(logLines, e.RawLine)
+			continue
+		}
+		if strings.TrimSpace(e.Message) != "" {
+			logLines = append(logLines, e.Message)
+		}
+	}
+
+	proxyReport := gin.H{
+		"report_id":         fmt.Sprintf("AUD-%s", now.Format("20060102-150405")),
+		"timestamp":         now.Format(time.RFC3339),
+		"issue_type":        req.IssueType,
+		"expected_value":    req.ExpectedValue,
+		"user_message":      req.UserNotes,
+		"issue_title":       issueTitle,
+		"issue_body":        issueBody,
+		"range":             rangeLabel,
+		"mode":              mode,
+		"detail":            detail,
+		"upload_mode":       uploadMode,
+		"log_source":        source,
+		"logs_exported":     len(logLines),
+		"runtime_env":       envSnapshot,
+		"env_presence":      envPresence,
+		"destinations":      destinationSnapshot,
+		"recent_logs":       logLines,
+		"generated_summary": diagnosticsSummaryMarkdown(req.IssueType, req.ExpectedValue, req.UserNotes, "", mode, detail, rangeLabel, len(logLines), now),
+	}
+
+	proxyResp, err := submitDiagnosticsProxy(ctx, endpoint, proxyReport)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, diagnosticsHandoffResponse{
+		Success:    true,
+		Message:    "Submitted via diagnostics proxy",
+		GistURL:    strings.TrimSpace(proxyResp.GistURL),
+		IssueURL:   strings.TrimSpace(proxyResp.IssueURL),
+		IssueBody:  issueBody,
+		IssueTitle: issueTitle,
+	})
 }
 
 // handleDiagnosticsLogsSSE streams diagnostics log entries via SSE.

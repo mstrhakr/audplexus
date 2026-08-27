@@ -100,6 +100,61 @@
             <div style="display:flex;flex-direction:column;gap:.75rem">
                 <div class="card">
                     <div class="card-head" style="display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem">
+                        <h3 style="font-size:.95rem;font-weight:600;margin:0">GitHub Handoff</h3>
+                    </div>
+                    <p class="muted" style="font-size:.78rem;margin:0 0 .55rem">Create a shareable diagnostics handoff by uploading artifacts through a proxy and opening a pre-filled GitHub issue.</p>
+
+                    <div class="form-row" style="margin-bottom:.45rem">
+                        <label for="diag-handoff-upload" style="display:block;font-size:.78rem;margin-bottom:.25rem">Upload</label>
+                        <select id="diag-handoff-upload" class="select" style="width:100%">
+                            <option value="gist_secret" selected>Secret Gist (unlisted)</option>
+                            <option value="gist_public">Public Gist</option>
+                            <option value="none">No upload (issue text only)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-row" style="margin-bottom:.45rem">
+                        <label for="diag-handoff-proxy" style="display:block;font-size:.78rem;margin-bottom:.25rem">Proxy endpoint (optional override)</label>
+                        <input id="diag-handoff-proxy" class="input" type="text" placeholder="https://api.audplexus.work/diagnostic">
+                        <div class="hint" style="font-size:.72rem">Leave blank to use server default proxy URL.</div>
+                    </div>
+
+                    <div class="form-row" style="margin-bottom:.45rem">
+                        <label for="diag-handoff-issue-type" style="display:block;font-size:.78rem;margin-bottom:.25rem">Issue type</label>
+                        <select id="diag-handoff-issue-type" class="select" style="width:100%">
+                            <option value="diagnostics">General diagnostics</option>
+                            <option value="sync">Sync issue</option>
+                            <option value="download">Download issue</option>
+                            <option value="metadata">Metadata/tagging issue</option>
+                            <option value="destination">Destination integration issue</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+
+                    <div class="form-row" style="margin-bottom:.45rem">
+                        <label for="diag-handoff-title" style="display:block;font-size:.78rem;margin-bottom:.25rem">Issue title (optional)</label>
+                        <input id="diag-handoff-title" class="input" type="text" placeholder="Let Audplexus generate if blank">
+                    </div>
+
+                    <div class="form-row" style="margin-bottom:.45rem">
+                        <label for="diag-handoff-expected" style="display:block;font-size:.78rem;margin-bottom:.25rem">Expected behavior (optional)</label>
+                        <input id="diag-handoff-expected" class="input" type="text" placeholder="What should have happened?">
+                    </div>
+
+                    <div class="form-row" style="margin-bottom:.55rem">
+                        <label for="diag-handoff-notes" style="display:block;font-size:.78rem;margin-bottom:.25rem">Reporter notes (optional)</label>
+                        <textarea id="diag-handoff-notes" class="input" rows="3" placeholder="Any reproduction details or observations"></textarea>
+                    </div>
+
+                    <div style="display:flex;align-items:center;gap:.45rem;flex-wrap:wrap">
+                        <button id="diag-handoff-btn" type="button" class="btn btn-secondary btn-small" onclick="diagSubmitHandoff(this)">Send to GitHub</button>
+                        <span class="muted" style="font-size:.72rem">Uses current export range + detail selection, then opens pre-filled issue link.</span>
+                    </div>
+                    <div id="diag-handoff-status" class="muted" style="margin-top:.55rem;font-size:.76rem"></div>
+                </div>
+
+                <div class="card">
+                    <div class="card-head" style="display:flex;align-items:center;gap:.6rem;margin-bottom:.6rem">
                         <h3 style="font-size:.95rem;font-weight:600;margin:0">Environment</h3>
                         <span class="right" style="margin-left:auto">
                             <button type="button" class="btn btn-ghost btn-small" onclick="diagRefreshEnv()">Refresh</button>
@@ -605,6 +660,82 @@ function diagExportBundle(btn) {
             btn.textContent = 'Export ZIP';
         }
     }, 1400);
+}
+
+function diagSubmitHandoff(btn) {
+    var range = document.getElementById('diag-export-range');
+    var exportMode = document.getElementById('diag-export-mode');
+    var upload = document.getElementById('diag-handoff-upload');
+    var proxy = document.getElementById('diag-handoff-proxy');
+    var issueType = document.getElementById('diag-handoff-issue-type');
+    var expected = document.getElementById('diag-handoff-expected');
+    var notes = document.getElementById('diag-handoff-notes');
+    var title = document.getElementById('diag-handoff-title');
+    var out = document.getElementById('diag-handoff-status');
+
+    if (!out) return;
+    var modeVal = exportMode ? exportMode.value : 'package-standard';
+    var mode = 'package';
+    var detail = 'standard';
+    if (modeVal === 'logs') {
+        mode = 'logs';
+    } else if (modeVal === 'package-full') {
+        detail = 'full';
+    }
+
+    var payload = {
+        range: range ? range.value : '24h',
+        mode: mode,
+        detail: detail,
+        upload_mode: upload ? upload.value : 'gist_secret',
+        proxy_endpoint: proxy ? proxy.value.trim() : '',
+        issue_type: issueType ? issueType.value : 'diagnostics',
+        expected_value: expected ? expected.value.trim() : '',
+        user_notes: notes ? notes.value.trim() : '',
+        issue_title: title ? title.value.trim() : ''
+    };
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Submitting...';
+    }
+    out.textContent = 'Preparing handoff...';
+
+    fetch('/api/diagnostics/report-handoff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    }).then(function(r) {
+        return r.json().then(function(d) {
+            if (!r.ok) {
+                var err = d && d.error ? d.error : ('HTTP ' + r.status);
+                throw new Error(err);
+            }
+            return d;
+        });
+    }).then(function(d) {
+        var html = '<div style="color:var(--success,#5cb85c)">Handoff complete.</div>';
+        if (d.gist_url) {
+            html += '<div>Artifact: <a href="' + escDiag(d.gist_url) + '" target="_blank" rel="noopener">' + escDiag(d.gist_url) + '</a></div>';
+        }
+        if (d.issue_url) {
+            html += '<div>Issue link: <a href="' + escDiag(d.issue_url) + '" target="_blank" rel="noopener">' + escDiag(d.issue_url) + '</a></div>';
+        }
+        if (d.message) {
+            html += '<div class="muted" style="margin-top:.25rem">' + escDiag(d.message) + '</div>';
+        }
+        out.innerHTML = html;
+        if (d.issue_url) {
+            window.open(d.issue_url, '_blank', 'noopener');
+        }
+    }).catch(function(e) {
+        out.innerHTML = '<span style="color:var(--error,#f44336)">Handoff failed: ' + escDiag(e.message) + '</span>';
+    }).finally(function() {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Send to GitHub';
+        }
+    });
 }
 
 document.addEventListener('visibilitychange', function() {
