@@ -66,10 +66,15 @@ export default {
 };
 
 const URL_PATTERN = /https?:\/\/[^\s"'<>]+/g;
+const IPV4_PATTERN = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+const SECRET_QUERY_PATTERN = /(api[_-]?key|token|secret)=([^&\s"']+)/gi;
 
 function redactURLs(value) {
   if (typeof value !== 'string' || value.length === 0) return value;
-  return value.replace(URL_PATTERN, '[redacted-url]');
+  return value
+    .replace(URL_PATTERN, '[redacted-url]')
+    .replace(IPV4_PATTERN, '[redacted-ip]')
+    .replace(SECRET_QUERY_PATTERN, '$1=[redacted]');
 }
 
 function sanitizeReport(report) {

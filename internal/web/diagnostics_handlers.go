@@ -1156,12 +1156,17 @@ func diagnosticsSummaryMarkdown(issueType, expected, notes, gistURL, mode, detai
 }
 
 var diagnosticsURLPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
+var diagnosticsIPv4Pattern = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+var diagnosticsSecretQueryPattern = regexp.MustCompile(`(?i)(api[_-]?key|token|secret)=([^&\s"']+)`)
 
-func redactDiagnosticsURLs(s string) string {
+func redactDiagnosticsSensitive(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return s
 	}
-	return diagnosticsURLPattern.ReplaceAllString(s, "[redacted-url]")
+	out := diagnosticsURLPattern.ReplaceAllString(s, "[redacted-url]")
+	out = diagnosticsIPv4Pattern.ReplaceAllString(out, "[redacted-ip]")
+	out = diagnosticsSecretQueryPattern.ReplaceAllString(out, "$1=[redacted]")
+	return out
 }
 
 func sanitizeRuntimeEnvForHandoff(env gin.H) gin.H {
@@ -1215,10 +1220,10 @@ func sanitizeDestinationsForHandoff(destinations []gin.H) []gin.H {
 			"last_checked_at": d["last_checked_at"],
 		}
 		if detail, ok := d["health_detail"].(string); ok {
-			clean["health_detail"] = redactDiagnosticsURLs(detail)
+			clean["health_detail"] = redactDiagnosticsSensitive(detail)
 		}
 		if lastErr, ok := d["last_error"].(string); ok {
-			clean["last_error"] = redactDiagnosticsURLs(lastErr)
+			clean["last_error"] = redactDiagnosticsSensitive(lastErr)
 		}
 		out = append(out, clean)
 	}
@@ -1562,15 +1567,17 @@ func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
 	if uploadMode == "" {
 		uploadMode = "gist_secret"
 	}
+	cleanExpected := strings.TrimSpace(redactDiagnosticsSensitive(req.ExpectedValue))
+	cleanNotes := strings.TrimSpace(redactDiagnosticsSensitive(req.UserNotes))
 
-	issueTitle := strings.TrimSpace(req.IssueTitle)
+	issueTitle := strings.TrimSpace(redactDiagnosticsSensitive(req.IssueTitle))
 	if issueTitle == "" {
 		issueTitle = fmt.Sprintf("diagnostics: %s (%s)", strings.TrimSpace(req.IssueType), now.Format("2006-01-02"))
 		if strings.TrimSpace(req.IssueType) == "" {
 			issueTitle = fmt.Sprintf("diagnostics handoff (%s)", now.Format("2006-01-02"))
 		}
 	}
-	issueBody := diagnosticsSummaryMarkdown(req.IssueType, req.ExpectedValue, req.UserNotes, "", mode, detail, rangeLabel, len(entries), now)
+	issueBody := diagnosticsSummaryMarkdown(req.IssueType, cleanExpected, cleanNotes, "", mode, detail, rangeLabel, len(entries), now)
 	if logErr != nil {
 		issueBody += "\n\n> Note: file log inspection reported an error; export may rely on partial in-memory logs.\n"
 	}
@@ -1583,11 +1590,11 @@ func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
 	logLines := make([]string, 0, len(entries))
 	for _, e := range entries {
 		if strings.TrimSpace(e.RawLine) != "" {
-			logLines = append(logLines, redactDiagnosticsURLs(e.RawLine))
+			logLines = append(logLines, redactDiagnosticsSensitive(e.RawLine))
 			continue
 		}
 		if strings.TrimSpace(e.Message) != "" {
-			logLines = append(logLines, redactDiagnosticsURLs(e.Message))
+			logLines = append(logLines, redactDiagnosticsSensitive(e.Message))
 		}
 	}
 
@@ -1595,8 +1602,8 @@ func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
 		"report_id":         fmt.Sprintf("AUD-%s", now.Format("20060102-150405")),
 		"timestamp":         now.Format(time.RFC3339),
 		"issue_type":        req.IssueType,
-		"expected_value":    req.ExpectedValue,
-		"user_message":      req.UserNotes,
+		"expected_value":    cleanExpected,
+		"user_message":      cleanNotes,
 		"issue_title":       issueTitle,
 		"issue_body":        issueBody,
 		"range":             rangeLabel,
@@ -1609,7 +1616,7 @@ func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
 		"env_presence":      envPresence,
 		"destinations":      destinationSnapshot,
 		"recent_logs":       logLines,
-		"generated_summary": diagnosticsSummaryMarkdown(req.IssueType, req.ExpectedValue, req.UserNotes, "", mode, detail, rangeLabel, len(logLines), now),
+		"generated_summary": diagnosticsSummaryMarkdown(req.IssueType, cleanExpected, cleanNotes, "", mode, detail, rangeLabel, len(logLines), now),
 	}
 
 	proxyResp, err := submitDiagnosticsProxy(ctx, endpoint, proxyReport)
