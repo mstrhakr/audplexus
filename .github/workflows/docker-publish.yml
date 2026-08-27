@@ -20,6 +20,8 @@ env:
 jobs:
   tests:
     uses: ./.github/workflows/tests.yml
+    permissions:
+      contents: read
 
   build:
     runs-on: ubuntu-latest
