@@ -40,4 +40,10 @@ plex:
 log:
   level: info  # trace, debug, info, warn, error, fatal
   json: false  # true for structured JSON output
+  file_enabled: true
+  file_path: /config/logs/audplexus.log
+  file_max_size_mb: 25
+  file_max_backups: 5
+  file_max_age_days: 14
+  file_compress: true
 

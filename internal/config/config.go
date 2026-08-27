@@ -20,8 +20,14 @@ type Config struct {
 }
 
 type LogConfig struct {
-	Level string `yaml:"level"` // trace, debug, info, warn, error, fatal
-	JSON  bool   `yaml:"json"`  // true for structured JSON, false for console
+	Level          string `yaml:"level"`             // trace, debug, info, warn, error, fatal
+	JSON           bool   `yaml:"json"`              // true for structured JSON, false for console
+	FileEnabled    bool   `yaml:"file_enabled"`      // write logs to a rotating file sink
+	FilePath       string `yaml:"file_path"`         // active log file path
+	FileMaxSizeMB  int    `yaml:"file_max_size_mb"`  // rotate when current file exceeds this size
+	FileMaxBackups int    `yaml:"file_max_backups"`  // number of old files to keep
+	FileMaxAgeDays int    `yaml:"file_max_age_days"` // max age of old files before deletion
+	FileCompress   bool   `yaml:"file_compress"`     // gzip old rotated files
 }
 
 type ServerConfig struct {
@@ -93,8 +99,14 @@ func DefaultConfig() *Config {
 			AutoQueueNew: false,
 		},
 		Log: LogConfig{
-			Level: "info",
-			JSON:  false,
+			Level:          "info",
+			JSON:           false,
+			FileEnabled:    true,
+			FilePath:       "/config/logs/audplexus.log",
+			FileMaxSizeMB:  25,
+			FileMaxBackups: 5,
+			FileMaxAgeDays: 14,
+			FileCompress:   true,
 		},
 	}
 }
@@ -152,6 +164,34 @@ func (c *Config) LoadFromEnv() {
 			c.Log.JSON = false
 		}
 	}
+	if v := os.Getenv("LOG_FILE_ENABLED"); v != "" {
+		switch v {
+		case "1", "true", "TRUE", "True":
+			c.Log.FileEnabled = true
+		case "0", "false", "FALSE", "False":
+			c.Log.FileEnabled = false
+		}
+	}
+	if v := os.Getenv("LOG_FILE_PATH"); v != "" {
+		c.Log.FilePath = v
+	}
+	if v := os.Getenv("LOG_FILE_MAX_SIZE_MB"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Log.FileMaxSizeMB)
+	}
+	if v := os.Getenv("LOG_FILE_MAX_BACKUPS"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Log.FileMaxBackups)
+	}
+	if v := os.Getenv("LOG_FILE_MAX_AGE_DAYS"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Log.FileMaxAgeDays)
+	}
+	if v := os.Getenv("LOG_FILE_COMPRESS"); v != "" {
+		switch v {
+		case "1", "true", "TRUE", "True":
+			c.Log.FileCompress = true
+		case "0", "false", "FALSE", "False":
+			c.Log.FileCompress = false
+		}
+	}
 	if v := os.Getenv("OUTPUT_FORMAT"); v != "" {
 		c.Output.Format = v
 	}
@@ -202,4 +242,3 @@ func firstEnv(keys ...string) string {
 	}
 	return ""
 }
-

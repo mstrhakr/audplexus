@@ -24,6 +24,12 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Sync.Enabled {
 		t.Fatalf("Sync.Enabled = false, want true")
 	}
+	if !cfg.Log.FileEnabled {
+		t.Fatalf("Log.FileEnabled = false, want true")
+	}
+	if cfg.Log.FilePath != "/config/logs/audplexus.log" {
+		t.Fatalf("Log.FilePath = %q, want /config/logs/audplexus.log", cfg.Log.FilePath)
+	}
 }
 
 func TestLoadMissingFileReturnsDefaults(t *testing.T) {
@@ -113,6 +119,12 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	t.Setenv("CONFIG_PATH", "/mnt/cfg")
 	t.Setenv("LOG_LEVEL", "warn")
 	t.Setenv("LOG_JSON", "true")
+	t.Setenv("LOG_FILE_ENABLED", "false")
+	t.Setenv("LOG_FILE_PATH", "/tmp/audplexus.log")
+	t.Setenv("LOG_FILE_MAX_SIZE_MB", "42")
+	t.Setenv("LOG_FILE_MAX_BACKUPS", "9")
+	t.Setenv("LOG_FILE_MAX_AGE_DAYS", "30")
+	t.Setenv("LOG_FILE_COMPRESS", "false")
 	t.Setenv("OUTPUT_FORMAT", "mp3")
 	t.Setenv("DOWNLOAD_DOWNLOAD_CONCURRENCY", "5")
 	t.Setenv("DECRYPT_CONCURRENCY", "6")
@@ -137,6 +149,15 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.Log.Level != "warn" || !cfg.Log.JSON {
 		t.Fatalf("Log overrides failed: %+v", cfg.Log)
+	}
+	if cfg.Log.FileEnabled {
+		t.Fatalf("Log.FileEnabled = true, want false")
+	}
+	if cfg.Log.FilePath != "/tmp/audplexus.log" {
+		t.Fatalf("Log.FilePath = %q, want /tmp/audplexus.log", cfg.Log.FilePath)
+	}
+	if cfg.Log.FileMaxSizeMB != 42 || cfg.Log.FileMaxBackups != 9 || cfg.Log.FileMaxAgeDays != 30 || cfg.Log.FileCompress {
+		t.Fatalf("Log file overrides failed: %+v", cfg.Log)
 	}
 	if cfg.Output.Format != "mp3" {
 		t.Fatalf("Output.Format = %q, want mp3", cfg.Output.Format)
