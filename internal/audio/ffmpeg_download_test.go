@@ -40,3 +40,27 @@ func TestSafeJoinBinPath(t *testing.T) {
 		t.Fatalf("safeJoinBinPath output = %q, want %q", out, "/tmp/audplexus/bin/ffmpeg")
 	}
 }
+
+func TestArchiveBinaryOutputPath(t *testing.T) {
+	out, base, ok, err := archiveBinaryOutputPath("/tmp/audplexus/bin", "nested/path/ffmpeg", "")
+	if err != nil {
+		t.Fatalf("archiveBinaryOutputPath returned unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("archiveBinaryOutputPath expected ok=true")
+	}
+	if base != "ffmpeg" {
+		t.Fatalf("base = %q, want ffmpeg", base)
+	}
+	if out != "/tmp/audplexus/bin/ffmpeg" {
+		t.Fatalf("out = %q, want %q", out, "/tmp/audplexus/bin/ffmpeg")
+	}
+
+	_, _, ok, err = archiveBinaryOutputPath("/tmp/audplexus/bin", "../../ffprobe", "")
+	if err != nil {
+		t.Fatalf("archiveBinaryOutputPath traversal returned unexpected error: %v", err)
+	}
+	if ok {
+		t.Fatal("archiveBinaryOutputPath traversal should be rejected")
+	}
+}

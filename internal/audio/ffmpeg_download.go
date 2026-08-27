@@ -118,14 +118,12 @@ func extractTarXz(r io.Reader, binDir, ext string) error {
 			continue
 		}
 
-		base, ok := sanitizeArchiveBinaryName(header.Name, ext)
-		if !ok {
-			continue
-		}
-
-		outPath, err := safeJoinBinPath(binDir, base)
+		outPath, base, ok, err := archiveBinaryOutputPath(binDir, header.Name, ext)
 		if err != nil {
 			return err
+		}
+		if !ok {
+			continue
 		}
 		if err := extractFile(outPath, io.LimitReader(tarReader, maxBinarySize)); err != nil {
 			return err
@@ -166,7 +164,10 @@ func extractZip(r io.Reader, binDir, ext string) error {
 
 	extracted := 0
 	for _, f := range zipReader.File {
-		base, ok := sanitizeArchiveBinaryName(f.Name, ext)
+		outPath, base, ok, err := archiveBinaryOutputPath(binDir, f.Name, ext)
+		if err != nil {
+			return err
+		}
 		if !ok {
 			continue
 		}
@@ -176,11 +177,6 @@ func extractZip(r io.Reader, binDir, ext string) error {
 			return fmt.Errorf("open %s in zip: %w", base, err)
 		}
 
-		outPath, err := safeJoinBinPath(binDir, base)
-		if err != nil {
-			rc.Close()
-			return err
-		}
 		if err := extractFile(outPath, io.LimitReader(rc, maxBinarySize)); err != nil {
 			rc.Close()
 			return err
@@ -215,6 +211,29 @@ func sanitizeArchiveBinaryName(entryName, ext string) (string, bool) {
 		return "", false
 	}
 	return base, true
+}
+
+func archiveBinaryOutputPath(binDir, entryName, ext string) (string, string, bool, error) {
+	base, ok := sanitizeArchiveBinaryName(entryName, ext)
+	if !ok {
+		return "", "", false, nil
+	}
+
+	var target string
+	switch base {
+	case "ffmpeg" + ext:
+		target = "ffmpeg" + ext
+	case "ffprobe" + ext:
+		target = "ffprobe" + ext
+	default:
+		return "", "", false, nil
+	}
+
+	outPath, err := safeJoinBinPath(binDir, target)
+	if err != nil {
+		return "", "", false, err
+	}
+	return outPath, target, true, nil
 }
 
 func safeJoinBinPath(binDir, base string) (string, error) {

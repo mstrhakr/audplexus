@@ -265,12 +265,7 @@ func TailLogs(n int) []RingEntry {
 // It prefers rotating file logs when enabled, and falls back to in-memory
 // tail entries when file logs are unavailable.
 func ExportLogs(since, until *time.Time, maxLines int) ([]ParsedEntry, string, error) {
-	if maxLines <= 0 {
-		maxLines = 1000
-	}
-	if maxLines > maxDiagnosticsExportLines {
-		maxLines = maxDiagnosticsExportLines
-	}
+	maxLines = clampDiagnosticsExportLines(maxLines)
 
 	levelMu.RLock()
 	cfg := fileConfig
@@ -510,13 +505,25 @@ func withinWindow(t time.Time, since, until *time.Time) bool {
 }
 
 func clampParsedEntries(entries []ParsedEntry, maxLines int) []ParsedEntry {
+	maxLines = clampDiagnosticsExportLines(maxLines)
 	if maxLines <= 0 || len(entries) <= maxLines {
 		return entries
 	}
 	return entries[len(entries)-maxLines:]
 }
 
+func clampDiagnosticsExportLines(maxLines int) int {
+	if maxLines <= 0 {
+		return 1000
+	}
+	if maxLines > maxDiagnosticsExportLines {
+		return maxDiagnosticsExportLines
+	}
+	return maxLines
+}
+
 func readParsedEntriesFromFiles(cfg FileConfig, since, until *time.Time, maxLines int) ([]ParsedEntry, error) {
+	maxLines = clampDiagnosticsExportLines(maxLines)
 	files, err := listLogFiles(cfg)
 	if err != nil {
 		return nil, err
@@ -553,6 +560,7 @@ func readParsedEntriesFromFiles(cfg FileConfig, since, until *time.Time, maxLine
 }
 
 func readParsedEntriesFromMemory(since, until *time.Time, maxLines int) []ParsedEntry {
+	maxLines = clampDiagnosticsExportLines(maxLines)
 	raw := TailLogs(0)
 	out := make([]ParsedEntry, 0, len(raw))
 	for _, r := range raw {
