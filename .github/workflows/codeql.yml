@@ -41,9 +41,7 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          queries: |
-            security-extended
-            security-and-quality
+          queries: security-extended,security-and-quality
           config-file: ./.github/codeql/codeql-config.yml
           build-mode: ${{ matrix.build-mode }}
 
