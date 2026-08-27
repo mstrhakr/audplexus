@@ -63,7 +63,7 @@ body:
       description: Who benefits and how much?
       placeholder: "This would help users who ..."
     validations:
-      required: true
+      required: false
 
   - type: checkboxes
     id: checks
