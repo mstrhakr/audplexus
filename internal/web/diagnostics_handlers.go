@@ -220,7 +220,6 @@ func (s *Server) handleDiagnosticsCompare(c *gin.Context) {
 				status.MatchMethod = method
 				status.ServerItemID = remote.ID
 				status.ServerTitle = remote.Title
-				webLog.Debug().Str("destination_id", inv.Destination.ID).Str("destination_type", string(inv.Destination.Type)).Str("asin", book.ASIN).Str("match_method", method).Str("server_item_id", remote.ID).Msg("diagnostics: book matched")
 				destCards[cardIdx].Matched++
 			} else {
 				status.Status = reasonStatus(reason)

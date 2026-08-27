@@ -8,12 +8,12 @@
     </div>
 
     <div class="tabs" role="tablist" aria-label="Diagnostics tabs">
-        <button type="button" class="diag-tab active" role="tab" aria-selected="true" data-diag-tab="drift">Drift Inbox</button>
-        <button type="button" class="diag-tab" role="tab" aria-selected="false" data-diag-tab="ops">Logs &amp; Environment</button>
+        <button type="button" class="diag-tab" role="tab" aria-selected="false" data-diag-tab="drift">Drift Inbox</button>
+        <button type="button" class="diag-tab active" role="tab" aria-selected="true" data-diag-tab="ops">Logs &amp; Environment</button>
     </div>
 
     {{/* ── Tab 1: Drift Inbox (existing tooling, unchanged) ── */}}
-    <section id="diag-tab-drift" class="diag-tab-panel" role="tabpanel" aria-labelledby="drift">
+    <section id="diag-tab-drift" class="diag-tab-panel" role="tabpanel" aria-labelledby="drift" hidden>
         <p class="muted" style="margin:0 0 .75rem 0">Destination-first diagnostics for already-downloaded books. Resolution order: targeted scan first, redownload last resort.</p>
 
         <div id="diag-summary" class="diagnostics-summary">
@@ -48,7 +48,7 @@
     </section>
 
     {{/* ── Tab 2: Logs & Environment ──────────────────────────── */}}
-    <section id="diag-tab-ops" class="diag-tab-panel" role="tabpanel" aria-labelledby="ops" hidden>
+    <section id="diag-tab-ops" class="diag-tab-panel" role="tabpanel" aria-labelledby="ops">
         <div class="diag-ops-grid">
             <div style="display:flex;flex-direction:column;gap:.75rem;min-height:700px">
                 <div class="card" style="padding:.75rem .9rem">
@@ -217,35 +217,65 @@
 </div>
 
 <script>
-// Diag tab switching — simple show/hide. Lazy-loads ops tab data on first open.
+// Diag tab switching — simple show/hide. Each tab lazy-loads on first open.
 (function() {
     var tabs = document.querySelectorAll('.diag-tab');
     var panels = {
         drift: document.getElementById('diag-tab-drift'),
         ops:   document.getElementById('diag-tab-ops'),
     };
+    var byKey = {};
+    tabs.forEach(function(t) {
+        byKey[t.getAttribute('data-diag-tab')] = t;
+    });
+
+    var loadedDrift = false;
     var loadedOps = false;
+    function loadDriftIfNeeded() {
+        if (loadedDrift) return;
+        loadedDrift = true;
+        initDiagnosticsFilters();
+        loadDiagnostics();
+    }
+    function loadOpsIfNeeded() {
+        if (loadedOps) return;
+        loadedOps = true;
+        diagRefreshEnv();
+        diagRefreshLogs(true);
+        diagLoadConnList();
+        diagLoadExportOptions();
+        diagStartLogStream();
+    }
+    function activateTab(key) {
+        tabs.forEach(function(x) {
+            var on = x.getAttribute('data-diag-tab') === key;
+            x.classList.toggle('active', on);
+            x.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+        Object.keys(panels).forEach(function(k) {
+            panels[k].hidden = (k !== key);
+        });
+        if (key === 'drift') {
+            loadDriftIfNeeded();
+        } else if (key === 'ops') {
+            loadOpsIfNeeded();
+        }
+    }
+
     tabs.forEach(function(b) {
         b.addEventListener('click', function() {
             var key = b.getAttribute('data-diag-tab');
-            tabs.forEach(function(x) {
-                var on = x === b;
-                x.classList.toggle('active', on);
-                x.setAttribute('aria-selected', on ? 'true' : 'false');
-            });
-            Object.keys(panels).forEach(function(k) {
-                panels[k].hidden = (k !== key);
-            });
-            if (key === 'ops' && !loadedOps) {
-                loadedOps = true;
-                diagRefreshEnv();
-                diagRefreshLogs(true);
-                diagLoadConnList();
-                diagLoadExportOptions();
-                diagStartLogStream();
-            }
+            activateTab(key);
         });
     });
+
+    var initial = 'ops';
+    if (byKey.ops && byKey.ops.classList.contains('active')) {
+        initial = 'ops';
+    } else if (byKey.drift && byKey.drift.classList.contains('active')) {
+        initial = 'drift';
+    }
+    activateTab(initial);
 })();
 
 // ASIN lookup card — probes one title against every connected account + local DB.
@@ -1320,10 +1350,6 @@ function escapeJs(text) {
     return (text || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    initDiagnosticsFilters();
-    loadDiagnostics();
-});
 </script>
 
 <style>
