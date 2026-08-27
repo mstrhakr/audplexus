@@ -1216,7 +1216,6 @@ type diagnosticsHandoffRequest struct {
 	ExpectedValue string `json:"expected_value"`
 	UserNotes     string `json:"user_notes"`
 	IssueTitle    string `json:"issue_title"`
-	ProxyEndpoint string `json:"proxy_endpoint"`
 }
 
 type diagnosticsHandoffResponse struct {
@@ -1508,10 +1507,7 @@ func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
 		issueBody += "\nLog source: `" + source + "`\n"
 	}
 
-	endpoint := strings.TrimSpace(req.ProxyEndpoint)
-	if endpoint == "" {
-		endpoint = diagnosticsProxyEndpoint()
-	}
+	endpoint := diagnosticsProxyEndpoint()
 
 	logLines := make([]string, 0, len(entries))
 	for _, e := range entries {

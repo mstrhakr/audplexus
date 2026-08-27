@@ -114,12 +114,6 @@
                     </div>
 
                     <div class="form-row" style="margin-bottom:.45rem">
-                        <label for="diag-handoff-proxy" style="display:block;font-size:.78rem;margin-bottom:.25rem">Proxy endpoint (optional override)</label>
-                        <input id="diag-handoff-proxy" class="input" type="text" placeholder="https://api.audplexus.work/diagnostic">
-                        <div class="hint" style="font-size:.72rem">Leave blank to use server default proxy URL.</div>
-                    </div>
-
-                    <div class="form-row" style="margin-bottom:.45rem">
                         <label for="diag-handoff-issue-type" style="display:block;font-size:.78rem;margin-bottom:.25rem">Issue type</label>
                         <select id="diag-handoff-issue-type" class="select" style="width:100%">
                             <option value="diagnostics">General diagnostics</option>
@@ -666,7 +660,6 @@ function diagSubmitHandoff(btn) {
     var range = document.getElementById('diag-export-range');
     var exportMode = document.getElementById('diag-export-mode');
     var upload = document.getElementById('diag-handoff-upload');
-    var proxy = document.getElementById('diag-handoff-proxy');
     var issueType = document.getElementById('diag-handoff-issue-type');
     var expected = document.getElementById('diag-handoff-expected');
     var notes = document.getElementById('diag-handoff-notes');
@@ -688,7 +681,6 @@ function diagSubmitHandoff(btn) {
         mode: mode,
         detail: detail,
         upload_mode: upload ? upload.value : 'gist_secret',
-        proxy_endpoint: proxy ? proxy.value.trim() : '',
         issue_type: issueType ? issueType.value : 'diagnostics',
         expected_value: expected ? expected.value.trim() : '',
         user_notes: notes ? notes.value.trim() : '',
