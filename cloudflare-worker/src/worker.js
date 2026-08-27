@@ -60,7 +60,8 @@ export default {
         issue_url: issueURL,
       }, 200);
     } catch (err) {
-      return jsonResponse({ success: false, error: String(err?.message || err) }, 500);
+      console.error('diagnostic worker request failed', err);
+      return jsonResponse({ success: false, error: 'Internal server error' }, 500);
     }
   },
 };
