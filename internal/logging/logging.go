@@ -14,16 +14,20 @@
 package logging
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
 	zlog "github.com/rs/zerolog/log"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // Logger is a component-scoped structured logger.
@@ -36,10 +40,33 @@ type Logger struct {
 	fields    map[string]string
 }
 
+// FileConfig controls optional rotating file logs.
+type FileConfig struct {
+	Enabled    bool
+	Path       string
+	MaxSizeMB  int
+	MaxBackups int
+	MaxAgeDays int
+	Compress   bool
+}
+
+func defaultFileConfig() FileConfig {
+	return FileConfig{
+		Enabled:    true,
+		Path:       "/config/logs/audplexus.log",
+		MaxSizeMB:  25,
+		MaxBackups: 5,
+		MaxAgeDays: 14,
+		Compress:   true,
+	}
+}
+
 var (
 	globalLevel   = zerolog.InfoLevel
 	useJSONOutput = true
 	levelMu       sync.RWMutex
+	fileConfig    = defaultFileConfig()
+	fileWriter    io.Writer
 
 	// ringBuf is a small in-memory tail of recent log lines, exposed via
 	// the web UI's diagnostics tab. Capped to 1024 entries; older lines
@@ -225,6 +252,38 @@ func TailLogs(n int) []RingEntry {
 	return ringBuf.Snapshot(n)
 }
 
+// ExportLogs returns sanitized log entries for diagnostics export.
+// It prefers rotating file logs when enabled, and falls back to in-memory
+// tail entries when file logs are unavailable.
+func ExportLogs(since, until *time.Time, maxLines int) ([]ParsedEntry, string, error) {
+	if maxLines <= 0 {
+		maxLines = 1000
+	}
+
+	levelMu.RLock()
+	cfg := fileConfig
+	levelMu.RUnlock()
+
+	if cfg.Enabled {
+		entries, err := readParsedEntriesFromFiles(cfg, since, until, maxLines)
+		if err == nil && len(entries) > 0 {
+			return entries, "file", nil
+		}
+		if err != nil {
+			return readParsedEntriesFromMemory(since, until, maxLines), "memory", err
+		}
+	}
+
+	return readParsedEntriesFromMemory(since, until, maxLines), "memory", nil
+}
+
+// GetFileConfig returns the active rotating file log configuration.
+func GetFileConfig() FileConfig {
+	levelMu.RLock()
+	defer levelMu.RUnlock()
+	return fileConfig
+}
+
 // SubscribeLogs opens a live feed of new in-memory log entries.
 // The returned id must be passed to UnsubscribeLogs when done.
 func SubscribeLogs() (int, <-chan RingEntry) {
@@ -237,10 +296,20 @@ func UnsubscribeLogs(id int) {
 }
 
 // Init configures the global logging defaults. Call once at startup.
-func Init(level string, jsonOutput bool) {
+func Init(level string, jsonOutput bool, cfg FileConfig) {
+	normalized := normalizeFileConfig(cfg)
+	writer, err := buildFileWriter(normalized)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARN: file logging disabled (%v)\n", err)
+		normalized.Enabled = false
+		writer = nil
+	}
+
 	levelMu.Lock()
 	globalLevel = parseLevel(level)
 	useJSONOutput = jsonOutput
+	fileConfig = normalized
+	fileWriter = writer
 	levelMu.Unlock()
 
 	zerolog.SetGlobalLevel(globalLevel)
@@ -271,16 +340,179 @@ func setGlobalLogger(zl zerolog.Logger) {
 }
 
 func outputWriter() io.Writer {
+	levelMu.RLock()
+	jsonOutput := useJSONOutput
+	activeFileWriter := fileWriter
+	levelMu.RUnlock()
+
 	// io.MultiWriter tees every line to the ring buffer in addition to
 	// stderr / ConsoleWriter, so /api/diagnostics/logs/tail can serve a
 	// recent-history snapshot without us having to scrape the docker log.
-	if useJSONOutput {
-		return io.MultiWriter(os.Stderr, ringBuf)
+	writers := []io.Writer{ringBuf}
+	if jsonOutput {
+		writers = append(writers, os.Stderr)
+	} else {
+		writers = append(writers, zerolog.ConsoleWriter{
+			Out:        os.Stderr,
+			TimeFormat: "15:04:05",
+		})
 	}
-	return io.MultiWriter(zerolog.ConsoleWriter{
-		Out:        os.Stderr,
-		TimeFormat: "15:04:05",
-	}, ringBuf)
+	if activeFileWriter != nil {
+		writers = append(writers, activeFileWriter)
+	}
+	return io.MultiWriter(writers...)
+}
+
+func normalizeFileConfig(cfg FileConfig) FileConfig {
+	def := defaultFileConfig()
+	if strings.TrimSpace(cfg.Path) == "" {
+		cfg.Path = def.Path
+	}
+	if cfg.MaxSizeMB <= 0 {
+		cfg.MaxSizeMB = def.MaxSizeMB
+	}
+	if cfg.MaxBackups <= 0 {
+		cfg.MaxBackups = def.MaxBackups
+	}
+	if cfg.MaxAgeDays <= 0 {
+		cfg.MaxAgeDays = def.MaxAgeDays
+	}
+	return cfg
+}
+
+func buildFileWriter(cfg FileConfig) (io.Writer, error) {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	logPath := strings.TrimSpace(cfg.Path)
+	if logPath == "" {
+		return nil, fmt.Errorf("log file path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o750); err != nil {
+		return nil, fmt.Errorf("create log directory: %w", err)
+	}
+	return &lumberjack.Logger{
+		Filename:   logPath,
+		MaxSize:    cfg.MaxSizeMB,
+		MaxBackups: cfg.MaxBackups,
+		MaxAge:     cfg.MaxAgeDays,
+		Compress:   cfg.Compress,
+	}, nil
+}
+
+type logFileMeta struct {
+	path    string
+	modTime time.Time
+}
+
+func listLogFiles(cfg FileConfig) ([]logFileMeta, error) {
+	logPath := strings.TrimSpace(cfg.Path)
+	if logPath == "" {
+		return nil, nil
+	}
+	dir := filepath.Dir(logPath)
+	base := filepath.Base(logPath)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	files := make([]logFileMeta, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name != base && !strings.HasPrefix(name, base+"-") && !strings.HasPrefix(name, base+".") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, logFileMeta{path: filepath.Join(dir, name), modTime: info.ModTime()})
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].modTime.Equal(files[j].modTime) {
+			return files[i].path < files[j].path
+		}
+		return files[i].modTime.Before(files[j].modTime)
+	})
+	return files, nil
+}
+
+func withinWindow(t time.Time, since, until *time.Time) bool {
+	if since != nil && t.Before(*since) {
+		return false
+	}
+	if until != nil && t.After(*until) {
+		return false
+	}
+	return true
+}
+
+func clampParsedEntries(entries []ParsedEntry, maxLines int) []ParsedEntry {
+	if maxLines <= 0 || len(entries) <= maxLines {
+		return entries
+	}
+	return entries[len(entries)-maxLines:]
+}
+
+func readParsedEntriesFromFiles(cfg FileConfig, since, until *time.Time, maxLines int) ([]ParsedEntry, error) {
+	files, err := listLogFiles(cfg)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ParsedEntry, 0, maxLines)
+	for _, file := range files {
+		f, err := os.Open(file.path)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 2*1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			entry := ParseLogLine(line)
+			if entry.Time.IsZero() {
+				entry.Time = file.modTime.UTC()
+			}
+			if !entry.Time.IsZero() && !withinWindow(entry.Time, since, until) {
+				continue
+			}
+			out = append(out, entry)
+			if maxLines > 0 && len(out) > maxLines {
+				out = out[len(out)-maxLines:]
+			}
+		}
+		_ = f.Close()
+		if scanErr := scanner.Err(); scanErr != nil {
+			continue
+		}
+	}
+	return clampParsedEntries(out, maxLines), nil
+}
+
+func readParsedEntriesFromMemory(since, until *time.Time, maxLines int) []ParsedEntry {
+	raw := TailLogs(0)
+	out := make([]ParsedEntry, 0, len(raw))
+	for _, r := range raw {
+		entry := ParseLogLine(r.Line)
+		if entry.Time.IsZero() {
+			entry.Time = r.Time.UTC()
+		}
+		if !withinWindow(entry.Time, since, until) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return clampParsedEntries(out, maxLines)
 }
 
 func (l *Logger) build() zerolog.Logger {

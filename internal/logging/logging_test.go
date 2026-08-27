@@ -31,7 +31,7 @@ func TestParseLevel(t *testing.T) {
 }
 
 func TestInitAndSetLevel(t *testing.T) {
-	Init("debug", true)
+	Init("debug", true, FileConfig{})
 	if got := GetLevel(); got != "debug" {
 		t.Fatalf("GetLevel() after Init = %q, want debug", got)
 	}
@@ -133,7 +133,7 @@ func TestWithFieldAndWithFieldsImmutability(t *testing.T) {
 }
 
 func TestLoggerEventMethods(t *testing.T) {
-	Init("info", true)
+	Init("info", true, FileConfig{})
 	l := Component("web").WithField("req_id", "abc")
 
 	if l.GetZerolog().GetLevel() != zerolog.InfoLevel {
