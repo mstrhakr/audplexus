@@ -1,0 +1,12 @@
+name = "audplexus-diagnostic-proxy"
+main = "src/worker.js"
+compatibility_date = "2026-08-26"
+workers_dev = true
+
+# Custom route for production traffic
+routes = [
+  { pattern = "api.audplexus.dev/diagnostic", zone_name = "audplexus.dev" }
+]
+
+[vars]
+GITHUB_REPO = "mstrhakr/audplexus"

@@ -1,0 +1,157 @@
+/**
+ * Audplexus Diagnostic Report Proxy
+ *
+ * Receives diagnostics reports from Audplexus, optionally creates a GitHub Gist,
+ * and returns a pre-filled GitHub issue URL.
+ */
+
+export default {
+  async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: corsHeaders(),
+      });
+    }
+
+    const url = new URL(request.url);
+    if (url.pathname !== '/diagnostic' || request.method !== 'POST') {
+      return jsonResponse({ success: false, error: 'Not found' }, 404);
+    }
+
+    try {
+      const body = await request.json();
+      const report = body?.report;
+      if (!report || !report.report_id) {
+        return jsonResponse({ success: false, error: 'Invalid report format' }, 400);
+      }
+
+      const uploadMode = String(report.upload_mode || 'gist_secret').toLowerCase();
+      let gistURL = '';
+
+      if (uploadMode !== 'none') {
+        const gistResp = await fetch('https://api.github.com/gists', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${env.GITHUB_PAT}`,
+            'Accept': 'application/vnd.github+json',
+            'User-Agent': 'Audplexus-Diagnostic-Proxy/1.0',
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+          body: JSON.stringify({
+            description: `Audplexus Diagnostics: ${report.issue_type || 'general'} ${report.timestamp || ''}`,
+            public: uploadMode === 'gist_public',
+            files: buildGistFiles(report),
+          }),
+        });
+
+        if (!gistResp.ok) {
+          const err = await gistResp.text();
+          return jsonResponse({ success: false, error: `Failed to create gist: ${gistResp.status} ${err}` }, 502);
+        }
+
+        const gist = await gistResp.json();
+        gistURL = gist.html_url || '';
+      }
+
+      const issueURL = buildIssueURL(env.GITHUB_REPO, report, gistURL);
+      return jsonResponse({
+        success: true,
+        gist_url: gistURL,
+        issue_url: issueURL,
+      }, 200);
+    } catch (err) {
+      return jsonResponse({ success: false, error: String(err?.message || err) }, 500);
+    }
+  },
+};
+
+function buildGistFiles(report) {
+  const files = {};
+
+  files['1_summary.md'] = {
+    content: report.generated_summary || '# Audplexus Diagnostics\n\nNo summary supplied.',
+  };
+
+  const core = {
+    report_id: report.report_id,
+    timestamp: report.timestamp,
+    issue_type: report.issue_type,
+    expected_value: report.expected_value,
+    user_message: report.user_message,
+    issue_title: report.issue_title,
+    range: report.range,
+    mode: report.mode,
+    detail: report.detail,
+    log_source: report.log_source,
+    logs_exported: report.logs_exported,
+  };
+  files['2_core_report.json'] = { content: JSON.stringify(core, null, 2) };
+
+  if (Array.isArray(report.recent_logs) && report.recent_logs.length > 0) {
+    files['3_recent_logs.txt'] = { content: report.recent_logs.join('\n') };
+  }
+
+  if (report.runtime_env && Object.keys(report.runtime_env).length > 0) {
+    files['4_runtime_env.json'] = { content: JSON.stringify(report.runtime_env, null, 2) };
+  }
+
+  if (report.env_presence && Object.keys(report.env_presence).length > 0) {
+    files['5_env_presence.json'] = { content: JSON.stringify(report.env_presence, null, 2) };
+  }
+
+  if (Array.isArray(report.destinations) && report.destinations.length > 0) {
+    files['6_destinations.json'] = { content: JSON.stringify(report.destinations, null, 2) };
+  }
+
+  files['99_full_report.json'] = { content: JSON.stringify(report, null, 2) };
+  return files;
+}
+
+function buildIssueURL(repoSlug, report, gistURL) {
+  const [owner, repo] = String(repoSlug || 'mstrhakr/audplexus').split('/');
+  const title = report.issue_title || `[Diagnostics] ${report.issue_type || 'general'} - ${report.timestamp || ''}`;
+
+  const bodyLines = [
+    '# Audplexus Diagnostics Handover',
+    '',
+    `Issue type: ${report.issue_type || 'diagnostics'}`,
+    `Expected: ${report.expected_value || 'n/a'}`,
+    `Range: ${report.range || '24h'}`,
+    `Mode/Detail: ${report.mode || 'package'}/${report.detail || 'standard'}`,
+    '',
+    '## Reporter Notes',
+    report.user_message || 'n/a',
+    '',
+  ];
+
+  if (gistURL) {
+    bodyLines.push('## Artifact');
+    bodyLines.push(gistURL);
+    bodyLines.push('');
+  }
+
+  const base = `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/new`;
+  const q = new URLSearchParams();
+  q.set('title', title);
+  q.set('body', bodyLines.join('\n'));
+  return `${base}?${q.toString()}`;
+}
+
+function jsonResponse(data, status) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...corsHeaders(),
+    },
+  });
+}
+
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400',
+  };
+}
