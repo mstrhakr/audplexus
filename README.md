@@ -90,6 +90,26 @@ Need more detail? Start with the [User Guide](docs/user/README.md) or [Developer
 - [User Guide](docs/user/README.md)
 - [Developer Docs](docs/dev/README.md)
 
+## Security Scanning (CodeQL)
+
+Audplexus includes an advanced CodeQL setup for GitHub and local use:
+
+- GitHub workflow: `.github/workflows/codeql.yml`
+- Shared CodeQL config: `.github/codeql/codeql-config.yml`
+- Local runner script: `scripts/codeql-local.sh`
+
+Run CodeQL locally before push:
+
+```bash
+./scripts/codeql-local.sh
+```
+
+Run a subset of languages:
+
+```bash
+./scripts/codeql-local.sh go javascript-typescript
+```
+
 ## License
 
 MIT
