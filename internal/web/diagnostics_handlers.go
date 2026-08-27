@@ -1026,6 +1026,12 @@ func diagnosticsExportWindow(c *gin.Context, now time.Time) (*time.Time, *time.T
 	switch rangeKey {
 	case "all":
 		return nil, &end, "all", nil
+	case "1h":
+		s := end.Add(-1 * time.Hour)
+		return &s, &end, "1h", nil
+	case "6h":
+		s := end.Add(-6 * time.Hour)
+		return &s, &end, "6h", nil
 	case "30d":
 		s := end.Add(-30 * 24 * time.Hour)
 		return &s, &end, "30d", nil
@@ -1036,8 +1042,36 @@ func diagnosticsExportWindow(c *gin.Context, now time.Time) (*time.Time, *time.T
 		s := end.Add(-24 * time.Hour)
 		return &s, &end, "24h", nil
 	default:
-		return nil, nil, "", fmt.Errorf("invalid range; use 24h, 7d, 30d, all, or custom since/until")
+		return nil, nil, "", fmt.Errorf("invalid range; use 1h, 6h, 24h, 7d, 30d, all, or custom since/until")
 	}
+}
+
+func diagnosticsExportRanges(availability logging.LogAvailability, now time.Time) []gin.H {
+	if availability.Earliest == nil || availability.Latest == nil {
+		return []gin.H{{"value": "all", "label": "All available"}}
+	}
+
+	span := availability.Latest.Sub(*availability.Earliest)
+	ranges := make([]gin.H, 0, 6)
+	type option struct {
+		value string
+		label string
+		dur   time.Duration
+	}
+	for _, o := range []option{
+		{value: "1h", label: "Last 1 hour", dur: time.Hour},
+		{value: "6h", label: "Last 6 hours", dur: 6 * time.Hour},
+		{value: "24h", label: "Last 24 hours", dur: 24 * time.Hour},
+		{value: "7d", label: "Last 7 days", dur: 7 * 24 * time.Hour},
+		{value: "30d", label: "Last 30 days", dur: 30 * 24 * time.Hour},
+	} {
+		if span >= o.dur {
+			ranges = append(ranges, gin.H{"value": o.value, "label": o.label})
+		}
+	}
+	ranges = append(ranges, gin.H{"value": "all", "label": "All available"})
+	_ = now // reserved for future dynamic labels
+	return ranges
 }
 
 func writeZipJSON(zw *zip.Writer, name string, v any) error {
@@ -1158,6 +1192,35 @@ func (s *Server) diagnosticsDestinationsSnapshot(ctx context.Context) []gin.H {
 	return out
 }
 
+// handleDiagnosticsLogAvailability returns available log time window + valid ranges.
+func (s *Server) handleDiagnosticsLogAvailability(c *gin.Context) {
+	now := time.Now().UTC()
+	availability, err := logging.GetLogAvailability()
+	if err != nil {
+		webLog.Warn().Err(err).Msg("diagnostics availability: failed to inspect file logs")
+	}
+
+	ranges := diagnosticsExportRanges(availability, now)
+	defaultRange := "all"
+	for _, candidate := range []string{"24h", "7d", "30d", "6h", "1h", "all"} {
+		for _, r := range ranges {
+			if r["value"] == candidate {
+				defaultRange = candidate
+				goto done
+			}
+		}
+	}
+done:
+
+	c.JSON(http.StatusOK, gin.H{
+		"source":        availability.Source,
+		"earliest":      availability.Earliest,
+		"latest":        availability.Latest,
+		"ranges":        ranges,
+		"default_range": defaultRange,
+	})
+}
+
 // handleDiagnosticsExport bundles logs + sanitized diagnostics metadata.
 func (s *Server) handleDiagnosticsExport(c *gin.Context) {
 	now := time.Now().UTC()
@@ -1167,7 +1230,23 @@ func (s *Server) handleDiagnosticsExport(c *gin.Context) {
 		return
 	}
 
-	maxLines := 1000
+	mode := strings.ToLower(strings.TrimSpace(c.DefaultQuery("mode", "package")))
+	if mode != "package" && mode != "logs" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid mode; use package or logs"})
+		return
+	}
+	detail := strings.ToLower(strings.TrimSpace(c.DefaultQuery("detail", "standard")))
+	if detail != "standard" && detail != "full" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid detail; use standard or full"})
+		return
+	}
+
+	maxLines := 5000
+	if mode == "logs" {
+		maxLines = 20000
+	} else if detail == "full" {
+		maxLines = 20000
+	}
 	if raw := strings.TrimSpace(c.Query("max_lines")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 {
@@ -1189,7 +1268,11 @@ func (s *Server) handleDiagnosticsExport(c *gin.Context) {
 	envSnapshot := s.diagnosticsEnvSnapshot(ctx)
 	destinationSnapshot := s.diagnosticsDestinationsSnapshot(ctx)
 
-	fileName := fmt.Sprintf("audplexus-diagnostics-%s.zip", now.Format("20060102-150405"))
+	filePrefix := "audplexus-diagnostics"
+	if mode == "logs" {
+		filePrefix = "audplexus-logs"
+	}
+	fileName := fmt.Sprintf("%s-%s.zip", filePrefix, now.Format("20060102-150405"))
 	c.Header("Content-Type", "application/zip")
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
 
@@ -1203,23 +1286,29 @@ func (s *Server) handleDiagnosticsExport(c *gin.Context) {
 		"logs_source":        source,
 		"logs_exported":      len(entries),
 		"range":              rangeLabel,
+		"mode":               mode,
+		"detail":             detail,
 		"max_lines":          maxLines,
 		"has_log_read_error": logErr != nil,
 	}
 	if err := writeZipJSON(zw, "summary.json", summary); err != nil {
 		webLog.Warn().Err(err).Msg("diagnostics export: failed to write summary.json")
 	}
-	if err := writeZipJSON(zw, "runtime_env.json", envSnapshot); err != nil {
-		webLog.Warn().Err(err).Msg("diagnostics export: failed to write runtime_env.json")
+	if err := writeZipLogLines(zw, "logs.ndjson", entries); err != nil {
+		webLog.Warn().Err(err).Msg("diagnostics export: failed to write logs.ndjson")
 	}
 	if err := writeZipJSON(zw, "env_presence.json", diagnosticsEnvPresence()); err != nil {
 		webLog.Warn().Err(err).Msg("diagnostics export: failed to write env_presence.json")
 	}
-	if err := writeZipJSON(zw, "destinations.json", gin.H{"destinations": destinationSnapshot}); err != nil {
-		webLog.Warn().Err(err).Msg("diagnostics export: failed to write destinations.json")
-	}
-	if err := writeZipLogLines(zw, "logs.ndjson", entries); err != nil {
-		webLog.Warn().Err(err).Msg("diagnostics export: failed to write logs.ndjson")
+	if mode == "package" {
+		if err := writeZipJSON(zw, "runtime_env.json", envSnapshot); err != nil {
+			webLog.Warn().Err(err).Msg("diagnostics export: failed to write runtime_env.json")
+		}
+		if detail == "full" {
+			if err := writeZipJSON(zw, "destinations.json", gin.H{"destinations": destinationSnapshot}); err != nil {
+				webLog.Warn().Err(err).Msg("diagnostics export: failed to write destinations.json")
+			}
+		}
 	}
 	if logErr != nil {
 		if w, err := zw.Create("warnings.txt"); err == nil {

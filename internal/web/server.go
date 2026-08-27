@@ -745,6 +745,7 @@ func (s *Server) setupRoutes() {
 		// browser can pretty-render in the diagnostics page.
 		api.GET("/diagnostics/env", s.handleDiagnosticsEnv)
 		api.GET("/diagnostics/destinations", s.handleDiagnosticsDestinations)
+		api.GET("/diagnostics/logs/availability", s.handleDiagnosticsLogAvailability)
 		api.GET("/diagnostics/logs/stream", s.handleDiagnosticsLogsSSE)
 		api.GET("/diagnostics/export", s.handleDiagnosticsExport)
 		api.POST("/downloads/redownload/:asin", s.handleRedownload)
