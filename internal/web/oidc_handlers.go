@@ -89,6 +89,11 @@ func (s *Server) oauthConfig(c *gin.Context, cfg *auth.OIDCConfig, provider *oid
 // provider's authorization endpoint.
 func (s *Server) handleOIDCLogin(c *gin.Context) {
 	ctx := c.Request.Context()
+	if !s.authMgr.IsHTTPS(c) {
+		webLog.Warn().Str("ip", c.ClientIP()).Msg("blocking oidc login over non-https request")
+		c.Redirect(http.StatusSeeOther, "/login?loginFailed=true")
+		return
+	}
 
 	// OIDC is only meaningful when forms auth is the active method (otherwise
 	// the app is either fully open or fully locked). Guard so the flow can't be
@@ -140,6 +145,11 @@ func (s *Server) handleOIDCLogin(c *gin.Context) {
 // user, and issue the normal session cookie.
 func (s *Server) handleOIDCCallback(c *gin.Context) {
 	ctx := c.Request.Context()
+	if !s.authMgr.IsHTTPS(c) {
+		webLog.Warn().Str("ip", c.ClientIP()).Msg("blocking oidc callback over non-https request")
+		c.Redirect(http.StatusSeeOther, "/login?loginFailed=true")
+		return
+	}
 
 	cfg, err := auth.LoadOIDCConfig(ctx, s.db, s.credBox)
 	if err != nil || !cfg.Enabled || !cfg.Configured() {
@@ -247,9 +257,8 @@ func (s *Server) sealOIDCFlow(c *gin.Context, flow oidcFlowState) error {
 		return err
 	}
 	val := base64.RawURLEncoding.EncodeToString(sealed)
-	secure := s.authMgr.IsHTTPS(c)
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(oidcFlowCookie, val, int(oidcFlowTTL.Seconds()), "/auth/oidc", "", secure, true)
+	c.SetCookie(oidcFlowCookie, val, int(oidcFlowTTL.Seconds()), "/auth/oidc", "", true, true)
 	return nil
 }
 
@@ -277,9 +286,8 @@ func (s *Server) openOIDCFlow(c *gin.Context) (oidcFlowState, bool) {
 }
 
 func (s *Server) clearOIDCFlow(c *gin.Context) {
-	secure := s.authMgr.IsHTTPS(c)
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(oidcFlowCookie, "", -1, "/auth/oidc", "", secure, true)
+	c.SetCookie(oidcFlowCookie, "", -1, "/auth/oidc", "", true, true)
 }
 
 func randToken() string {
