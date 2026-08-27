@@ -42,3 +42,5 @@ docker-data
 .gitlab-ci.yml
 .travis.yml
 
+.tools
+/.codeql-*/

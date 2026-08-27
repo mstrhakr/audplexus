@@ -49,3 +49,5 @@ audplexus.code-workspace
 go.work
 go.work.sum
 
+.tools
+/.codeql-*/
