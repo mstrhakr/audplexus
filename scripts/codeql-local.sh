@@ -9,6 +9,7 @@ CODEQL_ZIP="$ROOT_DIR/.tools/codeql-linux64.zip"
 CODEQL_DIR="$ROOT_DIR/.tools/codeql"
 RESULTS_DIR="$ROOT_DIR/.codeql-results"
 DB_DIR="$ROOT_DIR/.codeql-db"
+CODEQL_CONFIG_FILE="$ROOT_DIR/.github/codeql/codeql-config.yml"
 
 log() {
   printf '[codeql-local] %s\n' "$*"
@@ -67,17 +68,18 @@ create_db() {
 
   rm -rf "$DB_DIR/$language"
 
-  if [[ "$mode" == "autobuild" ]]; then
-    "$codeql_bin" database create "$DB_DIR/$language" \
-      --language="$language" \
-      --source-root="$ROOT_DIR" \
-      --build-mode=autobuild
-  else
-    "$codeql_bin" database create "$DB_DIR/$language" \
-      --language="$language" \
-      --source-root="$ROOT_DIR" \
-      --build-mode=none
+  local create_args=(
+    "$DB_DIR/$language"
+    "--language=$language"
+    "--source-root=$ROOT_DIR"
+    "--build-mode=$mode"
+  )
+
+  if [[ -f "$CODEQL_CONFIG_FILE" ]]; then
+    create_args+=("--codescanning-config=$CODEQL_CONFIG_FILE")
   fi
+
+  "$codeql_bin" database create "${create_args[@]}"
 }
 
 analyze_db() {
