@@ -135,6 +135,11 @@
                         <input id="diag-handoff-expected" class="input" type="text" placeholder="What should have happened?">
                     </div>
 
+                    <div class="form-row" style="margin-bottom:.45rem">
+                        <label for="diag-handoff-steps" style="display:block;font-size:.78rem;margin-bottom:.25rem">Steps to reproduce (optional)</label>
+                        <textarea id="diag-handoff-steps" class="input" rows="3" placeholder="Leave blank to fill this in on GitHub"></textarea>
+                    </div>
+
                     <div class="form-row" style="margin-bottom:.55rem">
                         <label for="diag-handoff-notes" style="display:block;font-size:.78rem;margin-bottom:.25rem">Reporter notes (optional)</label>
                         <textarea id="diag-handoff-notes" class="input" rows="3" placeholder="Any reproduction details or observations"></textarea>
@@ -662,6 +667,7 @@ function diagSubmitHandoff(btn) {
     var upload = document.getElementById('diag-handoff-upload');
     var issueType = document.getElementById('diag-handoff-issue-type');
     var expected = document.getElementById('diag-handoff-expected');
+    var steps = document.getElementById('diag-handoff-steps');
     var notes = document.getElementById('diag-handoff-notes');
     var title = document.getElementById('diag-handoff-title');
     var out = document.getElementById('diag-handoff-status');
@@ -683,6 +689,7 @@ function diagSubmitHandoff(btn) {
         upload_mode: upload ? upload.value : 'gist_secret',
         issue_type: issueType ? issueType.value : 'diagnostics',
         expected_value: expected ? expected.value.trim() : '',
+        repro_steps: steps ? steps.value.trim() : '',
         user_notes: notes ? notes.value.trim() : '',
         issue_title: title ? title.value.trim() : ''
     };

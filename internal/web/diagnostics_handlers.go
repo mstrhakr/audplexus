@@ -1290,6 +1290,7 @@ type diagnosticsHandoffRequest struct {
 	UploadMode    string `json:"upload_mode"` // none | gist_secret | gist_public
 	IssueType     string `json:"issue_type"`
 	ExpectedValue string `json:"expected_value"`
+	ReproSteps    string `json:"repro_steps"`
 	UserNotes     string `json:"user_notes"`
 	IssueTitle    string `json:"issue_title"`
 }
@@ -1568,6 +1569,7 @@ func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
 		uploadMode = "gist_secret"
 	}
 	cleanExpected := strings.TrimSpace(redactDiagnosticsSensitive(req.ExpectedValue))
+	cleanSteps := strings.TrimSpace(redactDiagnosticsSensitive(req.ReproSteps))
 	cleanNotes := strings.TrimSpace(redactDiagnosticsSensitive(req.UserNotes))
 
 	issueTitle := strings.TrimSpace(redactDiagnosticsSensitive(req.IssueTitle))
@@ -1603,6 +1605,7 @@ func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
 		"timestamp":         now.Format(time.RFC3339),
 		"issue_type":        req.IssueType,
 		"expected_value":    cleanExpected,
+		"repro_steps":       cleanSteps,
 		"user_message":      cleanNotes,
 		"issue_title":       issueTitle,
 		"issue_body":        issueBody,

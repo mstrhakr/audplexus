@@ -133,6 +133,7 @@ function buildGistFiles(report) {
     timestamp: report.timestamp,
     issue_type: report.issue_type,
     expected_value: report.expected_value,
+    repro_steps: report.repro_steps,
     user_message: report.user_message,
     issue_title: report.issue_title,
     range: report.range,
@@ -166,7 +167,9 @@ function buildGistFiles(report) {
 function buildIssueURL(repoSlug, report, gistURL) {
   const [owner, repo] = String(repoSlug || 'mstrhakr/audplexus').split('/');
   const issueType = String(report.issue_type || 'diagnostics').toLowerCase();
-  const title = report.issue_title || `bug: diagnostics ${issueType} (${new Date().toISOString().slice(0, 10)})`;
+  const customTitle = String(report.issue_title || '').trim();
+  const generatedTitle = `diagnostics ${issueType} (${new Date().toISOString().slice(0, 10)})`;
+  const title = ensureBugTitlePrefix(customTitle || generatedTitle);
 
   let area = 'Other';
   if (issueType.includes('sync')) area = 'Sync';
@@ -177,12 +180,10 @@ function buildIssueURL(repoSlug, report, gistURL) {
   else if (issueType.includes('ui')) area = 'UI / Dashboard';
 
   const expected = report.expected_value || 'See diagnostics notes below.';
-  const actual = `Diagnostics handoff generated from Audplexus at ${report.timestamp || 'unknown time'}.`;
-  const steps = [
-    '1. Open Audplexus Diagnostics page.',
-    '2. Click Send to GitHub in GitHub Handoff.',
-    '3. Review the attached diagnostics artifact and context.',
-  ].join('\n');
+  const actual = report.user_message
+    ? String(report.user_message)
+    : `Diagnostics handoff generated from Audplexus at ${report.timestamp || 'unknown time'}.`;
+  const steps = String(report.repro_steps || '').trim();
 
   const notesLines = [
     `Issue type: ${report.issue_type || 'diagnostics'}`,
@@ -203,9 +204,9 @@ function buildIssueURL(repoSlug, report, gistURL) {
   const q = new URLSearchParams();
   q.set('template', 'bug_report.yml');
   q.set('title', title);
-  q.set('summary', title);
+  q.set('summary', title.replace(/^bug:\s*/i, '').trim());
   q.set('area', area);
-  q.set('steps', steps);
+  if (steps) q.set('steps', steps);
   q.set('expected', expected);
   q.set('actual', actual);
   q.set('diagnostics_url', gistURL || '');
@@ -219,6 +220,13 @@ function buildIssueURL(repoSlug, report, gistURL) {
   }
   q.set('env', envLines.length > 0 ? envLines.join('\n') : 'Environment details to be confirmed by reporter.');
   return `${base}?${q.toString()}`;
+}
+
+function ensureBugTitlePrefix(title) {
+  const t = String(title || '').trim();
+  if (t.length === 0) return 'bug: diagnostics';
+  if (/^bug:\s*/i.test(t)) return t;
+  return `bug: ${t}`;
 }
 
 function jsonResponse(data, status) {
