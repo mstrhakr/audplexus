@@ -8,46 +8,11 @@
     </div>
 
     <div class="tabs" role="tablist" aria-label="Diagnostics tabs">
-        <button type="button" class="diag-tab" role="tab" aria-selected="false" data-diag-tab="drift">Drift Inbox</button>
         <button type="button" class="diag-tab active" role="tab" aria-selected="true" data-diag-tab="ops">Logs &amp; Environment</button>
+        <button type="button" class="diag-tab" role="tab" aria-selected="false" data-diag-tab="drift">Drift Inbox</button>
     </div>
 
-    {{/* ── Tab 1: Drift Inbox (existing tooling, unchanged) ── */}}
-    <section id="diag-tab-drift" class="diag-tab-panel" role="tabpanel" aria-labelledby="drift" hidden>
-        <p class="muted" style="margin:0 0 .75rem 0">Destination-first diagnostics for already-downloaded books. Resolution order: targeted scan first, redownload last resort.</p>
-
-        <div id="diag-summary" class="diagnostics-summary">
-            <div class="loading">Loading diagnostics...</div>
-        </div>
-
-        <div class="actions-bar">
-            <button class="btn btn-primary" onclick="loadDiagnostics()">Refresh</button>
-            <button id="diag-rescan-all" class="btn btn-secondary" onclick="rescanAllIssues()">Rescan All Issues</button>
-            <button id="diag-redownload-all" class="btn btn-danger" onclick="redownloadAllListed()">Redownload All Listed</button>
-            <span id="diag-status"></span>
-        </div>
-
-        <div class="diag-filter-bar">
-            <input id="diag-filter-query" class="diag-filter-input" type="search" placeholder="Filter by title, ASIN, author, or issue">
-            <select id="diag-filter-type" class="diag-filter-select" aria-label="Filter by issue type">
-                <option value="all">All issue types</option>
-                <option value="missing">Missing destination</option>
-                <option value="unknown">Unknown destination state</option>
-                <option value="disk">Missing on disk</option>
-            </select>
-            <select id="diag-filter-destination" class="diag-filter-select" aria-label="Filter by destination">
-                <option value="all">All destinations</option>
-            </select>
-            <span id="diag-filter-meta" class="muted diag-filter-meta"></span>
-        </div>
-
-        <h2>Issue Inbox</h2>
-        <div id="diag-issues">
-            <p class="empty">Loading...</p>
-        </div>
-    </section>
-
-    {{/* ── Tab 2: Logs & Environment ──────────────────────────── */}}
+    {{/* ── Tab 1: Logs & Environment ──────────────────────────── */}}
     <section id="diag-tab-ops" class="diag-tab-panel" role="tabpanel" aria-labelledby="ops">
         <div class="diag-ops-grid">
             <div style="display:flex;flex-direction:column;gap:.75rem;min-height:700px">
@@ -214,6 +179,41 @@
             </div>
         </div>
     </section>
+
+    {{/* ── Tab 2: Drift Inbox (existing tooling, unchanged) ── */}}
+    <section id="diag-tab-drift" class="diag-tab-panel" role="tabpanel" aria-labelledby="drift" hidden>
+        <p class="muted" style="margin:0 0 .75rem 0">Destination-first diagnostics for already-downloaded books. Resolution order: targeted scan first, redownload last resort.</p>
+
+        <div id="diag-summary" class="diagnostics-summary">
+            <div class="loading">Loading diagnostics...</div>
+        </div>
+
+        <div class="actions-bar">
+            <button class="btn btn-primary" onclick="loadDiagnostics()">Refresh</button>
+            <button id="diag-rescan-all" class="btn btn-secondary" onclick="rescanAllIssues()">Rescan All Issues</button>
+            <button id="diag-redownload-all" class="btn btn-danger" onclick="redownloadAllListed()">Redownload All Listed</button>
+            <span id="diag-status"></span>
+        </div>
+
+        <div class="diag-filter-bar">
+            <input id="diag-filter-query" class="diag-filter-input" type="search" placeholder="Filter by title, ASIN, author, or issue">
+            <select id="diag-filter-type" class="diag-filter-select" aria-label="Filter by issue type">
+                <option value="all">All issue types</option>
+                <option value="missing">Missing destination</option>
+                <option value="unknown">Unknown destination state</option>
+                <option value="disk">Missing on disk</option>
+            </select>
+            <select id="diag-filter-destination" class="diag-filter-select" aria-label="Filter by destination">
+                <option value="all">All destinations</option>
+            </select>
+            <span id="diag-filter-meta" class="muted diag-filter-meta"></span>
+        </div>
+
+        <h2>Issue Inbox</h2>
+        <div id="diag-issues">
+            <p class="empty">Loading...</p>
+        </div>
+    </section>
 </div>
 
 <script>
@@ -270,9 +270,7 @@
     });
 
     var initial = 'ops';
-    if (byKey.ops && byKey.ops.classList.contains('active')) {
-        initial = 'ops';
-    } else if (byKey.drift && byKey.drift.classList.contains('active')) {
+    if (byKey.drift && byKey.drift.classList.contains('active') && !(byKey.ops && byKey.ops.classList.contains('active'))) {
         initial = 'drift';
     }
     activateTab(initial);
