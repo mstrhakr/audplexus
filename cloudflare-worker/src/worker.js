@@ -109,31 +109,52 @@ function buildGistFiles(report) {
 
 function buildIssueURL(repoSlug, report, gistURL) {
   const [owner, repo] = String(repoSlug || 'mstrhakr/audplexus').split('/');
-  const title = report.issue_title || `[Diagnostics] ${report.issue_type || 'general'} - ${report.timestamp || ''}`;
+  const issueType = String(report.issue_type || 'diagnostics').toLowerCase();
+  const title = report.issue_title || `bug: diagnostics ${issueType} (${new Date().toISOString().slice(0, 10)})`;
 
-  const bodyLines = [
-    '# Audplexus Diagnostics Handover',
-    '',
+  let area = 'Other';
+  if (issueType.includes('sync')) area = 'Sync';
+  else if (issueType.includes('download')) area = 'Downloads';
+  else if (issueType.includes('metadata') || issueType.includes('tag')) area = 'Metadata / Tagging';
+  else if (issueType.includes('destination')) area = 'Destinations (ABS / Plex / Emby / Jellyfin)';
+  else if (issueType.includes('auth')) area = 'Authentication';
+  else if (issueType.includes('ui')) area = 'UI / Dashboard';
+
+  const expected = report.expected_value || 'See diagnostics notes below.';
+  const actual = `Diagnostics handoff generated from Audplexus at ${report.timestamp || 'unknown time'}.`;
+  const steps = [
+    '1. Open Audplexus Diagnostics page.',
+    '2. Click Send to GitHub in GitHub Handoff.',
+    '3. Review the attached diagnostics artifact and context.',
+  ].join('\n');
+
+  const notesLines = [
     `Issue type: ${report.issue_type || 'diagnostics'}`,
-    `Expected: ${report.expected_value || 'n/a'}`,
     `Range: ${report.range || '24h'}`,
     `Mode/Detail: ${report.mode || 'package'}/${report.detail || 'standard'}`,
-    '',
-    '## Reporter Notes',
-    report.user_message || 'n/a',
-    '',
   ];
-
+  if (report.user_message) {
+    notesLines.push('');
+    notesLines.push('Reporter notes:');
+    notesLines.push(String(report.user_message));
+  }
   if (gistURL) {
-    bodyLines.push('## Artifact');
-    bodyLines.push(gistURL);
-    bodyLines.push('');
+    notesLines.push('');
+    notesLines.push(`Artifact: ${gistURL}`);
   }
 
   const base = `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/new`;
   const q = new URLSearchParams();
+  q.set('template', 'bug_report.yml');
   q.set('title', title);
-  q.set('body', bodyLines.join('\n'));
+  q.set('summary', title);
+  q.set('area', area);
+  q.set('steps', steps);
+  q.set('expected', expected);
+  q.set('actual', actual);
+  q.set('diagnostics_url', gistURL || '');
+  q.set('diagnostics_notes', notesLines.join('\n'));
+  q.set('env', 'Environment details to be confirmed by reporter.');
   return `${base}?${q.toString()}`;
 }
 
