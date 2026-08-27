@@ -69,6 +69,14 @@
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                             Copy
                         </button>
+                        <select id="diag-export-range" style="padding:.25rem .5rem;font-size:.78rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;width:auto" title="Export time range">
+                            <option value="24h">Last 24h</option>
+                            <option value="7d">Last 7d</option>
+                            <option value="30d">Last 30d</option>
+                            <option value="all">All available</option>
+                        </select>
+                        <input id="diag-export-lines" type="number" min="100" max="20000" value="1000" style="width:6.1rem;padding:.25rem .4rem;font-size:.78rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px" title="Max lines in export">
+                        <button type="button" class="btn btn-ghost btn-small" onclick="diagExportBundle(this)">Export ZIP</button>
                         <button type="button" class="btn btn-ghost btn-small" onclick="diagRefreshLogs(true)">Refresh</button>
                     </span>
                 </div>
@@ -520,6 +528,29 @@ function diagRefreshLogs(scrollToBottom) {
     diagLogForceFullRender = true;
     var streamEl = document.getElementById('diag-log-stream');
     diagRequestLogRender(!!scrollToBottom || diagShouldAutoScroll(streamEl));
+}
+
+function diagExportBundle(btn) {
+    var range = document.getElementById('diag-export-range');
+    var lines = document.getElementById('diag-export-lines');
+    var rangeVal = range ? range.value : '24h';
+    var maxLines = lines ? parseInt(lines.value || '1000', 10) : 1000;
+    if (!maxLines || maxLines < 100) maxLines = 1000;
+    if (maxLines > 20000) maxLines = 20000;
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Exporting...';
+    }
+    var query = '?range=' + encodeURIComponent(rangeVal) + '&max_lines=' + encodeURIComponent(String(maxLines));
+    window.location = '/api/diagnostics/export' + query;
+
+    setTimeout(function() {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Export ZIP';
+        }
+    }, 1400);
 }
 
 document.addEventListener('visibilitychange', function() {

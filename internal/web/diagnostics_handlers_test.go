@@ -1,8 +1,11 @@
 package web
 
 import (
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/mstrhakr/audplexus/internal/database"
 )
 
@@ -132,5 +135,56 @@ func TestMatchBookAgainstInventoryABSMissingWhenPathAlsoDoesNotMatch(t *testing.
 	}
 	if reason != "missing: ASIN not found in destination" {
 		t.Fatalf("matchBookAgainstInventory() reason = %q, want missing", reason)
+	}
+}
+
+func TestDiagnosticsExportWindowQuickRange(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/api/diagnostics/export?range=7d", nil)
+
+	now := time.Date(2026, 1, 31, 12, 0, 0, 0, time.UTC)
+	since, until, label, err := diagnosticsExportWindow(c, now)
+	if err != nil {
+		t.Fatalf("diagnosticsExportWindow() error = %v", err)
+	}
+	if label != "7d" {
+		t.Fatalf("label = %q, want 7d", label)
+	}
+	if since == nil || until == nil {
+		t.Fatalf("since/until should be non-nil for range=7d")
+	}
+	if got := until.Sub(*since); got != 7*24*time.Hour {
+		t.Fatalf("window duration = %v, want 168h", got)
+	}
+}
+
+func TestDiagnosticsExportWindowInvalidRange(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/api/diagnostics/export?range=nope", nil)
+
+	_, _, _, err := diagnosticsExportWindow(c, time.Now().UTC())
+	if err == nil {
+		t.Fatalf("expected invalid range error")
+	}
+}
+
+func TestDiagnosticsEnvPresenceRedactsValuesToBool(t *testing.T) {
+	t.Setenv("LOG_FILE_PATH", "/secret/path.log")
+	t.Setenv("AUDPLEXUS_API_KEY", "supersecret")
+
+	flags := diagnosticsEnvPresence()
+	if !flags["LOG_FILE_PATH"] {
+		t.Fatalf("LOG_FILE_PATH flag = false, want true")
+	}
+	if !flags["AUDPLEXUS_API_KEY"] {
+		t.Fatalf("AUDPLEXUS_API_KEY flag = false, want true")
 	}
 }

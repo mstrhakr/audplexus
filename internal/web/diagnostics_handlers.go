@@ -1,6 +1,7 @@
 package web
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -954,10 +955,122 @@ func normalizeDiagnosticsPathKey(p string) string {
 	return strings.ToLower(strings.Join(parts, "/"))
 }
 
+var diagnosticsKnownEnvVars = []string{
+	"PORT",
+	"DATABASE_TYPE",
+	"DATABASE_PATH",
+	"DATABASE_DSN",
+	"AUDIOBOOKS_PATH",
+	"DOWNLOADS_PATH",
+	"CONFIG_PATH",
+	"LOG_LEVEL",
+	"LOG_JSON",
+	"LOG_FILE_ENABLED",
+	"LOG_FILE_PATH",
+	"LOG_FILE_MAX_SIZE_MB",
+	"LOG_FILE_MAX_BACKUPS",
+	"LOG_FILE_MAX_AGE_DAYS",
+	"LOG_FILE_COMPRESS",
+	"OUTPUT_FORMAT",
+	"DOWNLOAD_CONCURRENCY",
+	"DOWNLOAD_DOWNLOAD_CONCURRENCY",
+	"DECRYPT_CONCURRENCY",
+	"DOWNLOAD_DECRYPT_CONCURRENCY",
+	"PROCESS_CONCURRENCY",
+	"DOWNLOAD_PROCESS_CONCURRENCY",
+	"PLEX_URL",
+	"PLEX_TOKEN",
+	"SYNC_SCHEDULE",
+	"SYNC_ENABLED",
+	"SYNC_MODE",
+	"SYNC_AUTO_QUEUE_NEW",
+	"AUDPLEXUS_API_KEY",
+	"AUDPLEXUS_ADMIN_USERNAME",
+	"AUDPLEXUS_ADMIN_PASSWORD",
+	"MEDIA_SERVER",
+	"EMBY_URL",
+	"EMBY_API_KEY",
+	"EMBY_LIBRARY_ID",
+	"EMBY_LIBRARY_PATH",
+}
+
+func diagnosticsEnvPresence() map[string]bool {
+	out := make(map[string]bool, len(diagnosticsKnownEnvVars))
+	for _, key := range diagnosticsKnownEnvVars {
+		out[key] = strings.TrimSpace(os.Getenv(key)) != ""
+	}
+	return out
+}
+
+func diagnosticsExportWindow(c *gin.Context, now time.Time) (*time.Time, *time.Time, string, error) {
+	end := now.UTC()
+	rangeKey := strings.ToLower(strings.TrimSpace(c.DefaultQuery("range", "24h")))
+	if sinceRaw := strings.TrimSpace(c.Query("since")); sinceRaw != "" {
+		since, err := time.Parse(time.RFC3339, sinceRaw)
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("invalid since timestamp")
+		}
+		until := end
+		if untilRaw := strings.TrimSpace(c.Query("until")); untilRaw != "" {
+			parsed, err := time.Parse(time.RFC3339, untilRaw)
+			if err != nil {
+				return nil, nil, "", fmt.Errorf("invalid until timestamp")
+			}
+			until = parsed.UTC()
+		}
+		s := since.UTC()
+		u := until.UTC()
+		return &s, &u, "custom", nil
+	}
+
+	switch rangeKey {
+	case "all":
+		return nil, &end, "all", nil
+	case "30d":
+		s := end.Add(-30 * 24 * time.Hour)
+		return &s, &end, "30d", nil
+	case "7d":
+		s := end.Add(-7 * 24 * time.Hour)
+		return &s, &end, "7d", nil
+	case "24h", "":
+		s := end.Add(-24 * time.Hour)
+		return &s, &end, "24h", nil
+	default:
+		return nil, nil, "", fmt.Errorf("invalid range; use 24h, 7d, 30d, all, or custom since/until")
+	}
+}
+
+func writeZipJSON(zw *zip.Writer, name string, v any) error {
+	w, err := zw.Create(name)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+func writeZipLogLines(zw *zip.Writer, name string, entries []logging.ParsedEntry) error {
+	w, err := zw.Create(name)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(w)
+	for _, e := range entries {
+		if err := enc.Encode(e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // handleDiagnosticsEnv returns a JSON snapshot of runtime + path
 // info for the DS-style "Logs & Environment" diagnostics tab. Read-only.
 func (s *Server) handleDiagnosticsEnv(c *gin.Context) {
-	ctx := c.Request.Context()
+	c.JSON(http.StatusOK, s.diagnosticsEnvSnapshot(c.Request.Context()))
+}
+
+func (s *Server) diagnosticsEnvSnapshot(ctx context.Context) gin.H {
 	marketplace := "us"
 	if stored, _ := s.db.GetSetting(ctx, "audible_marketplace"); strings.TrimSpace(stored) != "" {
 		marketplace = strings.TrimSpace(stored)
@@ -975,8 +1088,9 @@ func (s *Server) handleDiagnosticsEnv(c *gin.Context) {
 			"books_added":  last.BooksAdded,
 		}
 	}
+	logFileCfg := logging.GetFileConfig()
 
-	c.JSON(http.StatusOK, gin.H{
+	return gin.H{
 		"go_version":      runtime.Version(),
 		"os_arch":         runtime.GOOS + "/" + runtime.GOARCH,
 		"num_cpu":         runtime.NumCPU(),
@@ -988,7 +1102,15 @@ func (s *Server) handleDiagnosticsEnv(c *gin.Context) {
 		"marketplace":     marketplace,
 		"last_sync":       lastSyncOut,
 		"server_time":     time.Now(),
-	})
+		"log_file": gin.H{
+			"enabled":      logFileCfg.Enabled,
+			"path":         logFileCfg.Path,
+			"max_size_mb":  logFileCfg.MaxSizeMB,
+			"max_backups":  logFileCfg.MaxBackups,
+			"max_age_days": logFileCfg.MaxAgeDays,
+			"compress":     logFileCfg.Compress,
+		},
+	}
 }
 
 // handleDiagnosticsDestinations returns a JSON snapshot of every
@@ -1001,8 +1123,10 @@ func (s *Server) handleDiagnosticsEnv(c *gin.Context) {
 // across the app. Sensitive fields (api_key, plex_token) are not in
 // the summary struct, so this can't leak credentials.
 func (s *Server) handleDiagnosticsDestinations(c *gin.Context) {
-	ctx := c.Request.Context()
+	c.JSON(http.StatusOK, gin.H{"destinations": s.diagnosticsDestinationsSnapshot(c.Request.Context())})
+}
 
+func (s *Server) diagnosticsDestinationsSnapshot(ctx context.Context) []gin.H {
 	// Coverage stat needs a books-complete count, but the diagnostics
 	// list doesn't render coverage — pass 0 so the helper skips that
 	// branch and we avoid a per-call books table scan.
@@ -1031,7 +1155,77 @@ func (s *Server) handleDiagnosticsDestinations(c *gin.Context) {
 			"last_checked_at": v.LastCheckedAt,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"destinations": out})
+	return out
+}
+
+// handleDiagnosticsExport bundles logs + sanitized diagnostics metadata.
+func (s *Server) handleDiagnosticsExport(c *gin.Context) {
+	now := time.Now().UTC()
+	since, until, rangeLabel, err := diagnosticsExportWindow(c, now)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	maxLines := 1000
+	if raw := strings.TrimSpace(c.Query("max_lines")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "max_lines must be a positive integer"})
+			return
+		}
+		if parsed > 20000 {
+			parsed = 20000
+		}
+		maxLines = parsed
+	}
+
+	entries, source, logErr := logging.ExportLogs(since, until, maxLines)
+	if logErr != nil {
+		webLog.Warn().Err(logErr).Msg("diagnostics export: log file read failed; using available logs")
+	}
+
+	ctx := c.Request.Context()
+	envSnapshot := s.diagnosticsEnvSnapshot(ctx)
+	destinationSnapshot := s.diagnosticsDestinationsSnapshot(ctx)
+
+	fileName := fmt.Sprintf("audplexus-diagnostics-%s.zip", now.Format("20060102-150405"))
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
+
+	zw := zip.NewWriter(c.Writer)
+	defer func() {
+		_ = zw.Close()
+	}()
+
+	summary := gin.H{
+		"generated_at":       now,
+		"logs_source":        source,
+		"logs_exported":      len(entries),
+		"range":              rangeLabel,
+		"max_lines":          maxLines,
+		"has_log_read_error": logErr != nil,
+	}
+	if err := writeZipJSON(zw, "summary.json", summary); err != nil {
+		webLog.Warn().Err(err).Msg("diagnostics export: failed to write summary.json")
+	}
+	if err := writeZipJSON(zw, "runtime_env.json", envSnapshot); err != nil {
+		webLog.Warn().Err(err).Msg("diagnostics export: failed to write runtime_env.json")
+	}
+	if err := writeZipJSON(zw, "env_presence.json", diagnosticsEnvPresence()); err != nil {
+		webLog.Warn().Err(err).Msg("diagnostics export: failed to write env_presence.json")
+	}
+	if err := writeZipJSON(zw, "destinations.json", gin.H{"destinations": destinationSnapshot}); err != nil {
+		webLog.Warn().Err(err).Msg("diagnostics export: failed to write destinations.json")
+	}
+	if err := writeZipLogLines(zw, "logs.ndjson", entries); err != nil {
+		webLog.Warn().Err(err).Msg("diagnostics export: failed to write logs.ndjson")
+	}
+	if logErr != nil {
+		if w, err := zw.Create("warnings.txt"); err == nil {
+			_, _ = w.Write([]byte("Log export warning: " + logErr.Error() + "\n"))
+		}
+	}
 }
 
 // handleDiagnosticsLogsSSE streams diagnostics log entries via SSE.
@@ -1175,18 +1369,18 @@ func (s *Server) handleDiagnosticsASINProbe(c *gin.Context) {
 // against what the local DB has stamped for it. Answers "the account owns N
 // titles but the Library filter shows M — which ones, and why."
 type diagnosticsAccountInventory struct {
-	AccountID    string   `json:"account_id"`
-	AccountName  string   `json:"account_name"`
-	Error        string   `json:"error,omitempty"`
-	APICount     int      `json:"api_count"`      // distinct ASINs the library API returned (full response_groups)
-	MinimalCount int      `json:"minimal_count"`  // same fetch with minimal response_groups — if higher, groups are filtering
-	TotalResults int      `json:"total_results"`  // what the API itself reports as the library size
-	StampedCount int      `json:"stamped_count"`  // rows in book_audible_accounts for this account
-	InAPINotDB   []string `json:"in_api_not_db"`  // API returned it, but it's not stamped (the bug surface)
-	InDBNotAPI   []string `json:"in_db_not_api"`  // stamped, but the API no longer returns it
+	AccountID     string   `json:"account_id"`
+	AccountName   string   `json:"account_name"`
+	Error         string   `json:"error,omitempty"`
+	APICount      int      `json:"api_count"`       // distinct ASINs the library API returned (full response_groups)
+	MinimalCount  int      `json:"minimal_count"`   // same fetch with minimal response_groups — if higher, groups are filtering
+	TotalResults  int      `json:"total_results"`   // what the API itself reports as the library size
+	StampedCount  int      `json:"stamped_count"`   // rows in book_audible_accounts for this account
+	InAPINotDB    []string `json:"in_api_not_db"`   // API returned it, but it's not stamped (the bug surface)
+	InDBNotAPI    []string `json:"in_db_not_api"`   // stamped, but the API no longer returns it
 	OnlyInMinimal []string `json:"only_in_minimal"` // ASINs the minimal fetch surfaced that the full one dropped
-	Downloadable int      `json:"downloadable"`   // of APICount, how many pass Downloadable()
-	NonDownload  int      `json:"non_download"`   // of APICount, how many fail it
+	Downloadable  int      `json:"downloadable"`    // of APICount, how many pass Downloadable()
+	NonDownload   int      `json:"non_download"`    // of APICount, how many fail it
 }
 
 // handleDiagnosticsAccountInventory fetches every connected account's full
