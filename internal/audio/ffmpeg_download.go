@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -117,12 +118,15 @@ func extractTarXz(r io.Reader, binDir, ext string) error {
 			continue
 		}
 
-		base := filepath.Base(header.Name)
-		if base != "ffmpeg"+ext && base != "ffprobe"+ext {
+		base, ok := sanitizeArchiveBinaryName(header.Name, ext)
+		if !ok {
 			continue
 		}
 
-		outPath := filepath.Join(binDir, base)
+		outPath, err := safeJoinBinPath(binDir, base)
+		if err != nil {
+			return err
+		}
 		if err := extractFile(outPath, io.LimitReader(tarReader, maxBinarySize)); err != nil {
 			return err
 		}
@@ -162,8 +166,8 @@ func extractZip(r io.Reader, binDir, ext string) error {
 
 	extracted := 0
 	for _, f := range zipReader.File {
-		base := filepath.Base(f.Name)
-		if base != "ffmpeg"+ext && base != "ffprobe"+ext {
+		base, ok := sanitizeArchiveBinaryName(f.Name, ext)
+		if !ok {
 			continue
 		}
 
@@ -172,7 +176,11 @@ func extractZip(r io.Reader, binDir, ext string) error {
 			return fmt.Errorf("open %s in zip: %w", base, err)
 		}
 
-		outPath := filepath.Join(binDir, base)
+		outPath, err := safeJoinBinPath(binDir, base)
+		if err != nil {
+			rc.Close()
+			return err
+		}
 		if err := extractFile(outPath, io.LimitReader(rc, maxBinarySize)); err != nil {
 			rc.Close()
 			return err
@@ -190,6 +198,36 @@ func extractZip(r io.Reader, binDir, ext string) error {
 		return fmt.Errorf("zip missing ffmpeg or ffprobe (extracted %d/2)", extracted)
 	}
 	return nil
+}
+
+func sanitizeArchiveBinaryName(entryName, ext string) (string, bool) {
+	normalized := strings.ReplaceAll(strings.TrimSpace(entryName), "\\", "/")
+	cleaned := path.Clean(normalized)
+	if cleaned == "." || cleaned == "" || strings.HasPrefix(cleaned, "/") {
+		return "", false
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "/../") {
+		return "", false
+	}
+
+	base := path.Base(cleaned)
+	if base != "ffmpeg"+ext && base != "ffprobe"+ext {
+		return "", false
+	}
+	return base, true
+}
+
+func safeJoinBinPath(binDir, base string) (string, error) {
+	root := filepath.Clean(binDir)
+	if root == "." || root == "" {
+		return "", fmt.Errorf("invalid destination directory")
+	}
+	outPath := filepath.Clean(filepath.Join(root, base))
+	prefix := root + string(os.PathSeparator)
+	if outPath != root && !strings.HasPrefix(outPath, prefix) {
+		return "", fmt.Errorf("unsafe archive output path")
+	}
+	return outPath, nil
 }
 
 // extractFile writes src to the given path with executable permissions.
