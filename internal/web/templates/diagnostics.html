@@ -701,7 +701,7 @@ function diagSubmitHandoff(btn) {
     }
     out.textContent = 'Preparing handoff...';
 
-    fetch('/api/diagnostics/report-handoff', {
+    apiFetch('/api/diagnostics/report-handoff', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
