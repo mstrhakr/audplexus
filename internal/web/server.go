@@ -556,6 +556,11 @@ func (s *Server) setupRoutes() {
 	// through so users can always escape and re-trigger the wizard.
 	s.router.Use(s.firstRunGate)
 
+	// Container/orchestrator probe endpoint. Keep this lightweight and public.
+	s.router.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
 	// Pages
 	s.router.GET("/", s.handleDashboard)
 	s.router.GET("/library", s.handleLibrary)
