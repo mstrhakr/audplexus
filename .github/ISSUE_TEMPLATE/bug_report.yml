@@ -1,0 +1,116 @@
+name: Bug report
+description: Report a reproducible problem in Audplexus
+title: "bug: "
+labels:
+  - bug
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug report.
+
+        If possible, use **Diagnostics -> GitHub Handoff** in the app first,
+        then paste the generated gist URL below.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short description of the bug.
+      placeholder: Example: Full sync completes but misses purchased titles
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Sync
+        - Downloads
+        - Metadata / Tagging
+        - Library Organization
+        - Destinations (ABS / Plex / Emby / Jellyfin)
+        - Authentication
+        - UI / Dashboard
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Please provide a minimal, repeatable set of steps.
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What should happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: What actually happened?
+    validations:
+      required: true
+
+  - type: input
+    id: diagnostics_url
+    attributes:
+      label: Diagnostics gist URL (optional)
+      description: Optional. Paste the URL produced by Diagnostics -> GitHub Handoff.
+      placeholder: https://gist.github.com/...
+    validations:
+      required: false
+
+  - type: textarea
+    id: diagnostics_notes
+    attributes:
+      label: Diagnostics context (optional)
+      description: Optional details if no gist URL was provided.
+      placeholder: Export range, mode, timestamp, log highlights, etc.
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Audplexus version
+      description: If known.
+      placeholder: e.g. v0.6.1
+    validations:
+      required: false
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, deployment method (Docker/native), and anything relevant.
+      placeholder: |
+        OS: Linux
+        Deployment: Docker Compose
+        Reverse proxy: Nginx
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues to avoid duplicates.
+          required: true
+        - label: I removed sensitive information from logs and screenshots.
+          required: true

@@ -1,0 +1,74 @@
+name: Feature request
+description: Suggest an improvement or new capability for Audplexus
+title: "feat: "
+labels:
+  - enhancement
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing an idea.
+
+        Strong requests describe the problem first, then propose a solution.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What user pain or workflow gap are you trying to solve?
+      placeholder: "I'm always frustrated when ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe what you want and how it should behave.
+      placeholder: "Add a setting/page/button that ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or alternate designs you've tried.
+      placeholder: "Today I work around this by ..."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Sync
+        - Downloads
+        - Metadata / Tagging
+        - Library Organization
+        - Destinations (ABS / Plex / Emby / Jellyfin)
+        - Authentication
+        - UI / Dashboard
+        - Integrations / API
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who benefits and how much?
+      placeholder: "This would help users who ..."
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues to avoid duplicates.
+          required: true
