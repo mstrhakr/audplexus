@@ -50,6 +50,13 @@ type FileConfig struct {
 	Compress   bool
 }
 
+// LogAvailability describes the available time window across all known logs.
+type LogAvailability struct {
+	Source   string     `json:"source"`
+	Earliest *time.Time `json:"earliest,omitempty"`
+	Latest   *time.Time `json:"latest,omitempty"`
+}
+
 func defaultFileConfig() FileConfig {
 	return FileConfig{
 		Enabled:    true,
@@ -284,6 +291,47 @@ func GetFileConfig() FileConfig {
 	return fileConfig
 }
 
+// GetLogAvailability reports the currently available log time window.
+func GetLogAvailability() (LogAvailability, error) {
+	levelMu.RLock()
+	cfg := fileConfig
+	levelMu.RUnlock()
+
+	var sourceParts []string
+	var mergedEarliest *time.Time
+	var mergedLatest *time.Time
+	var fileErr error
+
+	if cfg.Enabled {
+		e, l, err := boundsFromFiles(cfg)
+		if err != nil {
+			fileErr = err
+		} else if e != nil && l != nil {
+			sourceParts = append(sourceParts, "file")
+			mergedEarliest, mergedLatest = mergeBounds(mergedEarliest, mergedLatest, e, l)
+		}
+	}
+
+	e, l := boundsFromMemory()
+	if e != nil && l != nil {
+		sourceParts = append(sourceParts, "memory")
+		mergedEarliest, mergedLatest = mergeBounds(mergedEarliest, mergedLatest, e, l)
+	}
+
+	source := "none"
+	if len(sourceParts) == 1 {
+		source = sourceParts[0]
+	} else if len(sourceParts) > 1 {
+		source = "mixed"
+	}
+
+	return LogAvailability{
+		Source:   source,
+		Earliest: mergedEarliest,
+		Latest:   mergedLatest,
+	}, fileErr
+}
+
 // SubscribeLogs opens a live feed of new in-memory log entries.
 // The returned id must be passed to UnsubscribeLogs when done.
 func SubscribeLogs() (int, <-chan RingEntry) {
@@ -513,6 +561,82 @@ func readParsedEntriesFromMemory(since, until *time.Time, maxLines int) []Parsed
 		out = append(out, entry)
 	}
 	return clampParsedEntries(out, maxLines)
+}
+
+func mergeBounds(curEarliest, curLatest, earliest, latest *time.Time) (*time.Time, *time.Time) {
+	outEarliest := curEarliest
+	outLatest := curLatest
+	if earliest != nil {
+		if outEarliest == nil || earliest.Before(*outEarliest) {
+			t := earliest.UTC()
+			outEarliest = &t
+		}
+	}
+	if latest != nil {
+		if outLatest == nil || latest.After(*outLatest) {
+			t := latest.UTC()
+			outLatest = &t
+		}
+	}
+	return outEarliest, outLatest
+}
+
+func boundsFromMemory() (*time.Time, *time.Time) {
+	raw := TailLogs(0)
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	first := raw[0].Time.UTC()
+	last := raw[len(raw)-1].Time.UTC()
+	return &first, &last
+}
+
+func boundsFromFiles(cfg FileConfig) (*time.Time, *time.Time, error) {
+	files, err := listLogFiles(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(files) == 0 {
+		return nil, nil, nil
+	}
+
+	var earliest *time.Time
+	var latest *time.Time
+	for _, file := range files {
+		f, err := os.Open(file.path)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 2*1024*1024)
+		for scanner.Scan() {
+			entry := ParseLogLine(scanner.Text())
+			ts := entry.Time
+			if ts.IsZero() {
+				continue
+			}
+			ts = ts.UTC()
+			if earliest == nil || ts.Before(*earliest) {
+				t := ts
+				earliest = &t
+			}
+			if latest == nil || ts.After(*latest) {
+				t := ts
+				latest = &t
+			}
+		}
+		_ = f.Close()
+	}
+
+	// Fallback when we cannot parse timestamps from file lines (e.g. console format).
+	if earliest == nil || latest == nil {
+		first := files[0].modTime.UTC()
+		last := files[len(files)-1].modTime.UTC()
+		earliest = &first
+		latest = &last
+	}
+	return earliest, latest, nil
 }
 
 func (l *Logger) build() zerolog.Logger {
