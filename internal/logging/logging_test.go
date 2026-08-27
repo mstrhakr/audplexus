@@ -106,6 +106,43 @@ func TestTailLogsRingBufferOrder(t *testing.T) {
 	}
 }
 
+func TestExportLogsClampsMaxLinesUpperBound(t *testing.T) {
+	ringBuf = newRingBuffer(4)
+	_, _ = ringBuf.Write([]byte("a\n"))
+	_, _ = ringBuf.Write([]byte("b\n"))
+	_, _ = ringBuf.Write([]byte("c\n"))
+	_, _ = ringBuf.Write([]byte("d\n"))
+
+	entries, source, err := ExportLogs(nil, nil, maxDiagnosticsExportLines+1000)
+	if err != nil {
+		t.Fatalf("ExportLogs returned unexpected error: %v", err)
+	}
+	if source != "memory" {
+		t.Fatalf("source = %q, want memory", source)
+	}
+	if len(entries) != 4 {
+		t.Fatalf("len(entries) = %d, want 4", len(entries))
+	}
+}
+
+func TestExportLogsUsesDefaultWhenNonPositive(t *testing.T) {
+	ringBuf = newRingBuffer(3)
+	_, _ = ringBuf.Write([]byte("x\n"))
+	_, _ = ringBuf.Write([]byte("y\n"))
+	_, _ = ringBuf.Write([]byte("z\n"))
+
+	entries, source, err := ExportLogs(nil, nil, 0)
+	if err != nil {
+		t.Fatalf("ExportLogs returned unexpected error: %v", err)
+	}
+	if source != "memory" {
+		t.Fatalf("source = %q, want memory", source)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("len(entries) = %d, want 3", len(entries))
+	}
+}
+
 func TestWithFieldAndWithFieldsImmutability(t *testing.T) {
 	base := Component("test")
 	if len(base.fields) != 0 {

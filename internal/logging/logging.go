@@ -82,6 +82,8 @@ var (
 	ringBuf = newRingBuffer(1024)
 )
 
+const maxDiagnosticsExportLines = 20000
+
 // RingEntry is a single tail-buffer log line as captured by the
 // in-memory ring buffer. Time is the time the line was written.
 type RingEntry struct {
@@ -265,6 +267,9 @@ func TailLogs(n int) []RingEntry {
 func ExportLogs(since, until *time.Time, maxLines int) ([]ParsedEntry, string, error) {
 	if maxLines <= 0 {
 		maxLines = 1000
+	}
+	if maxLines > maxDiagnosticsExportLines {
+		maxLines = maxDiagnosticsExportLines
 	}
 
 	levelMu.RLock()
