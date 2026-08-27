@@ -20,7 +20,7 @@ export default {
 
     try {
       const body = await request.json();
-      const report = body?.report;
+      const report = sanitizeReport(body?.report);
       if (!report || !report.report_id) {
         return jsonResponse({ success: false, error: 'Invalid report format' }, 400);
       }
@@ -64,6 +64,57 @@ export default {
     }
   },
 };
+
+const URL_PATTERN = /https?:\/\/[^\s"'<>]+/g;
+
+function redactURLs(value) {
+  if (typeof value !== 'string' || value.length === 0) return value;
+  return value.replace(URL_PATTERN, '[redacted-url]');
+}
+
+function sanitizeReport(report) {
+  if (!report || typeof report !== 'object') return report;
+
+  const out = { ...report };
+  out.issue_title = redactURLs(String(out.issue_title || ''));
+  out.user_message = redactURLs(String(out.user_message || ''));
+  out.expected_value = redactURLs(String(out.expected_value || ''));
+
+  if (Array.isArray(out.recent_logs)) {
+    out.recent_logs = out.recent_logs.map((line) => redactURLs(String(line || '')));
+  }
+
+  if (Array.isArray(out.destinations)) {
+    out.destinations = out.destinations.map((d) => {
+      if (!d || typeof d !== 'object') return d;
+      const { url, ...rest } = d;
+      if (typeof rest.health_detail === 'string') rest.health_detail = redactURLs(rest.health_detail);
+      if (typeof rest.last_error === 'string') rest.last_error = redactURLs(rest.last_error);
+      return rest;
+    });
+  }
+
+  if (out.runtime_env && typeof out.runtime_env === 'object') {
+    const logFile = out.runtime_env.log_file && typeof out.runtime_env.log_file === 'object'
+      ? { ...out.runtime_env.log_file }
+      : undefined;
+    if (logFile) delete logFile.path;
+
+    out.runtime_env = {
+      go_version: out.runtime_env.go_version,
+      os_arch: out.runtime_env.os_arch,
+      num_cpu: out.runtime_env.num_cpu,
+      log_level: out.runtime_env.log_level,
+      authenticated: out.runtime_env.authenticated,
+      marketplace: out.runtime_env.marketplace,
+      last_sync: out.runtime_env.last_sync,
+      server_time: out.runtime_env.server_time,
+      log_file: logFile,
+    };
+  }
+
+  return out;
+}
 
 function buildGistFiles(report) {
   const files = {};
@@ -154,7 +205,14 @@ function buildIssueURL(repoSlug, report, gistURL) {
   q.set('actual', actual);
   q.set('diagnostics_url', gistURL || '');
   q.set('diagnostics_notes', notesLines.join('\n'));
-  q.set('env', 'Environment details to be confirmed by reporter.');
+  const envLines = [];
+  if (report.runtime_env && typeof report.runtime_env === 'object') {
+    if (report.runtime_env.os_arch) envLines.push(`OS/Arch: ${report.runtime_env.os_arch}`);
+    if (report.runtime_env.go_version) envLines.push(`Go: ${report.runtime_env.go_version}`);
+    if (report.runtime_env.marketplace) envLines.push(`Marketplace: ${report.runtime_env.marketplace}`);
+    if (typeof report.runtime_env.authenticated !== 'undefined') envLines.push(`Authenticated: ${String(report.runtime_env.authenticated)}`);
+  }
+  q.set('env', envLines.length > 0 ? envLines.join('\n') : 'Environment details to be confirmed by reporter.');
   return `${base}?${q.toString()}`;
 }
 

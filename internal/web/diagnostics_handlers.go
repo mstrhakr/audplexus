@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -1154,6 +1155,76 @@ func diagnosticsSummaryMarkdown(issueType, expected, notes, gistURL, mode, detai
 	return b.String()
 }
 
+var diagnosticsURLPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
+
+func redactDiagnosticsURLs(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return s
+	}
+	return diagnosticsURLPattern.ReplaceAllString(s, "[redacted-url]")
+}
+
+func sanitizeRuntimeEnvForHandoff(env gin.H) gin.H {
+	if env == nil {
+		return gin.H{}
+	}
+
+	out := gin.H{
+		"go_version":    env["go_version"],
+		"os_arch":       env["os_arch"],
+		"num_cpu":       env["num_cpu"],
+		"log_level":     env["log_level"],
+		"authenticated": env["authenticated"],
+		"marketplace":   env["marketplace"],
+		"last_sync":     env["last_sync"],
+		"server_time":   env["server_time"],
+	}
+
+	if logFile, ok := env["log_file"].(gin.H); ok {
+		out["log_file"] = gin.H{
+			"enabled":      logFile["enabled"],
+			"max_size_mb":  logFile["max_size_mb"],
+			"max_backups":  logFile["max_backups"],
+			"max_age_days": logFile["max_age_days"],
+			"compress":     logFile["compress"],
+		}
+	} else if logFile, ok := env["log_file"].(map[string]interface{}); ok {
+		out["log_file"] = gin.H{
+			"enabled":      logFile["enabled"],
+			"max_size_mb":  logFile["max_size_mb"],
+			"max_backups":  logFile["max_backups"],
+			"max_age_days": logFile["max_age_days"],
+			"compress":     logFile["compress"],
+		}
+	}
+
+	return out
+}
+
+func sanitizeDestinationsForHandoff(destinations []gin.H) []gin.H {
+	out := make([]gin.H, 0, len(destinations))
+	for _, d := range destinations {
+		clean := gin.H{
+			"id":              d["id"],
+			"display_name":    d["display_name"],
+			"type":            d["type"],
+			"type_label":      d["type_label"],
+			"enabled":         d["enabled"],
+			"configured":      d["configured"],
+			"health":          d["health"],
+			"last_checked_at": d["last_checked_at"],
+		}
+		if detail, ok := d["health_detail"].(string); ok {
+			clean["health_detail"] = redactDiagnosticsURLs(detail)
+		}
+		if lastErr, ok := d["last_error"].(string); ok {
+			clean["last_error"] = redactDiagnosticsURLs(lastErr)
+		}
+		out = append(out, clean)
+	}
+	return out
+}
+
 type diagnosticsProxyRequest struct {
 	Report gin.H `json:"report"`
 }
@@ -1484,8 +1555,8 @@ func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	envSnapshot := s.diagnosticsEnvSnapshot(ctx)
-	destinationSnapshot := s.diagnosticsDestinationsSnapshot(ctx)
+	envSnapshot := sanitizeRuntimeEnvForHandoff(s.diagnosticsEnvSnapshot(ctx))
+	destinationSnapshot := sanitizeDestinationsForHandoff(s.diagnosticsDestinationsSnapshot(ctx))
 	envPresence := diagnosticsEnvPresence()
 	uploadMode := strings.ToLower(strings.TrimSpace(req.UploadMode))
 	if uploadMode == "" {
@@ -1512,11 +1583,11 @@ func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
 	logLines := make([]string, 0, len(entries))
 	for _, e := range entries {
 		if strings.TrimSpace(e.RawLine) != "" {
-			logLines = append(logLines, e.RawLine)
+			logLines = append(logLines, redactDiagnosticsURLs(e.RawLine))
 			continue
 		}
 		if strings.TrimSpace(e.Message) != "" {
-			logLines = append(logLines, e.Message)
+			logLines = append(logLines, redactDiagnosticsURLs(e.Message))
 		}
 	}
 
