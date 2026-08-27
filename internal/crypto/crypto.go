@@ -26,6 +26,10 @@ var magic = []byte("AXC1")
 
 const keySize = 32 // AES-256
 
+// Credentials and OIDC state blobs are small; cap plaintext to avoid
+// unbounded allocations on malformed or attacker-influenced payloads.
+const maxEncryptPlaintextSize = 64 * 1024 * 1024
+
 // LoadOrCreateKey returns the per-install encryption key, generating and
 // persisting a new random one (file mode 0600) on first use.
 func LoadOrCreateKey(path string) ([]byte, error) {
@@ -73,11 +77,20 @@ func NewBox(key []byte) (*Box, error) {
 
 // Encrypt seals plaintext as magic || nonce || ciphertext.
 func (b *Box) Encrypt(plain []byte) ([]byte, error) {
+	if len(plain) > maxEncryptPlaintextSize {
+		return nil, fmt.Errorf("plaintext too large: %d bytes", len(plain))
+	}
+
 	nonce := make([]byte, b.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("generate nonce: %w", err)
 	}
-	out := make([]byte, 0, len(magic)+len(nonce)+len(plain)+b.aead.Overhead())
+	prefixLen := len(magic) + len(nonce) + b.aead.Overhead()
+	maxInt := int(^uint(0) >> 1)
+	if len(plain) > maxInt-prefixLen {
+		return nil, fmt.Errorf("plaintext too large for allocation")
+	}
+	out := make([]byte, 0, prefixLen+len(plain))
 	out = append(out, magic...)
 	out = append(out, nonce...)
 	return b.aead.Seal(out, nonce, plain, nil), nil

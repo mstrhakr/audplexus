@@ -86,3 +86,13 @@ func TestTamperedCiphertextRejected(t *testing.T) {
 		t.Fatal("expected auth failure on tampered ciphertext")
 	}
 }
+
+func TestEncryptRejectsOversizedPlaintext(t *testing.T) {
+	key, _ := LoadOrCreateKey(filepath.Join(t.TempDir(), "k"))
+	box, _ := NewBox(key)
+
+	plain := make([]byte, maxEncryptPlaintextSize+1)
+	if _, err := box.Encrypt(plain); err == nil {
+		t.Fatal("expected error for oversized plaintext")
+	}
+}
