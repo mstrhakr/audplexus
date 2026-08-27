@@ -1293,6 +1293,8 @@ type diagnosticsHandoffRequest struct {
 	ReproSteps    string `json:"repro_steps"`
 	UserNotes     string `json:"user_notes"`
 	IssueTitle    string `json:"issue_title"`
+	AppVersion    string `json:"app_version"`
+	DeployMode    string `json:"deployment_mode"`
 }
 
 type diagnosticsHandoffResponse struct {
@@ -1571,6 +1573,8 @@ func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
 	cleanExpected := strings.TrimSpace(redactDiagnosticsSensitive(req.ExpectedValue))
 	cleanSteps := strings.TrimSpace(redactDiagnosticsSensitive(req.ReproSteps))
 	cleanNotes := strings.TrimSpace(redactDiagnosticsSensitive(req.UserNotes))
+	cleanVersion := strings.TrimSpace(redactDiagnosticsSensitive(req.AppVersion))
+	cleanDeploy := strings.TrimSpace(redactDiagnosticsSensitive(req.DeployMode))
 
 	issueTitle := strings.TrimSpace(redactDiagnosticsSensitive(req.IssueTitle))
 	if issueTitle == "" {
@@ -1608,6 +1612,8 @@ func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
 		"repro_steps":       cleanSteps,
 		"user_message":      cleanNotes,
 		"issue_title":       issueTitle,
+		"app_version":       cleanVersion,
+		"deployment_mode":   cleanDeploy,
 		"issue_body":        issueBody,
 		"range":             rangeLabel,
 		"mode":              mode,

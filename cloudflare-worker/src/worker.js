@@ -84,6 +84,9 @@ function sanitizeReport(report) {
   out.issue_title = redactURLs(String(out.issue_title || ''));
   out.user_message = redactURLs(String(out.user_message || ''));
   out.expected_value = redactURLs(String(out.expected_value || ''));
+  out.repro_steps = redactURLs(String(out.repro_steps || ''));
+  out.app_version = redactURLs(String(out.app_version || ''));
+  out.deployment_mode = redactURLs(String(out.deployment_mode || ''));
 
   if (Array.isArray(out.recent_logs)) {
     out.recent_logs = out.recent_logs.map((line) => redactURLs(String(line || '')));
@@ -136,6 +139,8 @@ function buildGistFiles(report) {
     repro_steps: report.repro_steps,
     user_message: report.user_message,
     issue_title: report.issue_title,
+    app_version: report.app_version,
+    deployment_mode: report.deployment_mode,
     range: report.range,
     mode: report.mode,
     detail: report.detail,
@@ -209,6 +214,7 @@ function buildIssueURL(repoSlug, report, gistURL) {
   if (steps) q.set('steps', steps);
   q.set('expected', expected);
   q.set('actual', actual);
+  q.set('version', String(report.app_version || '').trim());
   q.set('diagnostics_url', gistURL || '');
   q.set('diagnostics_notes', notesLines.join('\n'));
   const envLines = [];
@@ -218,6 +224,8 @@ function buildIssueURL(repoSlug, report, gistURL) {
     if (report.runtime_env.marketplace) envLines.push(`Marketplace: ${report.runtime_env.marketplace}`);
     if (typeof report.runtime_env.authenticated !== 'undefined') envLines.push(`Authenticated: ${String(report.runtime_env.authenticated)}`);
   }
+  const deployMode = String(report.deployment_mode || '').trim();
+  if (deployMode) envLines.push(`Deployment: ${deployMode}`);
   q.set('env', envLines.length > 0 ? envLines.join('\n') : 'Environment details to be confirmed by reporter.');
   return `${base}?${q.toString()}`;
 }
