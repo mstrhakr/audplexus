@@ -811,7 +811,6 @@ func buildBookWherePostgres(filter BookFilter) (string, []interface{}) {
 		// synced before the junction existed.
 		clauses = append(clauses, fmt.Sprintf("(EXISTS (SELECT 1 FROM book_audible_accounts baa WHERE baa.asin = books.asin AND baa.account_id = $%d) OR books.account_id = $%d)", paramIdx, paramIdx+1))
 		args = append(args, filter.AccountID, filter.AccountID)
-		paramIdx += 2
 	}
 
 	if len(clauses) == 0 {
@@ -997,4 +996,3 @@ func (p *PostgresDB) DeleteExpiredSessions(ctx context.Context, now time.Time) (
 	}
 	return res.RowsAffected()
 }
-

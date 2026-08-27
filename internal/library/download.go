@@ -46,11 +46,11 @@ func (dm *DownloadManager) SetAccountManager(m *AccountManager) { dm.accounts = 
 // DownloadManager handles the full audiobook pipeline:
 // download → decrypt → enrich metadata → organize into library.
 type DownloadManager struct {
-	db           database.Database
-	client       *audible.Client
-	ffmpeg       *audio.FFmpeg
-	audnexus     *audnexus.Client
-	organizer    *organizer.PlexOrganizer
+	db          database.Database
+	client      *audible.Client
+	ffmpeg      *audio.FFmpeg
+	audnexus    *audnexus.Client
+	organizer   *organizer.PlexOrganizer
 	libraryDir  string
 	downloadDir string
 	outputFmt   string // "m4b" or "mp3"
@@ -1366,7 +1366,6 @@ func (w *fileDownloadWriter) OnStart(asin string, contentLength int64, info *aud
 	licenseKeyStr := ""
 	if info.LicenseResponse != nil && info.LicenseResponse.Key != "" {
 		ext = ".aaxc"
-		licenseKeyStr = info.LicenseResponse.Key
 		dlLog.Info().Str("asin", asin).Str("content_type", info.ContentType).Msg("AAXC license received, will save as .aaxc")
 	} else {
 		// Debug why we're not getting AAXC
@@ -1455,4 +1454,3 @@ func formatBytes(b int64) string {
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
-

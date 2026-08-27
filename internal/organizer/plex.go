@@ -465,7 +465,7 @@ func (o *PlexOrganizer) ReorganizeInPlaceWithProgress(ctx context.Context, book 
 	authorDirName := o.renderAuthorDirName(naming)
 	targetBookDir := filepath.Join(o.libraryRoot, authorDirName, bookDirName)
 
-	finalPath := sourcePath
+	var finalPath string
 	if st.IsDir() {
 		oldBookDir := sourcePath
 		if oldBookDir != targetBookDir {
@@ -800,4 +800,3 @@ func sanitizePath(name string) string {
 	}
 	return s
 }
-

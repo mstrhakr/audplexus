@@ -256,10 +256,15 @@ func extractFile(path string, src io.Reader) error {
 		return fmt.Errorf("create %s: %w", filepath.Base(path), err)
 	}
 	if _, err := io.Copy(out, src); err != nil {
-		out.Close()
-		os.Remove(path)
+		if closeErr := out.Close(); closeErr != nil {
+			ffmpegLog.Debug().Err(closeErr).Str("path", path).Msg("close failed after write error")
+		}
+		_ = os.Remove(path)
 		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		_ = os.Remove(path)
+		return fmt.Errorf("close %s: %w", filepath.Base(path), err)
+	}
+	return nil
 }
-
