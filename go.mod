@@ -15,7 +15,7 @@ require (
 	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/crypto v0.52.0
 	golang.org/x/oauth2 v0.36.0
-	golang.org/x/sync v0.20.0
+	golang.org/x/sync v0.22.0
 	golang.org/x/text v0.37.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
