@@ -18,7 +18,7 @@ body:
     attributes:
       label: Summary
       description: Short description of the bug.
-      placeholder: Example: Full sync completes but misses purchased titles
+      placeholder: "Example: Full sync completes but misses purchased titles"
     validations:
       required: true
 
