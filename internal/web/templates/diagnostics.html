@@ -50,38 +50,50 @@
     {{/* ── Tab 2: Logs & Environment ──────────────────────────── */}}
     <section id="diag-tab-ops" class="diag-tab-panel" role="tabpanel" aria-labelledby="ops" hidden>
         <div class="diag-ops-grid">
-            <div class="card" style="padding:0;display:flex;flex-direction:column;min-height:480px">
-                <div class="table-toolbar" style="display:flex;align-items:center;gap:.5rem;padding:.65rem .9rem;border-bottom:1px solid var(--border);background:var(--surface)">
-                    <strong style="font-size:.9rem">Live logs</strong>
-                    <span class="muted" style="font-size:.75rem">· in-memory tail · 1024 lines</span>
-                    <span style="margin-left:auto;display:flex;gap:.4rem;align-items:center">
-                        <label class="muted" style="font-size:.75rem;display:flex;gap:.35rem;align-items:center">
-                            <input type="checkbox" id="diag-log-paused" class="checkbox"> Paused
-                        </label>
-                        <select id="diag-log-level" style="padding:.25rem .5rem;font-size:.78rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;width:auto">
-                            <option value="all">All levels</option>
-                            <option value="info">INFO</option>
-                            <option value="warn">WARN</option>
-                            <option value="error">ERROR</option>
-                            <option value="debug">DEBUG</option>
-                        </select>
-                        <button type="button" class="btn btn-ghost btn-small" onclick="diagCopyVisibleLogs(this)" title="Copy visible log lines (respects level filter)">
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                            Copy
-                        </button>
-                        <select id="diag-export-range" style="padding:.25rem .5rem;font-size:.78rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;width:auto" title="Export time range">
-                            <option value="24h">Last 24h</option>
-                            <option value="7d">Last 7d</option>
-                            <option value="30d">Last 30d</option>
-                            <option value="all">All available</option>
-                        </select>
-                        <input id="diag-export-lines" type="number" min="100" max="20000" value="1000" style="width:6.1rem;padding:.25rem .4rem;font-size:.78rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px" title="Max lines in export">
-                        <button type="button" class="btn btn-ghost btn-small" onclick="diagExportBundle(this)">Export ZIP</button>
-                        <button type="button" class="btn btn-ghost btn-small" onclick="diagRefreshLogs(true)">Refresh</button>
-                    </span>
+            <div style="display:flex;flex-direction:column;gap:.75rem;min-height:700px">
+                <div class="card" style="padding:.75rem .9rem">
+                    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+                        <div>
+                            <h3 style="font-size:.95rem;font-weight:600;margin:0">Export</h3>
+                            <div id="diag-export-availability" class="muted" style="font-size:.75rem;margin-top:.25rem">Loading available log window…</div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:.45rem;flex-wrap:wrap">
+                            <select id="diag-export-range" style="padding:.25rem .5rem;font-size:.78rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;width:auto" title="Export time range"></select>
+                            <select id="diag-export-mode" style="padding:.25rem .5rem;font-size:.78rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;width:auto" title="Export detail level">
+                                <option value="logs">Logs only</option>
+                                <option value="package-standard" selected>Diagnostics package (standard)</option>
+                                <option value="package-full">Diagnostics package (full)</option>
+                            </select>
+                            <button id="diag-export-btn" type="button" class="btn btn-secondary btn-small" onclick="diagExportBundle(this)">Export</button>
+                        </div>
+                    </div>
                 </div>
-                <div id="diag-log-stream" style="flex:1;max-height:460px;overflow:auto;padding:.55rem .9rem;font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace;font-size:.76rem;line-height:1.55">
-                    <div class="muted">Loading log tail…</div>
+
+                <div class="card" style="padding:0;display:flex;flex-direction:column;flex:1;min-height:0">
+                    <div class="table-toolbar" style="display:flex;align-items:center;gap:.5rem;padding:.65rem .9rem;border-bottom:1px solid var(--border);background:var(--surface)">
+                        <strong style="font-size:.9rem">Live logs</strong>
+                        <span class="muted" style="font-size:.75rem">Streaming tail</span>
+                        <span style="margin-left:auto;display:flex;gap:.4rem;align-items:center">
+                            <label class="muted" style="font-size:.75rem;display:flex;gap:.35rem;align-items:center">
+                                <input type="checkbox" id="diag-log-paused" class="checkbox"> Paused
+                            </label>
+                            <select id="diag-log-level" style="padding:.25rem .5rem;font-size:.78rem;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;width:auto">
+                                <option value="all">All levels</option>
+                                <option value="info">INFO</option>
+                                <option value="warn">WARN</option>
+                                <option value="error">ERROR</option>
+                                <option value="debug">DEBUG</option>
+                            </select>
+                            <button type="button" class="btn btn-ghost btn-small" onclick="diagCopyVisibleLogs(this)" title="Copy visible log lines (respects level filter)">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                                Copy
+                            </button>
+                            <button type="button" class="btn btn-ghost btn-small" onclick="diagRefreshLogs(true)">Refresh</button>
+                        </span>
+                    </div>
+                    <div id="diag-log-stream" style="flex:1;min-height:540px;overflow:auto;padding:.55rem .9rem;font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace;font-size:.76rem;line-height:1.55">
+                        <div class="muted">Loading log tail…</div>
+                    </div>
                 </div>
             </div>
 
@@ -160,6 +172,7 @@
                 diagRefreshEnv();
                 diagRefreshLogs(true);
                 diagLoadConnList();
+                diagLoadExportOptions();
                 diagStartLogStream();
             }
         });
@@ -530,19 +543,60 @@ function diagRefreshLogs(scrollToBottom) {
     diagRequestLogRender(!!scrollToBottom || diagShouldAutoScroll(streamEl));
 }
 
+function diagLoadExportOptions() {
+    var rangeSelect = document.getElementById('diag-export-range');
+    var meta = document.getElementById('diag-export-availability');
+    if (!rangeSelect || !meta) return;
+    meta.textContent = 'Checking available logs...';
+    fetch('/api/diagnostics/logs/availability').then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(function(d) {
+        var ranges = d.ranges || [];
+        if (!ranges.length) {
+            ranges = [{ value: 'all', label: 'All available' }];
+        }
+        rangeSelect.innerHTML = ranges.map(function(r) {
+            return '<option value="' + escDiag(r.value) + '">' + escDiag(r.label || r.value) + '</option>';
+        }).join('');
+        if (d.default_range) {
+            rangeSelect.value = d.default_range;
+        }
+        if (d.earliest && d.latest) {
+            var start = new Date(d.earliest);
+            var end = new Date(d.latest);
+            meta.textContent = 'Available window: ' + start.toLocaleString() + ' to ' + end.toLocaleString() + ' (' + (d.source || 'unknown') + ')';
+        } else {
+            meta.textContent = 'No historical logs found yet. Live tail is still available.';
+        }
+    }).catch(function(e) {
+        rangeSelect.innerHTML = '<option value="all">All available</option>';
+        meta.textContent = 'Could not inspect historical logs: ' + e.message;
+    });
+}
+
 function diagExportBundle(btn) {
     var range = document.getElementById('diag-export-range');
-    var lines = document.getElementById('diag-export-lines');
+    var mode = document.getElementById('diag-export-mode');
     var rangeVal = range ? range.value : '24h';
-    var maxLines = lines ? parseInt(lines.value || '1000', 10) : 1000;
-    if (!maxLines || maxLines < 100) maxLines = 1000;
-    if (maxLines > 20000) maxLines = 20000;
+    var modeVal = mode ? mode.value : 'package-standard';
+
+    var q = ['range=' + encodeURIComponent(rangeVal)];
+    if (modeVal === 'logs') {
+        q.push('mode=logs');
+    } else if (modeVal === 'package-full') {
+        q.push('mode=package');
+        q.push('detail=full');
+    } else {
+        q.push('mode=package');
+        q.push('detail=standard');
+    }
 
     if (btn) {
         btn.disabled = true;
         btn.textContent = 'Exporting...';
     }
-    var query = '?range=' + encodeURIComponent(rangeVal) + '&max_lines=' + encodeURIComponent(String(maxLines));
+    var query = '?' + q.join('&');
     window.location = '/api/diagnostics/export' + query;
 
     setTimeout(function() {
