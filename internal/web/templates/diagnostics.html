@@ -96,21 +96,6 @@
                     </div>
 
                     <div class="form-row" style="margin-bottom:.45rem">
-                        <label for="diag-handoff-version" style="display:block;font-size:.78rem;margin-bottom:.25rem">Audplexus version (optional)</label>
-                        <input id="diag-handoff-version" class="input" type="text" placeholder="e.g. v0.6.1">
-                    </div>
-
-                    <div class="form-row" style="margin-bottom:.45rem">
-                        <label for="diag-handoff-deploy" style="display:block;font-size:.78rem;margin-bottom:.25rem">Deployment mode (optional)</label>
-                        <select id="diag-handoff-deploy" class="select" style="width:100%">
-                            <option value="" selected>Unknown / not set</option>
-                            <option value="docker">Docker / container</option>
-                            <option value="native">Native binary</option>
-                            <option value="other">Other</option>
-                        </select>
-                    </div>
-
-                    <div class="form-row" style="margin-bottom:.45rem">
                         <label for="diag-handoff-expected" style="display:block;font-size:.78rem;margin-bottom:.25rem">Expected behavior (optional)</label>
                         <input id="diag-handoff-expected" class="input" type="text" placeholder="What should have happened?">
                     </div>
@@ -127,7 +112,7 @@
 
                     <div style="display:flex;align-items:center;gap:.45rem;flex-wrap:wrap">
                         <button id="diag-handoff-btn" type="button" class="btn btn-secondary btn-small" onclick="diagSubmitHandoff(this)">Send to GitHub</button>
-                        <span class="muted" style="font-size:.72rem">Uses current export range + detail selection, then opens pre-filled issue link.</span>
+                        <span class="muted" style="font-size:.72rem">Uses current export range + detail selection and includes the detected app version and deployment mode automatically.</span>
                     </div>
                     <div id="diag-handoff-status" class="muted" style="margin-top:.55rem;font-size:.76rem"></div>
                 </div>
@@ -713,8 +698,6 @@ function diagSubmitHandoff(btn) {
     var steps = document.getElementById('diag-handoff-steps');
     var notes = document.getElementById('diag-handoff-notes');
     var title = document.getElementById('diag-handoff-title');
-    var version = document.getElementById('diag-handoff-version');
-    var deploy = document.getElementById('diag-handoff-deploy');
     var out = document.getElementById('diag-handoff-status');
 
     if (!out) return;
@@ -736,9 +719,7 @@ function diagSubmitHandoff(btn) {
         expected_value: expected ? expected.value.trim() : '',
         repro_steps: steps ? steps.value.trim() : '',
         user_notes: notes ? notes.value.trim() : '',
-        issue_title: title ? title.value.trim() : '',
-        app_version: version ? version.value.trim() : '',
-        deployment_mode: deploy ? deploy.value : ''
+        issue_title: title ? title.value.trim() : ''
     };
 
     if (btn) {

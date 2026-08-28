@@ -19,7 +19,7 @@ RUN go mod download
 COPY . .
 
 # Build the application (pure Go, no CGO needed for modernc.org/sqlite)
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /audplexus ./cmd/server
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/mstrhakr/audplexus/internal/web.buildDeploymentMode=docker" -o /audplexus ./cmd/server
 
 # Runtime stage
 FROM alpine:3.24

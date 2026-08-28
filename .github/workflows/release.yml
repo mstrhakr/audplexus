@@ -67,7 +67,7 @@ jobs:
         run: |
           # Pure Go build - no CGO needed (using modernc.org/sqlite)
           mkdir -p ../build
-          go build -ldflags="-s -w" -o ../build/${{ matrix.output }} ./cmd/server
+          go build -ldflags="-s -w -X github.com/mstrhakr/audplexus/internal/web.buildDeploymentMode=native" -o ../build/${{ matrix.output }} ./cmd/server
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

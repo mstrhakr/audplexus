@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,5 +187,29 @@ func TestDiagnosticsEnvPresenceRedactsValuesToBool(t *testing.T) {
 	}
 	if !flags["AUDPLEXUS_API_KEY"] {
 		t.Fatalf("AUDPLEXUS_API_KEY flag = false, want true")
+	}
+}
+
+func TestDiagnosticsDeploymentModeUsesBuildVariable(t *testing.T) {
+	orig := buildDeploymentMode
+	t.Cleanup(func() { buildDeploymentMode = orig })
+
+	buildDeploymentMode = "docker"
+	if got := diagnosticsDeploymentMode(); got != "docker" {
+		t.Fatalf("diagnosticsDeploymentMode() = %q, want docker", got)
+	}
+
+	buildDeploymentMode = ""
+	if got := diagnosticsDeploymentMode(); got != "native" {
+		t.Fatalf("diagnosticsDeploymentMode() blank = %q, want native", got)
+	}
+}
+
+func TestDiagnosticsRuntimeMetadataNotEmpty(t *testing.T) {
+	if strings.TrimSpace(serverVersion()) == "" {
+		t.Fatal("serverVersion should not be empty")
+	}
+	if strings.TrimSpace(diagnosticsDeploymentMode()) == "" {
+		t.Fatal("diagnosticsDeploymentMode should not be empty")
 	}
 }

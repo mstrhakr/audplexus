@@ -1292,8 +1292,6 @@ type diagnosticsHandoffRequest struct {
 	ReproSteps    string `json:"repro_steps"`
 	UserNotes     string `json:"user_notes"`
 	IssueTitle    string `json:"issue_title"`
-	AppVersion    string `json:"app_version"`
-	DeployMode    string `json:"deployment_mode"`
 }
 
 type diagnosticsHandoffResponse struct {
@@ -1304,6 +1302,13 @@ type diagnosticsHandoffResponse struct {
 	IssueBody  string `json:"issue_body,omitempty"`
 	IssueTitle string `json:"issue_title,omitempty"`
 }
+
+// buildDeploymentMode is set at compile time with:
+//
+//	-ldflags "-X github.com/mstrhakr/audplexus/internal/web.buildDeploymentMode=docker"
+//
+// Defaults to native for local/dev builds.
+var buildDeploymentMode = "native"
 
 // handleDiagnosticsEnv returns a JSON snapshot of runtime + path
 // info for the DS-style "Logs & Environment" diagnostics tab. Read-only.
@@ -1332,6 +1337,8 @@ func (s *Server) diagnosticsEnvSnapshot(ctx context.Context) gin.H {
 	logFileCfg := logging.GetFileConfig()
 
 	return gin.H{
+		"app_version":     serverVersion(),
+		"deployment_mode": diagnosticsDeploymentMode(),
 		"go_version":      runtime.Version(),
 		"os_arch":         runtime.GOOS + "/" + runtime.GOARCH,
 		"num_cpu":         runtime.NumCPU(),
@@ -1352,6 +1359,14 @@ func (s *Server) diagnosticsEnvSnapshot(ctx context.Context) gin.H {
 			"compress":     logFileCfg.Compress,
 		},
 	}
+}
+
+func diagnosticsDeploymentMode() string {
+	mode := strings.ToLower(strings.TrimSpace(buildDeploymentMode))
+	if mode == "" {
+		return "native"
+	}
+	return mode
 }
 
 // handleDiagnosticsDestinations returns a JSON snapshot of every
@@ -1572,8 +1587,8 @@ func (s *Server) handleDiagnosticsReportHandoff(c *gin.Context) {
 	cleanExpected := strings.TrimSpace(redactDiagnosticsSensitive(req.ExpectedValue))
 	cleanSteps := strings.TrimSpace(redactDiagnosticsSensitive(req.ReproSteps))
 	cleanNotes := strings.TrimSpace(redactDiagnosticsSensitive(req.UserNotes))
-	cleanVersion := strings.TrimSpace(redactDiagnosticsSensitive(req.AppVersion))
-	cleanDeploy := strings.TrimSpace(redactDiagnosticsSensitive(req.DeployMode))
+	cleanVersion := strings.TrimSpace(redactDiagnosticsSensitive(serverVersion()))
+	cleanDeploy := strings.TrimSpace(redactDiagnosticsSensitive(diagnosticsDeploymentMode()))
 
 	issueTitle := strings.TrimSpace(redactDiagnosticsSensitive(req.IssueTitle))
 	if issueTitle == "" {
