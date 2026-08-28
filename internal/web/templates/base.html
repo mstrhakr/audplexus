@@ -349,6 +349,60 @@
             wrap.innerHTML = html;
         }
 
+        function setCountValue(id, value) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            var n = parseInt(value, 10);
+            if (isNaN(n) || n < 0) n = 0;
+            el.textContent = n;
+        }
+
+        function setNavActiveCount(value) {
+            var navBadge = document.getElementById('nav-active-dl');
+            if (!navBadge) return;
+            var n = parseInt(value, 10);
+            if (isNaN(n) || n < 0) n = 0;
+            navBadge.textContent = n;
+            navBadge.style.display = n > 0 ? '' : 'none';
+        }
+
+        function syncPipelineCountsFromSnapshot(snapshot) {
+            if (!snapshot || !snapshot.items) return;
+
+            var activeCount = 0;
+            var queuedCount = 0;
+
+            for (var i = 0; i < snapshot.items.length; i++) {
+                var it = snapshot.items[i] || {};
+                var stage = (it.stage || '').toLowerCase();
+                if (stage === 'queued') {
+                    queuedCount++;
+                    continue;
+                }
+                if (isVisiblePipelineStage(stage)) {
+                    activeCount++;
+                }
+            }
+
+            // Download queue depth reflects the Waiting tab count exactly.
+            if (snapshot.pools && snapshot.pools.length > 0) {
+                for (var p = 0; p < snapshot.pools.length; p++) {
+                    var pool = snapshot.pools[p] || {};
+                    if (pool.id === 'download' && typeof pool.queue_depth === 'number') {
+                        queuedCount = pool.queue_depth;
+                        break;
+                    }
+                }
+            }
+
+            setCountValue('pipe-tab-count-active', activeCount);
+            setCountValue('stat-active-dl', activeCount);
+            setNavActiveCount(activeCount);
+
+            setCountValue('pending-count', queuedCount);
+            setCountValue('stat-pending-dl', queuedCount);
+        }
+
         function renderSnapshotItems(snapshot) {
             if (!snapshot || !snapshot.items) return;
             var keep = {};
@@ -743,6 +797,7 @@
             if (d.type === 'pool_state') {
                 renderPipelinePools(d);
                 renderSnapshotItems(d);
+                syncPipelineCountsFromSnapshot(d);
                 renderQueuePauseState(!!d.queue_paused, d.queue_pause_reason || '');
                 return;
             }
@@ -769,28 +824,33 @@
                 if (!el) return;
                 var v = parseInt(el.textContent || '0') + delta;
                 el.textContent = v < 0 ? 0 : v;
-                if (id === 'stat-active-dl') {
-                    var navBadge = document.getElementById('nav-active-dl');
-                    if (navBadge) {
-                        var nv = parseInt(navBadge.textContent || '0') + delta;
-                        nv = nv < 0 ? 0 : nv;
-                        navBadge.textContent = nv;
-                        navBadge.style.display = nv > 0 ? '' : 'none';
-                    }
-                }
+            }
+
+            function adjNav(delta) {
+                var navBadge = document.getElementById('nav-active-dl');
+                if (!navBadge) return;
+                var nv = parseInt(navBadge.textContent || '0') + delta;
+                setNavActiveCount(nv);
+            }
+
+            function adjActive(delta) {
+                adj('stat-active-dl', delta);
+                adj('pipe-tab-count-active', delta);
+                adjNav(delta);
             }
 
             // --- Dashboard stat updates ---
             if (d.type === 'started') {
-                adj('stat-active-dl', 1);
+                adjActive(1);
                 adj('stat-pending-dl', -1);
+                adj('pending-count', -1);
             }
             if (d.type === 'complete') {
-                adj('stat-active-dl', -1);
+                adjActive(-1);
                 adj('stat-complete', 1);
             }
             if (d.type === 'failed') {
-                adj('stat-active-dl', -1);
+                adjActive(-1);
                 adj('stat-failed-dl', 1);
             }
 
@@ -969,6 +1029,7 @@
                 .then(function(state) {
                     renderPipelinePools(state);
                     renderSnapshotItems(state);
+                    syncPipelineCountsFromSnapshot(state);
                     renderQueuePauseState(!!state.queue_paused, state.queue_pause_reason || '');
                 })
                 .catch(function() {});
