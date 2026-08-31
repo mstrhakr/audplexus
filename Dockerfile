@@ -1,6 +1,11 @@
 # Build stage
 FROM golang:alpine AS builder
 
+ARG BUILD_RELEASE_VERSION=0.0.0
+ARG BUILD_COMMIT_REF=
+ARG BUILD_TIMESTAMP=
+ARG BUILD_CHANNEL=dev
+
 # Allow Go to download the required toolchain version
 ENV GOTOOLCHAIN=auto
 
@@ -19,7 +24,7 @@ RUN go mod download
 COPY . .
 
 # Build the application (pure Go, no CGO needed for modernc.org/sqlite)
-RUN CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/mstrhakr/audplexus/internal/web.buildDeploymentMode=docker" -o /audplexus ./cmd/server
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/mstrhakr/audplexus/internal/web.buildDeploymentMode=docker -X github.com/mstrhakr/audplexus/internal/web.buildReleaseVersion=${BUILD_RELEASE_VERSION} -X github.com/mstrhakr/audplexus/internal/web.buildCommitRef=${BUILD_COMMIT_REF} -X github.com/mstrhakr/audplexus/internal/web.buildTimestamp=${BUILD_TIMESTAMP} -X github.com/mstrhakr/audplexus/internal/web.buildChannel=${BUILD_CHANNEL}" -o /audplexus ./cmd/server
 
 # Runtime stage
 FROM alpine:3.24

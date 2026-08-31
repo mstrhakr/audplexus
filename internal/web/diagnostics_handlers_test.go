@@ -213,3 +213,69 @@ func TestDiagnosticsRuntimeMetadataNotEmpty(t *testing.T) {
 		t.Fatal("diagnosticsDeploymentMode should not be empty")
 	}
 }
+
+func TestServerVersionReleaseBuildUsesReleaseVersionOnly(t *testing.T) {
+	origRelease := buildReleaseVersion
+	origCommit := buildCommitRef
+	origTS := buildTimestamp
+	origChannel := buildChannel
+	t.Cleanup(func() {
+		buildReleaseVersion = origRelease
+		buildCommitRef = origCommit
+		buildTimestamp = origTS
+		buildChannel = origChannel
+	})
+
+	buildReleaseVersion = "0.6.1"
+	buildCommitRef = "abcdef123456"
+	buildTimestamp = "20260831153045"
+	buildChannel = "release"
+
+	if got := serverVersion(); got != "0.6.1" {
+		t.Fatalf("serverVersion() = %q, want %q", got, "0.6.1")
+	}
+}
+
+func TestServerVersionDevBuildUsesCommitSuffix(t *testing.T) {
+	origRelease := buildReleaseVersion
+	origCommit := buildCommitRef
+	origTS := buildTimestamp
+	origChannel := buildChannel
+	t.Cleanup(func() {
+		buildReleaseVersion = origRelease
+		buildCommitRef = origCommit
+		buildTimestamp = origTS
+		buildChannel = origChannel
+	})
+
+	buildReleaseVersion = "0.6.1"
+	buildCommitRef = "ABCDEF1234567890"
+	buildTimestamp = "20260831153045"
+	buildChannel = "dev"
+
+	if got := serverVersion(); got != "0.6.1.abcdef123456-dev" {
+		t.Fatalf("serverVersion() = %q, want %q", got, "0.6.1.abcdef123456-dev")
+	}
+}
+
+func TestServerVersionDevBuildFallsBackToTimestamp(t *testing.T) {
+	origRelease := buildReleaseVersion
+	origCommit := buildCommitRef
+	origTS := buildTimestamp
+	origChannel := buildChannel
+	t.Cleanup(func() {
+		buildReleaseVersion = origRelease
+		buildCommitRef = origCommit
+		buildTimestamp = origTS
+		buildChannel = origChannel
+	})
+
+	buildReleaseVersion = "0.6.1"
+	buildCommitRef = ""
+	buildTimestamp = "20260831153045"
+	buildChannel = "dev"
+
+	if got := serverVersion(); got != "0.6.1.20260831153045-dev" {
+		t.Fatalf("serverVersion() = %q, want %q", got, "0.6.1.20260831153045-dev")
+	}
+}

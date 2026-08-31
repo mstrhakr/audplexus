@@ -46,6 +46,7 @@ import (
 
 var webLog = logging.Component("web")
 var authLog = logging.Component("auth")
+var runtimeVersionStamp = time.Now().UTC().Format("20060102150405")
 
 //go:embed templates/*.html
 var templateFS embed.FS
@@ -2582,17 +2583,101 @@ func (s *Server) computeSidebar(ctx context.Context) sidebarData {
 	return out
 }
 
-// serverVersion returns a printable version string. Pulled from the Go
-// build info — in a release build this is the module version tag; in
-// "go run" / dev builds it's "(devel)". Trimmed to something compact.
+// serverVersion returns a deterministic runtime version string:
+// release builds: "<release>" (example: 0.6.1)
+// dev builds: "<release>.<commit>-dev" or "<release>.<timestamp>-dev"
+// If build metadata is missing, release falls back to 0.0.0.
 func serverVersion() string {
-	if info, ok := debug.ReadBuildInfo(); ok {
-		v := info.Main.Version
-		if v != "" && v != "(devel)" {
-			return v
+	base := normalizeReleaseVersion(buildReleaseVersion)
+	if base == "" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			base = normalizeReleaseVersion(info.Main.Version)
 		}
 	}
-	return "dev"
+	if base == "" {
+		base = "0.0.0"
+	}
+
+	channel := strings.ToLower(strings.TrimSpace(buildChannel))
+	if channel == "release" {
+		return base
+	}
+
+	ref := normalizeCommitRef(buildCommitRef)
+	if ref == "" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			ref = normalizeCommitRef(buildInfoSetting(info, "vcs.revision"))
+		}
+	}
+	if ref == "" {
+		ref = normalizeBuildStamp(buildTimestamp)
+	}
+	if ref == "" {
+		ref = runtimeVersionStamp
+	}
+
+	return fmt.Sprintf("%s.%s-dev", base, ref)
+}
+
+func normalizeReleaseVersion(v string) string {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	if v == "" || strings.EqualFold(v, "dev") || strings.EqualFold(v, "(devel)") {
+		return ""
+	}
+	return v
+}
+
+func normalizeCommitRef(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return ""
+	}
+	b := make([]rune, 0, len(v))
+	for _, r := range v {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') {
+			b = append(b, r)
+		}
+	}
+	if len(b) == 0 {
+		return ""
+	}
+	if len(b) > 12 {
+		b = b[:12]
+	}
+	return string(b)
+}
+
+func normalizeBuildStamp(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	b := make([]rune, 0, len(v))
+	for _, r := range v {
+		if r >= '0' && r <= '9' {
+			b = append(b, r)
+		}
+	}
+	if len(b) < 8 {
+		return ""
+	}
+	if len(b) > 14 {
+		b = b[:14]
+	}
+	return string(b)
+}
+
+func buildInfoSetting(info *debug.BuildInfo, key string) string {
+	if info == nil {
+		return ""
+	}
+	for _, s := range info.Settings {
+		if s.Key == key {
+			return s.Value
+		}
+	}
+	return ""
 }
 
 // formatUptime returns a compact "6d 14h" / "3h 12m" / "47s" string.

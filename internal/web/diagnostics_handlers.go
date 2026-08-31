@@ -1310,6 +1310,19 @@ type diagnosticsHandoffResponse struct {
 // Defaults to native for local/dev builds.
 var buildDeploymentMode = "native"
 
+// Build metadata fields are optional ldflags values used by serverVersion().
+//
+//	-ldflags "-X github.com/mstrhakr/audplexus/internal/web.buildReleaseVersion=0.6.1"
+//	-ldflags "-X github.com/mstrhakr/audplexus/internal/web.buildCommitRef=abc123def456"
+//	-ldflags "-X github.com/mstrhakr/audplexus/internal/web.buildTimestamp=20260831153045"
+//	-ldflags "-X github.com/mstrhakr/audplexus/internal/web.buildChannel=release"
+//
+// buildChannel expects: "release" for tagged builds, "dev" otherwise.
+var buildReleaseVersion = ""
+var buildCommitRef = ""
+var buildTimestamp = ""
+var buildChannel = "dev"
+
 // handleDiagnosticsEnv returns a JSON snapshot of runtime + path
 // info for the DS-style "Logs & Environment" diagnostics tab. Read-only.
 func (s *Server) handleDiagnosticsEnv(c *gin.Context) {
