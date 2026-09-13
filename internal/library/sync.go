@@ -1106,6 +1106,10 @@ func fetchEntireLibrary(ctx context.Context, client *audible.Client, responseGro
 	return books, err
 }
 
+func libraryBookID(item audible.Book) string {
+	return item.BestID()
+}
+
 func fetchEntireLibraryWithTotal(ctx context.Context, client *audible.Client, responseGroups []string) ([]audible.Book, int, error) {
 	const pageSize = 50
 	const maxPages = 2000 // 100k titles — far beyond any real library
@@ -1134,13 +1138,14 @@ func fetchEntireLibraryWithTotal(ctx context.Context, client *audible.Client, re
 
 		newOnPage := 0
 		for _, item := range lib.Items {
-			if item.ASIN == "" {
+			id := libraryBookID(item)
+			if id == "" {
 				continue
 			}
-			if _, dup := seen[item.ASIN]; dup {
+			if _, dup := seen[id]; dup {
 				continue
 			}
-			seen[item.ASIN] = struct{}{}
+			seen[id] = struct{}{}
 			all = append(all, item)
 			newOnPage++
 		}
@@ -1272,12 +1277,13 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		}
 		unique, shared := 0, 0
 		for _, item := range accBooks {
-			owners[item.ASIN] = append(owners[item.ASIN], t.ID)
-			if _, dup := seenASIN[item.ASIN]; dup {
+			id := libraryBookID(item)
+			owners[id] = append(owners[id], t.ID)
+			if _, dup := seenASIN[id]; dup {
 				shared++
 				continue
 			}
-			seenASIN[item.ASIN] = struct{}{}
+			seenASIN[id] = struct{}{}
 			unique++
 			entries = append(entries, accountItem{client: t.Client, accountID: t.ID, item: item})
 		}
