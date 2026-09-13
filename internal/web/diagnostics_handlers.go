@@ -1861,13 +1861,14 @@ func (s *Server) handleDiagnosticsAccountInventory(c *gin.Context) {
 
 		apiASINs := make(map[string]struct{}, len(books))
 		for _, b := range books {
-			if b.ASIN == "" {
+			id := library.LibraryBookID(b)
+			if id == "" {
 				continue
 			}
-			if _, dup := apiASINs[b.ASIN]; dup {
+			if _, dup := apiASINs[id]; dup {
 				continue
 			}
-			apiASINs[b.ASIN] = struct{}{}
+			apiASINs[id] = struct{}{}
 			if b.Downloadable() {
 				inv.Downloadable++
 			} else {
@@ -1888,8 +1889,9 @@ func (s *Server) handleDiagnosticsAccountInventory(c *gin.Context) {
 		if minErr == nil {
 			minSet := make(map[string]struct{}, len(minBooks))
 			for _, b := range minBooks {
-				if b.ASIN != "" {
-					minSet[b.ASIN] = struct{}{}
+				id := library.LibraryBookID(b)
+				if id != "" {
+					minSet[id] = struct{}{}
 				}
 			}
 			inv.MinimalCount = len(minSet)

@@ -1106,8 +1106,17 @@ func fetchEntireLibrary(ctx context.Context, client *audible.Client, responseGro
 	return books, err
 }
 
-func libraryBookID(item audible.Book) string {
+// LibraryBookID returns the canonical identifier for a library item used across
+// fetch dedupe, ownership stamping, and diagnostic comparisons. Audible may
+// return a real ASIN or a legacy ISBN-10/ISBN-13 value in the raw `asin` field,
+// so callers must normalize through BestID() instead of reading the raw field
+// directly.
+func LibraryBookID(item audible.Book) string {
 	return item.BestID()
+}
+
+func libraryBookID(item audible.Book) string {
+	return LibraryBookID(item)
 }
 
 func fetchEntireLibraryWithTotal(ctx context.Context, client *audible.Client, responseGroups []string) ([]audible.Book, int, error) {
