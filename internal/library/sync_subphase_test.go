@@ -1,8 +1,16 @@
 package library
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/go-audible"
@@ -215,9 +223,59 @@ func TestSuspiciousZeroLibrary_AllowsFreshEmptyLibrary(t *testing.T) {
 }
 
 func TestLibraryIdentifier_UsesBestIDForLegacyISBN10(t *testing.T) {
-	item := audible.Book{ISBN10: "3838795407", Title: "Legacy Title"}
-	if got := libraryBookID(item); got != "3838795407" {
-		t.Fatalf("libraryBookID() = %q, want %q", got, "3838795407")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/1.0/library" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"items":[{"asin":"3838795407","title":"Legacy Title"}],"total_results":1}`))
+	}))
+	defer server.Close()
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+
+	client := audible.NewClient(audible.MarketplaceUS)
+	client.SetAPIEndpoint(server.URL)
+	client.SetCredentials(&audible.Credentials{
+		ADPToken:         "token",
+		AccessToken:      "access",
+		RefreshToken:     "refresh",
+		ExpiresAt:        time.Now().Add(time.Hour),
+		DevicePrivateKey: string(pemBytes),
+		DeviceInfo: audible.DeviceInfo{
+			DeviceSerialNumber: "serial",
+			DeviceType:         "type",
+		},
+	})
+
+	books, _, err := fetchEntireLibraryWithTotal(context.Background(), client, []string{"product_desc"})
+	if err != nil {
+		t.Fatalf("fetchEntireLibraryWithTotal: %v", err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("len(books) = %d, want 1", len(books))
+	}
+	if got := books[0].BestID(); got != "3838795407" {
+		t.Fatalf("books[0].BestID() = %q, want %q", got, "3838795407")
+	}
+
+	owners := make(map[string][]string)
+	seen := make(map[string]struct{})
+	for _, item := range books {
+		id := libraryBookID(item)
+		owners[id] = append(owners[id], "acct-1")
+		if _, dup := seen[id]; dup {
+			t.Fatalf("duplicate library ID %q retained in canonical owner map", id)
+		}
+		seen[id] = struct{}{}
+	}
+	if _, ok := owners["3838795407"]; !ok {
+		t.Fatalf("missing canonical owner stamp for legacy ISBN-10 key")
 	}
 }
 
