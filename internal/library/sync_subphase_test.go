@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mstrhakr/audplexus/internal/database"
+	"github.com/mstrhakr/go-audible"
 )
 
 // newTestSyncService creates a minimal SyncService with an in-memory SQLite DB
@@ -210,6 +211,13 @@ func TestSuspiciousZeroLibrary_AllowsFreshEmptyLibrary(t *testing.T) {
 	}
 	if err := suspiciousZeroLibrary(0, &database.SyncHistory{BooksFound: 0, Status: "complete"}); err != nil {
 		t.Fatalf("expected no error for previously empty library, got %v", err)
+	}
+}
+
+func TestLibraryIdentifier_UsesBestIDForLegacyISBN10(t *testing.T) {
+	item := audible.Book{ISBN10: "3838795407", Title: "Legacy Title"}
+	if got := libraryBookID(item); got != "3838795407" {
+		t.Fatalf("libraryBookID() = %q, want %q", got, "3838795407")
 	}
 }
 
