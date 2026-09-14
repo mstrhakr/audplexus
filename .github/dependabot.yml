@@ -5,13 +5,32 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      # init/analyze/autobuild must land in one PR — a split merge leaves a
+      # commit with mismatched CodeQL Action versions, which fails the run.
+      codeql-action:
+        patterns:
+          - "github/codeql-action/*"
+      github-actions:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "github/codeql-action/*"
 
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
 
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      docker-dependencies:
+        patterns:
+          - "*"
