@@ -36,6 +36,24 @@ func newTestSyncService(t *testing.T) *SyncService {
 	return svc
 }
 
+func TestConvertBookFiltersTranslatorCreditsAndKeepsAuthorASIN(t *testing.T) {
+	book := audible.Book{
+		Authors: []audible.Contributor{
+			{ASIN: "translator-id", Name: "Karl A. Klewer - translator"},
+			{ASIN: "tolkien-id", Name: "J.R.R. Tolkien"},
+			{ASIN: "coauthor-id", Name: "Christopher Tolkien"},
+		},
+	}
+
+	got := convertBook(book)
+	if got.Author != "J.R.R. Tolkien, Christopher Tolkien" {
+		t.Errorf("Author = %q", got.Author)
+	}
+	if got.AuthorASIN != "tolkien-id" {
+		t.Errorf("AuthorASIN = %q, want the first non-translator author", got.AuthorASIN)
+	}
+}
+
 func TestSubPhaseFnFor_InsertsNewEntry(t *testing.T) {
 	svc := newTestSyncService(t)
 	fn := svc.subPhaseFnFor(PhasePlexSync)

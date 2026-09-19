@@ -12,6 +12,7 @@ import (
 
 	"github.com/mstrhakr/audplexus/internal/audio"
 	"github.com/mstrhakr/audplexus/internal/audnexus"
+	"github.com/mstrhakr/audplexus/internal/contributors"
 	"github.com/mstrhakr/audplexus/internal/database"
 	"github.com/mstrhakr/audplexus/internal/errs"
 	"github.com/mstrhakr/audplexus/internal/logging"
@@ -1693,18 +1694,23 @@ func parseAudibleDate(raw string) time.Time {
 }
 
 func convertBook(b audible.Book) database.Book {
-	authors := make([]string, len(b.Authors))
-	for i, a := range b.Authors {
-		authors[i] = cleanText(a.Name)
+	authors := make([]string, 0, len(b.Authors))
+	var authorASIN string
+	for _, a := range b.Authors {
+		name := cleanText(a.Name)
+		if contributors.IsTranslator(name) {
+			continue
+		}
+		if name != "" {
+			authors = append(authors, name)
+			if authorASIN == "" {
+				authorASIN = a.ASIN
+			}
+		}
 	}
 	narrators := make([]string, len(b.Narrators))
 	for i, n := range b.Narrators {
 		narrators[i] = cleanText(n.Name)
-	}
-
-	var authorASIN string
-	if len(b.Authors) > 0 {
-		authorASIN = b.Authors[0].ASIN
 	}
 
 	var series, seriesPos string
