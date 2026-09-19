@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mstrhakr/audplexus/internal/audio"
+	"github.com/mstrhakr/audplexus/internal/contributors"
 	"github.com/mstrhakr/audplexus/internal/database"
 )
 
@@ -78,7 +79,9 @@ func (e *EnrichedBook) Author() string {
 		for i, a := range e.AudnexusBook.Authors {
 			names[i] = a.Name
 		}
-		return strings.Join(names, ", ")
+		if authors := contributors.FilterAuthors(names); len(authors) > 0 {
+			return strings.Join(authors, ", ")
+		}
 	}
 	return e.Book.Author
 }
@@ -184,7 +187,9 @@ func (e *EnrichedBook) Writer() string {
 			for i, a := range e.AudnexusBook.Authors {
 				names[i] = a.Name
 			}
-			parts = append(parts, "Written by "+strings.Join(names, ", "))
+			if authors := contributors.FilterAuthors(names); len(authors) > 0 {
+				parts = append(parts, "Written by "+strings.Join(authors, ", "))
+			}
 		}
 	}
 
@@ -277,4 +282,3 @@ func (e *EnrichedBook) ToAudioMetadata() audio.Metadata {
 		// for any caller that doesn't opt into a profile.
 	}
 }
-
