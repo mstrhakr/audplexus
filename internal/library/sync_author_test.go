@@ -11,6 +11,7 @@ func TestConvertBookFiltersRoleContributorsAndKeepsCoauthors(t *testing.T) {
 		ASIN: "B012345678",
 		Authors: []audible.Contributor{
 			{ASIN: "TRANSLATOR", Name: "Karl A. Klewer - translator"},
+			{ASIN: "ENCODED_TRANSLATOR", Name: "Another Name - translator&nbsp;"},
 			{ASIN: "TOLKIEN", Name: "J.R.R. Tolkien"},
 			{ASIN: "CHRISTOPHER", Name: "Christopher Tolkien"},
 		},

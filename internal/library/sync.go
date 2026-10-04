@@ -1697,10 +1697,11 @@ func convertBook(b audible.Book) database.Book {
 	authors := make([]string, 0, len(b.Authors))
 	var authorASIN string
 	for _, a := range b.Authors {
-		if contributors.IsNonAuthorRole(a.Name) {
+		name := cleanText(a.Name)
+		if contributors.IsNonAuthorRole(name) {
 			continue
 		}
-		authors = append(authors, cleanText(a.Name))
+		authors = append(authors, name)
 		if authorASIN == "" {
 			authorASIN = a.ASIN
 		}
