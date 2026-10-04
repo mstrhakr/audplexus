@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mstrhakr/audplexus/internal/audio"
+	"github.com/mstrhakr/audplexus/internal/contributors"
 	"github.com/mstrhakr/audplexus/internal/database"
 )
 
@@ -74,11 +75,15 @@ func (e *EnrichedBook) Region() string {
 // Author returns the best available author name.
 func (e *EnrichedBook) Author() string {
 	if e.AudnexusBook != nil && len(e.AudnexusBook.Authors) > 0 {
-		names := make([]string, len(e.AudnexusBook.Authors))
-		for i, a := range e.AudnexusBook.Authors {
-			names[i] = a.Name
+		names := make([]string, 0, len(e.AudnexusBook.Authors))
+		for _, a := range e.AudnexusBook.Authors {
+			if !contributors.IsNonAuthorRole(a.Name) {
+				names = append(names, a.Name)
+			}
 		}
-		return strings.Join(names, ", ")
+		if len(names) > 0 {
+			return strings.Join(names, ", ")
+		}
 	}
 	return e.Book.Author
 }
@@ -180,11 +185,15 @@ func (e *EnrichedBook) Writer() string {
 
 		// Add authors (writers)
 		if len(e.AudnexusBook.Authors) > 0 {
-			names := make([]string, len(e.AudnexusBook.Authors))
-			for i, a := range e.AudnexusBook.Authors {
-				names[i] = a.Name
+			names := make([]string, 0, len(e.AudnexusBook.Authors))
+			for _, a := range e.AudnexusBook.Authors {
+				if !contributors.IsNonAuthorRole(a.Name) {
+					names = append(names, a.Name)
+				}
 			}
-			parts = append(parts, "Written by "+strings.Join(names, ", "))
+			if len(names) > 0 {
+				parts = append(parts, "Written by "+strings.Join(names, ", "))
+			}
 		}
 	}
 
@@ -277,4 +286,3 @@ func (e *EnrichedBook) ToAudioMetadata() audio.Metadata {
 		// for any caller that doesn't opt into a profile.
 	}
 }
-
