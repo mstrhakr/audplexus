@@ -78,8 +78,9 @@ func CleanForDisplay(raw string) string {
 //	customer ... for asin [B0...]; reasons: Customer is not part of any
 //	plans [RequesterEligibility/Membership] | Ownership: ... | ...
 //
-// The user just needs to know "Audible says you don't have access" plus
-// a hint at WHY (no membership, ownership not found, AYCL ineligible).
+// A denial can contain several failed eligibility checks. Prefer actionable
+// throttling over membership/ownership hints: those checks can also fail for
+// purchased titles while Audible is throttling the account.
 // We keep the full raw message in logs, not in the UI.
 func CleanEntitlementReason(raw string) string {
 	s := strings.TrimSpace(raw)
@@ -88,6 +89,9 @@ func CleanEntitlementReason(raw string) string {
 	}
 	lower := strings.ToLower(s)
 	switch {
+	case strings.Contains(lower, "customerthrottled"),
+		strings.Contains(lower, "being throttled"):
+		return "Audible is throttling download licenses (CustomerThrottled). Wait before retrying; purchased books can also be affected."
 	case strings.Contains(lower, "not part of any plans"),
 		strings.Contains(lower, "requestereligibility/membership"):
 		return "No longer included with your Audible plan"
