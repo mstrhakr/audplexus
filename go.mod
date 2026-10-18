@@ -62,4 +62,4 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 )
 
-replace github.com/mstrhakr/go-audible => github.com/muness/go-audible v0.2.8-0.20261018012053-d2fc38d7f1d6
+replace github.com/mstrhakr/go-audible => github.com/muness/go-audible v0.2.8-0.20261018104812-5b4052cec129
