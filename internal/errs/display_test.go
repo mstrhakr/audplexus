@@ -6,14 +6,14 @@ import (
 )
 
 func TestCleanEntitlementReason(t *testing.T) {
-	const throttled = "Audible is throttling download licenses (CustomerThrottled). Wait before retrying; purchased books can also be affected."
+	const throttled = "Audible refused the download license (CustomerThrottled). Purchased books can be affected; reconnecting the account may help."
 	cases := []struct {
 		name string
 		in   string
 		want string
 	}{
 		{
-			name: "throttling wins over membership ownership client and Plus checks",
+			name: "CustomerThrottled takes precedence over membership and ownership hints",
 			in: "license denied for ASIN B000EXAMPLE (status=Denied): License not granted to customer example-customer; reasons: " +
 				"Customer is not part of any plans [RequesterEligibility/Membership] | " +
 				"No ownership information returned [CustomerThrottled/Ownership] | " +
@@ -22,12 +22,12 @@ func TestCleanEntitlementReason(t *testing.T) {
 			want: throttled,
 		},
 		{
-			name: "throttling code is case insensitive",
+			name: "CustomerThrottled code is case insensitive",
 			in:   "license denied; reasons: [CUSTOMERTHROTTLED/Ownership]",
 			want: throttled,
 		},
 		{
-			name: "throttling described in message",
+			name: "Audible reports throttling in message",
 			in:   "license denied; reasons: Customer example-customer being throttled [ContentEligibility/AYCL]",
 			want: throttled,
 		},
