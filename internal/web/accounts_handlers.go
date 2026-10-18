@@ -257,7 +257,7 @@ func (s *Server) startAuthForAccount(c *gin.Context, accountID, marketplace stri
 		mp = audible.MarketplaceUS
 	}
 	client := audible.NewClient(mp)
-	authURL, err := client.GetAuthURL()
+	authURL, err := client.GetAuthURLForDevice(audible.Android)
 	if err != nil {
 		webLog.Error().Err(err).Msg("failed to generate auth URL")
 		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to generate login URL: " + err.Error()})

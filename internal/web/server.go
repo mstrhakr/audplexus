@@ -4184,6 +4184,7 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 
 	client := audible.NewClient(mp)
 	if err := client.Authenticate(ctx, audible.DeviceRegistrationRequest{
+		Profile:           audible.Android,
 		AuthorizationCode: code,
 		CodeVerifier:      verifier,
 		DeviceSerial:      serial,
