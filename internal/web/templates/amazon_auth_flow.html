@@ -7,6 +7,7 @@
 <div class="alert" role="status" style="margin-bottom:1rem">
     <div>
         <strong>Sign in with Amazon</strong>{{if .AuthAccountName}} — connecting <strong>{{.AuthAccountName}}</strong>{{end}}
+        {{if .AuthDeviceProfile}}<p class="hint">Device registration: {{if eq .AuthDeviceProfile "android"}}Android (alternative){{else}}iPhone (default){{end}}</p>{{end}}
         <ol style="margin:.5rem 0 .25rem 1.1rem;font-size:.85rem;line-height:1.6">
             <li>Open Amazon login in a new tab.</li>
             <li>Sign in and finish any prompts.</li>
@@ -33,6 +34,7 @@
 </details>
 
 <form method="POST" action="/auth/callback">
+    <input type="hidden" name="device_profile" value="{{.AuthDeviceProfile}}">
     <input type="hidden" name="code_verifier" value="{{.CodeVerifier}}">
     <input type="hidden" name="device_serial" value="{{.DeviceSerial}}">
     <input type="hidden" name="account_id" value="{{.AuthAccountID}}">

@@ -1,0 +1,18 @@
+{{define "audible_reconnect"}}
+<details style="margin-top:.75rem">
+    <summary style="cursor:pointer">Reconnect this account</summary>
+    <form method="POST" action="/auth/start" style="margin-top:.75rem">
+        <input type="hidden" name="account_id" value="{{.ID}}">
+        <input type="hidden" name="marketplace" value="{{.Marketplace}}">
+        <div class="form-row">
+            <label for="device-profile-{{.ID}}">Device registration for this sign-in</label>
+            <select class="select" id="device-profile-{{.ID}}" name="device_profile">
+                <option value="iphone" selected>iPhone (default)</option>
+                <option value="android">Android (alternative)</option>
+            </select>
+            <p class="hint">If purchased books fail to download with iPhone registration, try Android. Complete a new Amazon sign-in to replace this account’s connection. Your library and downloads stay.</p>
+        </div>
+        <button type="submit" class="btn btn-secondary">Generate Amazon login link</button>
+    </form>
+</details>
+{{end}}
