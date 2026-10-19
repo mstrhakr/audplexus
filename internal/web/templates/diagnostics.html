@@ -148,6 +148,7 @@
                         <input class="input" type="text" id="diag-asin-input" placeholder="e.g. B07K6WYTMV" style="flex:1;font-family:ui-monospace,monospace" required pattern="[A-Za-z0-9]{8,14}">
                         <button type="submit" class="btn btn-secondary btn-small" id="diag-asin-btn">Look up</button>
                     </form>
+                    <label class="muted" style="display:block;font-size:.78rem;margin-bottom:.6rem"><input type="checkbox" id="diag-check-license"> Request a download license too. This sends an additional request to Audible.</label>
                     <div id="diag-asin-result" style="font-size:.8rem"></div>
                 </div>
 
@@ -271,7 +272,8 @@ function diagProbeASIN(evt) {
     btn.disabled = true;
     btn.textContent = 'Looking up…';
     out.innerHTML = '<div class="muted">Querying Audible per account…</div>';
-    fetch('/api/diagnostics/asin/' + encodeURIComponent(asin)).then(function(r) {
+    var checkLicense = document.getElementById('diag-check-license').checked;
+    fetch('/api/diagnostics/asin/' + encodeURIComponent(asin) + (checkLicense ? '?check_license=true' : '')).then(function(r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
     }).then(function(d) {
@@ -297,7 +299,7 @@ function diagProbeASIN(evt) {
                      + ' · format: <code>' + esc(a.format_type || '—') + '</code>'
                      + ' · delivery: <code>' + esc(a.delivery_type || '—') + '</code></div>';
                 html += '<div style="margin-top:.2rem">downloadable: ' + (a.downloadable ? '✓' : '✗')
-                     + ' · entitled: ' + (a.entitle_error ? ('✗ <span class="muted">' + esc(a.entitle_error) + '</span>') : (a.entitled ? '✓' : '✗')) + '</div>';
+                     + ' · download license: ' + (!a.entitlement_checked ? 'not requested' : (a.entitle_error ? ('✗ <span class="muted">' + esc(a.entitle_error) + '</span>') : (a.entitled ? '✓' : '✗'))) + '</div>';
                 html += '<div class="muted" style="margin-top:.2rem">If this shows "in library" but the title never appears after a sync, the account\'s library LIST endpoint is filtering it out server-side — report the content type above.</div>';
             }
             html += '</div>';
