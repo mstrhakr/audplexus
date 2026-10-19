@@ -1731,17 +1731,18 @@ func (s *Server) handleDiagnosticsLogsSSE(c *gin.Context) {
 // applies server-side filters the item endpoint doesn't, so a title can probe
 // fine here yet never appear in a sync.
 type diagnosticsAccountProbe struct {
-	AccountID    string `json:"account_id"`
-	AccountName  string `json:"account_name"`
-	Found        bool   `json:"found"`
-	Error        string `json:"error,omitempty"`
-	Title        string `json:"title,omitempty"`
-	ContentType  string `json:"content_type,omitempty"`
-	FormatType   string `json:"format_type,omitempty"`
-	DeliveryType string `json:"delivery_type,omitempty"`
-	Downloadable bool   `json:"downloadable"`
-	Entitled     bool   `json:"entitled"`
-	EntitleError string `json:"entitle_error,omitempty"`
+	AccountID          string `json:"account_id"`
+	AccountName        string `json:"account_name"`
+	Found              bool   `json:"found"`
+	Error              string `json:"error,omitempty"`
+	Title              string `json:"title,omitempty"`
+	ContentType        string `json:"content_type,omitempty"`
+	FormatType         string `json:"format_type,omitempty"`
+	DeliveryType       string `json:"delivery_type,omitempty"`
+	Downloadable       bool   `json:"downloadable"`
+	Entitled           bool   `json:"entitled"`
+	EntitlementChecked bool   `json:"entitlement_checked"`
+	EntitleError       string `json:"entitle_error,omitempty"`
 }
 
 // handleDiagnosticsASINProbe checks one ASIN against every connected account
@@ -1776,10 +1777,13 @@ func (s *Server) handleDiagnosticsASINProbe(c *gin.Context) {
 				p.FormatType = item.FormatType
 				p.DeliveryType = item.ContentDeliveryType
 				p.Downloadable = item.Downloadable()
-				if ok, cdErr := acct.Client.CanDownload(probeCtx, *item); cdErr != nil {
-					p.EntitleError = errs.CleanEntitlementReason(cdErr.Error())
-				} else {
-					p.Entitled = ok
+				if c.Query("check_license") == "true" {
+					p.EntitlementChecked = true
+					if ok, cdErr := acct.Client.CanDownload(probeCtx, *item); cdErr != nil {
+						p.EntitleError = errs.CleanEntitlementReason(cdErr.Error())
+					} else {
+						p.Entitled = ok
+					}
 				}
 			}
 			cancel()

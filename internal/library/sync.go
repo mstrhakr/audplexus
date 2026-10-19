@@ -1044,11 +1044,9 @@ func phaseRunsInMode(mode SyncMode, phase SyncPhase) bool {
 	return phase == PhaseAudibleSync
 }
 
-// accountItem pairs a fetched library item with the account (client + id) it
-// came from, so the merge-all sync can route entitlement checks to the right
-// client and stamp each book with its owning account.
+// accountItem pairs a fetched library item with the account ID it
+// came from, so sync can stamp each book with its owning account.
 type accountItem struct {
-	client    *audible.Client
 	accountID string
 	item      audible.Book
 }
@@ -1220,8 +1218,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	var entries []accountItem
 	seenASIN := make(map[string]struct{})
 	// Every account that reports an ASIN is an owner — recorded in
-	// book_audible_accounts after upsert. Processing (entitlement check,
-	// download client) still uses the FIRST account that reported it.
+	// book_audible_accounts after upsert. Downloads use the first owner.
 	owners := make(map[string][]string)
 
 	// Per-account progress rows under the Audible Library phase. Only shown
@@ -1295,7 +1292,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			}
 			seenASIN[id] = struct{}{}
 			unique++
-			entries = append(entries, accountItem{client: t.Client, accountID: t.ID, item: item})
+			entries = append(entries, accountItem{accountID: t.ID, item: item})
 		}
 		perTotal[t.ID] = unique
 		perOwned[t.ID] = len(accBooks)
@@ -1335,12 +1332,10 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	added := 0
 	scanned := 0
 	keepASIN := make(map[string]struct{})
-	entitlementCheckTimeMs := int64(0)
 	dbWriteTimeMs := int64(0)
 	lastProgressEmit := 0
 
 	for _, entry := range entries {
-		client := entry.client
 		item := entry.item
 		select {
 		case <-ctx.Done():
@@ -1414,7 +1409,7 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			continue
 		}
 
-		// Check DB first — known books skip the entitlement network call entirely.
+		// Preserve local state while refreshing Audible metadata.
 		dbCheckStart := time.Now()
 		existing, err := s.db.GetBookByASIN(ctx, book.ASIN)
 		dbCheckMs := time.Since(dbCheckStart).Milliseconds()
@@ -1438,74 +1433,9 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 			continue
 		}
 
-		// For brand-new books only: verify entitlement before adding to the DB.
-		// If denied, still record the book — just flag it as unavailable so the
-		// UI can show it under the "Unavailable" tab with the denial reason
-		// (e.g. once-Plus-catalog titles the user no longer has access to).
-		if existing == nil {
-			entitleStart := time.Now()
-			canDownload, cdErr := client.CanDownload(ctx, item)
-			entitleMs := time.Since(entitleStart).Milliseconds()
-			entitlementCheckTimeMs += entitleMs
-			if cdErr != nil || !canDownload {
-				reason := "Audible entitlement denied"
-				if cdErr != nil {
-					reason = errs.CleanEntitlementReason(cdErr.Error())
-				}
-				syncLog.Info().Str("asin", book.ASIN).Str("title", book.Title).Str("reason", reason).Int("entitle_ms", int(entitleMs)).Msg("marking new item as unavailable: entitlement denied")
-				book.Status = database.BookStatusUnavailable
-				book.UnavailableReason = reason
-				if err := s.db.UpsertBook(ctx, &book); err != nil {
-					syncLog.Error().Err(err).Str("asin", book.ASIN).Msg("failed to upsert unavailable book")
-				} else {
-					s.stampBookAccounts(ctx, book.ASIN, entry.accountID, owners[book.ASIN])
-					keepASIN[book.ASIN] = struct{}{}
-					added++
-					perAdded[entry.accountID]++
-				}
-				scanned++
-				noteAccountScan(entry.accountID)
-				s.mu.Lock()
-				s.progress.BooksScanned = scanned
-				s.progress.BooksAdded = added
-				for i := range s.progress.Phases {
-					if s.progress.Phases[i].Name == PhaseAudibleSync {
-						setPhaseProgress(&s.progress.Phases[i], scanned, total, false, s.progress.Phases[i].Status)
-						break
-					}
-				}
-				s.emitLocked()
-				s.mu.Unlock()
-				if scanned%20 == 0 {
-					syncRecord.BooksAdded = added
-					_ = s.db.UpdateSync(ctx, syncRecord)
-				}
-				continue
-			}
-			syncLog.Debug().Str("asin", book.ASIN).Int("entitle_ms", int(entitleMs)).Msg("audible sync: entitlement check passed")
-		} else if existing.Status == database.BookStatusUnavailable {
-			// User may have regained access (Plus added title back). Re-check.
-			entitleStart := time.Now()
-			canDownload, cdErr := client.CanDownload(ctx, item)
-			entitleMs := time.Since(entitleStart).Milliseconds()
-			entitlementCheckTimeMs += entitleMs
-			if cdErr == nil && canDownload {
-				syncLog.Info().Str("asin", book.ASIN).Int("entitle_ms", int(entitleMs)).Msg("previously-unavailable book is now accessible")
-				book.Status = database.BookStatusNew
-				book.UnavailableReason = ""
-			} else {
-				book.Status = database.BookStatusUnavailable
-				book.UnavailableReason = existing.UnavailableReason
-				if cdErr != nil {
-					book.UnavailableReason = errs.CleanEntitlementReason(cdErr.Error())
-				}
-			}
-		}
-
 		keepASIN[book.ASIN] = struct{}{}
 
-		// Preserve status/file info for existing books — unless the
-		// unavailable-recheck above already decided a new status for this row.
+		// Preserve local status, denial reason, and file metadata for existing books.
 		if existing != nil {
 			if book.Status == "" {
 				book.Status = existing.Status
@@ -1620,11 +1550,6 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 	if scanned > 0 {
 		avgDbMs = dbWriteTimeMs / int64(scanned)
 	}
-	avgEntitleMs := int64(0)
-	if added > 0 {
-		// Only new books trigger entitlement checks
-		avgEntitleMs = entitlementCheckTimeMs / int64(added)
-	}
 
 	syncLog.Info().
 		Int("added", added).
@@ -1633,8 +1558,6 @@ func (s *SyncService) doAudibleSync(ctx context.Context, syncRecord *database.Sy
 		Int("fetch_ms", int(fetchMs)).
 		Int("db_total_ms", int(dbWriteTimeMs)).
 		Int("avg_db_ms", int(avgDbMs)).
-		Int("entitle_total_ms", int(entitlementCheckTimeMs)).
-		Int("avg_entitle_ms", int(avgEntitleMs)).
 		Int("elapsed_ms", int(totalElapsed.Milliseconds())).
 		Int("elapsed_sec", int(totalElapsed.Seconds())).
 		Msg("audible library sync complete")
