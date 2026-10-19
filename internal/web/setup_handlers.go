@@ -168,7 +168,8 @@ func (s *Server) handleSetupWizard(c *gin.Context) {
 			market = found
 		}
 		if authURL, err := audible.NewClient(market).GetAuthURL(); err == nil {
-			s.rememberPendingAuth(accountID, authURL.CodeVerifier, authURL.DeviceSerial)
+			s.rememberPendingAuth(accountID, authURL.CodeVerifier, authURL.DeviceSerial, audible.IPhone)
+			data["AuthDeviceProfile"] = "iphone"
 			data["AuthURL"] = authURL.URL
 			data["CodeVerifier"] = authURL.CodeVerifier
 			data["DeviceSerial"] = authURL.DeviceSerial

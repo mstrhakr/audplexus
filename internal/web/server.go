@@ -120,6 +120,7 @@ type Server struct {
 }
 
 type pendingAuthState struct {
+	profile      audible.DeviceProfile
 	codeVerifier string
 	deviceSerial string
 }
@@ -461,7 +462,7 @@ func (s *Server) setupTemplates() {
 	base := template.Must(template.New("base").Funcs(funcMap).ParseFS(templateFS, "templates/base.html"))
 
 	// Parse all partial/fragment templates that may be referenced by page templates
-	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/book_detail_modal.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html", "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html", "templates/destinations_card.html", "templates/reorganize_modal.html", "templates/reorganize_preview.html", "templates/amazon_auth_flow.html"}
+	partials := []string{"templates/library_table.html", "templates/library_row.html", "templates/book_detail_panel.html", "templates/book_detail_modal.html", "templates/settings_saved.html", "templates/sync_status.html", "templates/dashboard_summary.html", "templates/dashboard_downloads.html", "templates/destinations_new.html", "templates/destinations_form.html", "templates/destinations_delete.html", "templates/destinations_card.html", "templates/reorganize_modal.html", "templates/reorganize_preview.html", "templates/amazon_auth_flow.html", "templates/audible_reconnect.html"}
 	baseWithPartials := template.Must(template.Must(base.Clone()).ParseFS(templateFS, partials...))
 
 	r := &multiRender{templates: make(map[string]*template.Template)}
@@ -4082,6 +4083,11 @@ func (s *Server) handleAudibleMarketplaceSelect(c *gin.Context) {
 // account for the legacy single-account forms that omit it). If no account row
 // exists yet (very first connect during setup), it creates one.
 func (s *Server) handleAuthStart(c *gin.Context) {
+	profile, err := parseRegistrationProfile(c.PostForm("device_profile"))
+	if err != nil {
+		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": err.Error()})
+		return
+	}
 	ctx := c.Request.Context()
 	mp := strings.ToLower(strings.TrimSpace(c.PostForm("marketplace")))
 	if mp == "" {
@@ -4116,7 +4122,7 @@ func (s *Server) handleAuthStart(c *gin.Context) {
 	}
 
 	webLog.Info().Str("account_id", accountID).Str("marketplace", mp).Msg("auth URL generated")
-	s.startAuthForAccount(c, accountID, mp)
+	s.startAuthForAccount(c, accountID, mp, profile)
 }
 
 // handleAuthCallback receives the authorization code (via GET redirect from Amazon
@@ -4167,27 +4173,14 @@ func (s *Server) handleAuthCallback(c *gin.Context) {
 			mp = found
 		}
 	}
-	// Prefer the verifier/serial posted with the form; fall back to the
-	// server-side pending-auth state for the GET-redirect (wizard) flow that
-	// can't carry them in a POST body.
-	verifier := c.PostForm("code_verifier")
-	serial := c.PostForm("device_serial")
-	if verifier == "" || serial == "" {
-		pv, ps := s.takePendingAuth(accountID)
-		if verifier == "" {
-			verifier = pv
-		}
-		if serial == "" {
-			serial = ps
-		}
+	registration, err := s.registrationForCallback(c, accountID)
+	if err != nil {
+		s.renderAuthPage(c, http.StatusBadRequest, gin.H{"Error": err.Error()})
+		return
 	}
-
+	registration.AuthorizationCode = code
 	client := audible.NewClient(mp)
-	if err := client.Authenticate(ctx, audible.DeviceRegistrationRequest{
-		AuthorizationCode: code,
-		CodeVerifier:      verifier,
-		DeviceSerial:      serial,
-	}); err != nil {
+	if err := client.Authenticate(ctx, registration); err != nil {
 		webLog.Error().Err(err).Msg("authentication failed")
 		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{
 			"Error": "Authentication failed: " + err.Error(),

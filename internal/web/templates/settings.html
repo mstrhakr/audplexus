@@ -73,6 +73,9 @@
             </form>
             {{end}}
             </div>
+            {{if and (not .MultiAccount) (not .AuthURL)}}
+                {{range .Accounts}}{{if .IsPrimary}}{{template "audible_reconnect" .}}{{end}}{{end}}
+            {{end}}
         </div>
 
         {{/* ── Connected accounts ───────────────────────────────────────
@@ -97,11 +100,7 @@
                             {{else}}<span style="color:var(--warning)">not connected</span>{{end}}
                         </div>
                     </div>
-                    <form method="POST" action="/auth/start" style="margin:0">
-                        <input type="hidden" name="account_id" value="{{.ID}}">
-                        <input type="hidden" name="marketplace" value="{{.Marketplace}}">
-                        <button type="submit" class="btn btn-secondary btn-sm">Re-authenticate</button>
-                    </form>
+                    {{template "audible_reconnect" .}}
                     <form method="POST" action="/accounts/remove" style="margin:0"
                           onsubmit="return confirm('Remove this Audible account? Books synced from it stay in your library.')">
                         <input type="hidden" name="account_id" value="{{.ID}}">

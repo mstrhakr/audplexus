@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -170,7 +171,7 @@ func (s *Server) handleAccountAdd(c *gin.Context) {
 	s.reloadAccounts(ctx)
 
 	// Kick straight into the OAuth flow for the new account.
-	s.startAuthForAccount(c, account.ID, mp)
+	s.startAuthForAccount(c, account.ID, mp, audible.IPhone)
 }
 
 // handleAccountRemove deletes an account and rebuilds the client set. Books that
@@ -225,7 +226,7 @@ func (s *Server) handleAccountRegion(c *gin.Context) {
 
 // rememberPendingAuth stores the PKCE verifier + device serial for an account
 // so the callback can complete even via a GET redirect that omits them.
-func (s *Server) rememberPendingAuth(accountID, verifier, serial string) {
+func (s *Server) rememberPendingAuth(accountID, verifier, serial string, profile audible.DeviceProfile) {
 	if accountID == "" {
 		return
 	}
@@ -234,36 +235,69 @@ func (s *Server) rememberPendingAuth(accountID, verifier, serial string) {
 	if s.pendingAuth.entries == nil {
 		s.pendingAuth.entries = map[string]pendingAuthState{}
 	}
-	s.pendingAuth.entries[accountID] = pendingAuthState{codeVerifier: verifier, deviceSerial: serial}
+	s.pendingAuth.entries[accountID] = pendingAuthState{codeVerifier: verifier, deviceSerial: serial, profile: profile}
 }
 
-// takePendingAuth returns and clears the stored OAuth state for an account.
-func (s *Server) takePendingAuth(accountID string) (verifier, serial string) {
+func parseRegistrationProfile(value string) (audible.DeviceProfile, error) {
+	switch value {
+	case "", "iphone":
+		return audible.IPhone, nil
+	case "android":
+		return audible.Android, nil
+	default:
+		return audible.IPhone, fmt.Errorf("Unknown device registration. Choose iPhone or Android.")
+	}
+}
+
+func registrationProfileName(profile audible.DeviceProfile) string {
+	if profile == audible.Android {
+		return "android"
+	}
+	return "iphone"
+}
+
+// registrationForCallback keeps the device profile paired with its sign-in URL.
+func (s *Server) registrationForCallback(c *gin.Context, accountID string) (audible.DeviceRegistrationRequest, error) {
+	profile, err := parseRegistrationProfile(c.PostForm("device_profile"))
+	if err != nil {
+		return audible.DeviceRegistrationRequest{}, err
+	}
+	request := audible.DeviceRegistrationRequest{Profile: profile,
+		CodeVerifier: c.PostForm("code_verifier"), DeviceSerial: c.PostForm("device_serial")}
 	s.pendingAuth.mu.Lock()
 	defer s.pendingAuth.mu.Unlock()
-	st, ok := s.pendingAuth.entries[accountID]
-	if !ok {
-		return "", ""
+	if pending, ok := s.pendingAuth.entries[accountID]; ok {
+		if (c.PostForm("device_profile") != "" && profile != pending.profile) ||
+			(request.CodeVerifier != "" && request.CodeVerifier != pending.codeVerifier) ||
+			(request.DeviceSerial != "" && request.DeviceSerial != pending.deviceSerial) {
+			return audible.DeviceRegistrationRequest{}, fmt.Errorf("Sign-in details do not match. Use the latest login link for this account.")
+		}
+		request.Profile = pending.profile
+		request.CodeVerifier = pending.codeVerifier
+		request.DeviceSerial = pending.deviceSerial
+		delete(s.pendingAuth.entries, accountID)
 	}
-	delete(s.pendingAuth.entries, accountID)
-	return st.codeVerifier, st.deviceSerial
+	if request.CodeVerifier == "" || request.DeviceSerial == "" {
+		return audible.DeviceRegistrationRequest{}, fmt.Errorf("Sign-in expired. Generate a new Amazon login link.")
+	}
+	return request, nil
 }
 
 // startAuthForAccount generates the OAuth URL for a specific account and renders
 // the auth panel with the verifier/serial embedded. Shared by add + re-auth.
-func (s *Server) startAuthForAccount(c *gin.Context, accountID, marketplace string) {
+func (s *Server) startAuthForAccount(c *gin.Context, accountID, marketplace string, profile audible.DeviceProfile) {
 	mp, ok := audible.GetMarketplace(marketplace)
 	if !ok {
 		mp = audible.MarketplaceUS
 	}
 	client := audible.NewClient(mp)
-	authURL, err := client.GetAuthURL()
+	authURL, err := client.GetAuthURLForDevice(profile)
 	if err != nil {
 		webLog.Error().Err(err).Msg("failed to generate auth URL")
 		s.renderAuthPage(c, http.StatusInternalServerError, gin.H{"Error": "Failed to generate login URL: " + err.Error()})
 		return
 	}
-	s.rememberPendingAuth(accountID, authURL.CodeVerifier, authURL.DeviceSerial)
+	s.rememberPendingAuth(accountID, authURL.CodeVerifier, authURL.DeviceSerial, profile)
 
 	// Name the account in the sign-in panel so it's obvious which one this
 	// Amazon login is for (matters once there's more than one).
@@ -273,12 +307,13 @@ func (s *Server) startAuthForAccount(c *gin.Context, accountID, marketplace stri
 	}
 
 	s.renderAuthPage(c, http.StatusOK, gin.H{
-		"AuthURL":          authURL.URL,
-		"CodeVerifier":     authURL.CodeVerifier,
-		"DeviceSerial":     authURL.DeviceSerial,
-		"AuthAccountID":    accountID,
-		"AuthAccountName":  accountName,
-		"AuthAccountStart": true,
+		"AuthDeviceProfile": registrationProfileName(profile),
+		"AuthURL":           authURL.URL,
+		"CodeVerifier":      authURL.CodeVerifier,
+		"DeviceSerial":      authURL.DeviceSerial,
+		"AuthAccountID":     accountID,
+		"AuthAccountName":   accountName,
+		"AuthAccountStart":  true,
 	})
 }
 
