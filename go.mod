@@ -61,5 +61,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
-
-replace github.com/mstrhakr/go-audible => github.com/muness/go-audible v0.2.8-0.20261018104812-5b4052cec129
