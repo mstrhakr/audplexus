@@ -166,6 +166,13 @@ CI then handles:
 - creating a GitHub release with archives
 - building and publishing Docker images with floating and exact tags
 
+GitHub automatically appends release notes listing merged pull requests,
+contributors, and a comparison link since the previous release. The categories
+in `.github/release.yml` use the `enhancement`, `bug`, and `dependencies` labels;
+unlabeled pull requests appear under Other Changes. Existing changelog text or
+installation instructions remain above the generated notes. This applies to
+new releases; previously published release descriptions are not rewritten.
+
 Releases: <https://github.com/mstrhakr/audplexus/releases>
 
 ## Troubleshooting

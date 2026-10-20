@@ -155,6 +155,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           files: release/*
           body: ${{ steps.extract-notes.outputs.notes }}
+          generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
 
