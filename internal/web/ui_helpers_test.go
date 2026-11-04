@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -10,6 +11,42 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/mstrhakr/audplexus/internal/database"
 )
+
+type dashboardCompletionsDB struct {
+	database.StubDB
+	rows []database.DownloadQueue
+}
+
+func (db *dashboardCompletionsDB) ListDownloads(_ context.Context, status *database.DownloadStatus) ([]database.DownloadQueue, error) {
+	if status != nil && *status == database.DownloadStatusComplete {
+		return append([]database.DownloadQueue(nil), db.rows...), nil
+	}
+	return nil, nil
+}
+
+func TestDashboardRecentCompletions(t *testing.T) {
+	base := time.Date(2026, time.May, 14, 0, 0, 0, 0, time.UTC)
+	rows := make([]database.DownloadQueue, 0, 13)
+	for index := 1; index <= 12; index++ {
+		completedAt := base.Add(time.Duration(index) * time.Hour)
+		rows = append(rows, database.DownloadQueue{
+			ID: int64(index), ASIN: "repeated-book", CompletedAt: &completedAt,
+			CreatedAt: base, UpdatedAt: base.Add(100 * time.Hour),
+		})
+	}
+	rows = append(rows, database.DownloadQueue{ID: 13, ASIN: "legacy", UpdatedAt: base.Add(13 * time.Hour)})
+	server := &Server{db: &dashboardCompletionsDB{rows: rows}}
+	data := server.getDashboardDownloadsData(context.Background())
+	got := data["DoneDownloads"].([]database.DownloadQueue)
+	if len(got) != 10 {
+		t.Fatalf("got %d completions, want 10", len(got))
+	}
+	for index, row := range got {
+		if want := int64(13 - index); row.ID != want {
+			t.Errorf("completion %d: got ID %d, want %d", index, row.ID, want)
+		}
+	}
+}
 
 // TestPaginationNumbers exercises the compact paginator. The two
 // branches that matter are "small total (no ellipsis)" and "large

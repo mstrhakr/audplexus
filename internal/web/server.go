@@ -1153,6 +1153,20 @@ func (s *Server) getDashboardDownloadsData(ctx context.Context) gin.H {
 
 	completeStatus := database.DownloadStatusComplete
 	completeDownloads, _ := s.db.ListDownloads(ctx, &completeStatus)
+	sort.SliceStable(completeDownloads, func(first, second int) bool {
+		firstTime := completeDownloads[first].UpdatedAt
+		if completeDownloads[first].CompletedAt != nil {
+			firstTime = *completeDownloads[first].CompletedAt
+		}
+		secondTime := completeDownloads[second].UpdatedAt
+		if completeDownloads[second].CompletedAt != nil {
+			secondTime = *completeDownloads[second].CompletedAt
+		}
+		if firstTime.Equal(secondTime) {
+			return completeDownloads[first].ID > completeDownloads[second].ID
+		}
+		return firstTime.After(secondTime)
+	})
 	if len(completeDownloads) > 10 {
 		completeDownloads = completeDownloads[:10]
 	}
