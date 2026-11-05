@@ -984,8 +984,11 @@
                         tr.innerHTML = '<td>' + escHTML(label) + '</td><td class="cell-mono">' + escHTML(d.asin) + '</td><td>just now</td>';
                         cb.insertBefore(tr, cb.firstChild);
                         if (cb.closest('#dashboard-downloads')) {
+                            cb.closest('.table-wrap').hidden = false;
                             while (cb.rows.length > 10) cb.deleteRow(-1);
                             setCountValue('complete-count', cb.rows.length);
+                            setCountValue('complete-listed', cb.rows.length);
+                            adj('complete-total', 1);
                         } else {
                             adj('complete-count', 1);
                         }

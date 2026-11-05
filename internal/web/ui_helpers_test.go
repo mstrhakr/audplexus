@@ -40,7 +40,7 @@ func TestDashboardRecentFailures(t *testing.T) {
 		})
 	}
 	server := &Server{db: &dashboardCompletionsDB{failures: rows}}
-	data := server.getDashboardDownloadsData(context.Background())
+	data := server.getDashboardDownloadsData(context.Background(), "")
 	if got := data["FailedDL"].(int); got != len(rows) {
 		t.Fatalf("got %d total failures, want %d", got, len(rows))
 	}
@@ -56,7 +56,7 @@ func TestDashboardRecentFailures(t *testing.T) {
 }
 
 func TestDashboardRecentCompletions(t *testing.T) {
-	base := time.Date(2026, time.May, 14, 0, 0, 0, 0, time.UTC)
+	base := time.Now().Add(-48 * time.Hour)
 	rows := make([]database.DownloadQueue, 0, 13)
 	for index := 1; index <= 12; index++ {
 		completedAt := base.Add(time.Duration(index) * time.Hour)
@@ -67,16 +67,71 @@ func TestDashboardRecentCompletions(t *testing.T) {
 	}
 	rows = append(rows, database.DownloadQueue{ID: 13, ASIN: "legacy", UpdatedAt: base.Add(13 * time.Hour)})
 	server := &Server{db: &dashboardCompletionsDB{rows: rows}}
-	data := server.getDashboardDownloadsData(context.Background())
+	data := server.getDashboardDownloadsData(context.Background(), "")
 	got := data["DoneDownloads"].([]database.DownloadQueue)
 	if len(got) != 10 {
 		t.Fatalf("got %d completions, want 10", len(got))
+	}
+	if got := data["CompleteWindowTotal"]; got != len(rows) {
+		t.Fatalf("got window total %v, want %d before the display limit", got, len(rows))
 	}
 	for index, row := range got {
 		if want := int64(13 - index); row.ID != want {
 			t.Errorf("completion %d: got ID %d, want %d", index, row.ID, want)
 		}
 	}
+}
+
+func TestDashboardCompletionWindows(t *testing.T) {
+	now := time.Now()
+	completedAt := func(hours int) *time.Time {
+		stamp := now.Add(-time.Duration(hours) * time.Hour)
+		return &stamp
+	}
+	rows := []database.DownloadQueue{
+		{ID: 1, CompletedAt: completedAt(45 * 24), UpdatedAt: now},
+		{ID: 2, CompletedAt: completedAt(15 * 24), UpdatedAt: now},
+		{ID: 3, CompletedAt: completedAt(48), UpdatedAt: now},
+		{ID: 4, CompletedAt: completedAt(2), UpdatedAt: now},
+		{ID: 5, UpdatedAt: now.Add(-4 * 24 * time.Hour)},
+	}
+	for _, test := range []struct {
+		window     string
+		wantWindow string
+		wantIDs    []int64
+	}{
+		{window: "", wantWindow: "7d", wantIDs: []int64{4, 3, 5}},
+		{window: "invalid", wantWindow: "7d", wantIDs: []int64{4, 3, 5}},
+		{window: "24h", wantWindow: "24h", wantIDs: []int64{4}},
+		{window: " 7D ", wantWindow: "7d", wantIDs: []int64{4, 3, 5}},
+		{window: "30d", wantWindow: "30d", wantIDs: []int64{4, 3, 5, 2}},
+		{window: "all", wantWindow: "all", wantIDs: []int64{4, 3, 5, 2, 1}},
+	} {
+		t.Run(test.window, func(t *testing.T) {
+			server := &Server{db: &dashboardCompletionsDB{rows: rows}}
+			data := server.getDashboardDownloadsData(context.Background(), test.window)
+			if data["CompletedWindow"] != test.wantWindow {
+				t.Fatalf("got window %v, want %s", data["CompletedWindow"], test.wantWindow)
+			}
+			var gotIDs []int64
+			for _, row := range data["DoneDownloads"].([]database.DownloadQueue) {
+				gotIDs = append(gotIDs, row.ID)
+			}
+			if !reflect.DeepEqual(gotIDs, test.wantIDs) {
+				t.Fatalf("got IDs %v, want %v", gotIDs, test.wantIDs)
+			}
+			if data["CompleteWindowTotal"] != len(test.wantIDs) {
+				t.Fatalf("got total %v, want %d", data["CompleteWindowTotal"], len(test.wantIDs))
+			}
+		})
+	}
+	t.Run("aged out", func(t *testing.T) {
+		server := &Server{db: &dashboardCompletionsDB{rows: rows[:2]}}
+		data := server.getDashboardDownloadsData(context.Background(), "7d")
+		if got := len(data["DoneDownloads"].([]database.DownloadQueue)); got != 0 {
+			t.Fatalf("got %d completions, want none in the last seven days", got)
+		}
+	})
 }
 
 // TestPaginationNumbers exercises the compact paginator. The two

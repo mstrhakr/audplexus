@@ -1,9 +1,18 @@
 {{define "dashboard_downloads.html"}}
-{{if .DoneDownloads}}
 <div class="section-h">
-    Recent completions <span class="count" id="complete-count">{{len .DoneDownloads}}</span>
+    Completions <span class="count" id="complete-count">{{len .DoneDownloads}}</span>
+    <span class="right"><a href="/downloads?tab=completed&amp;completed_window={{.CompletedWindow}}">View history</a></span>
 </div>
-<div class="table-wrap">
+<form id="dashboard-completion-window" class="completion-windows" aria-label="Completion timeframe" method="get" action="/" hx-get="/api/dashboard/downloads" hx-trigger="change" hx-target="#dashboard-downloads" hx-swap="innerHTML">
+    {{range .CompletedWindowOpts}}
+    <label>
+        <input class="visually-hidden" id="dashboard-window-{{.Value}}" type="radio" name="completed_window" value="{{.Value}}" {{if eq $.CompletedWindow .Value}}checked{{end}}>
+        <span>{{.Label}}</span>
+    </label>
+    {{end}}
+</form>
+<p class="muted completion-summary">Showing <span id="complete-listed">{{len .DoneDownloads}}</span> of <span id="complete-total">{{.CompleteWindowTotal}}</span></p>
+<div class="table-wrap" {{if not .DoneDownloads}}hidden{{end}}>
     <table class="tbl" id="complete-table">
         <thead><tr><th>Title</th><th>ASIN</th><th>Completed</th></tr></thead>
         <tbody id="complete-body">
@@ -12,15 +21,14 @@
         <tr>
             <td>{{if $bookID}}<a href="/library/{{$bookID}}" class="book-detail-link" data-book-id="{{$bookID}}">{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</a>{{else}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}{{end}}</td>
             <td class="cell-mono">{{if $bookID}}<a href="/library/{{$bookID}}" class="book-detail-link" data-book-id="{{$bookID}}">{{.ASIN}}</a>{{else}}{{.ASIN}}{{end}}</td>
-            <td class="cell-mono">{{if .CompletedAt}}{{formatDate (deref .CompletedAt)}}{{end}}</td>
+            <td class="cell-mono">{{if .CompletedAt}}{{formatDate (deref .CompletedAt)}}{{else}}{{formatDate .UpdatedAt}}{{end}}</td>
         </tr>
         {{end}}
         </tbody>
     </table>
 </div>
-{{else}}
-<div class="section-h">Recent completions <span class="count" id="complete-count">0</span></div>
-<div class="empty-card" id="complete-empty">No completed downloads yet</div>
+{{if not .DoneDownloads}}
+<div class="empty-card" id="complete-empty">No completions in this timeframe</div>
 {{end}}
 
 <div class="section-h">

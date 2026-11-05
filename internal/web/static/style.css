@@ -425,6 +425,33 @@ h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; color: var(--text-muted); }
 }
 .section-h .right a:hover { text-decoration: underline; }
 
+.completion-windows {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.25rem;
+    max-width: 34rem;
+    margin-bottom: 0.5rem;
+}
+.completion-windows label { position: relative; cursor: pointer; }
+.completion-windows label span {
+    display: block;
+    text-align: center;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.78rem;
+}
+.completion-windows input:checked + span {
+    background: var(--surface-2);
+    border-color: var(--accent);
+    color: var(--text-strong);
+}
+.completion-windows input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.completion-summary { margin: 0 0 0.75rem; font-size: 0.8rem; }
+@media (max-width: 600px) {
+    .completion-windows { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* Refined stat cards — left-aligned with label/value/delta */
 .stat-grid {
     display: grid;

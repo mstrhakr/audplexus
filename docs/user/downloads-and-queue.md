@@ -29,6 +29,16 @@ Mobile layout:
 
 ![Pipeline cards with wrapped titles and controls on mobile](./screenshots/downloads-monitor-pipeline-mobile-result.png)
 
+## Dashboard Completions
+
+The dashboard defaults to the last seven days and lists the ten newest
+completions in that window. Choose 24 hours, seven days, 30 days, or all time.
+The matching total includes entries beyond the ten shown; **View history** opens
+the full Pipeline history for the selected window.
+
+Older entries leave the dashboard as they age out of the selected window, but
+remain in download history. Automatic dashboard refreshes preserve your selection.
+
 ## Pause, Resume, Cancel, Retry
 
 Available actions:

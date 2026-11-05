@@ -864,12 +864,12 @@ func normalizeClientIPForLog(ip string) string {
 func (s *Server) handleDashboard(c *gin.Context) {
 	ctx := c.Request.Context()
 	_, _ = s.clearStaleFailedDownloads(ctx)
-	c.HTML(http.StatusOK, "dashboard.html", s.withSidebar(c, s.getDashboardData(ctx)))
+	c.HTML(http.StatusOK, "dashboard.html", s.withSidebar(c, s.getDashboardData(ctx, c.Query("completed_window"))))
 }
 
-func (s *Server) getDashboardData(ctx context.Context) gin.H {
+func (s *Server) getDashboardData(ctx context.Context, window string) gin.H {
 	data := s.getDashboardSummaryData(ctx)
-	for k, v := range s.getDashboardDownloadsData(ctx) {
+	for k, v := range s.getDashboardDownloadsData(ctx, window) {
 		data[k] = v
 	}
 	data["Page"] = "dashboard"
@@ -1143,7 +1143,13 @@ func (s *Server) getCachedDestinationItemCount(ctx context.Context, destID strin
 	return items, err
 }
 
-func (s *Server) getDashboardDownloadsData(ctx context.Context) gin.H {
+func (s *Server) getDashboardDownloadsData(ctx context.Context, window string) gin.H {
+	window = strings.ToLower(strings.TrimSpace(window))
+	switch window {
+	case "24h", "7d", "30d", "all":
+	default:
+		window = "7d"
+	}
 	failedStatus := database.DownloadStatusFailed
 	failedDownloads, _ := s.db.ListDownloads(ctx, &failedStatus)
 	sort.SliceStable(failedDownloads, func(first, second int) bool {
@@ -1159,6 +1165,8 @@ func (s *Server) getDashboardDownloadsData(ctx context.Context) gin.H {
 
 	completeStatus := database.DownloadStatusComplete
 	completeDownloads, _ := s.db.ListDownloads(ctx, &completeStatus)
+	completeDownloads = filterCompletedByWindow(completeDownloads, window)
+	completeTotal := len(completeDownloads)
 	sort.SliceStable(completeDownloads, func(first, second int) bool {
 		firstTime := completeDownloads[first].UpdatedAt
 		if completeDownloads[first].CompletedAt != nil {
@@ -1182,11 +1190,14 @@ func (s *Server) getDashboardDownloadsData(ctx context.Context) gin.H {
 	rowsForTitles = append(rowsForTitles, completeDownloads...)
 
 	return gin.H{
-		"FailedDL":        len(failedDownloads),
-		"FailedDownloads": failedRecent,
-		"DoneDownloads":   completeDownloads,
-		"DownloadTitles":  s.getDownloadTitles(ctx, rowsForTitles),
-		"DownloadBookIDs": s.getDownloadBookIDs(ctx, rowsForTitles),
+		"FailedDL":            len(failedDownloads),
+		"FailedDownloads":     failedRecent,
+		"DoneDownloads":       completeDownloads,
+		"DownloadTitles":      s.getDownloadTitles(ctx, rowsForTitles),
+		"DownloadBookIDs":     s.getDownloadBookIDs(ctx, rowsForTitles),
+		"CompletedWindow":     window,
+		"CompletedWindowOpts": completedWindowOptions(),
+		"CompleteWindowTotal": completeTotal,
 	}
 }
 
@@ -1239,7 +1250,7 @@ func (s *Server) handleDashboardSummary(c *gin.Context) {
 func (s *Server) handleDashboardDownloads(c *gin.Context) {
 	ctx := c.Request.Context()
 	_, _ = s.clearStaleFailedDownloads(ctx)
-	c.HTML(http.StatusOK, "dashboard_downloads.html", s.getDashboardDownloadsData(ctx))
+	c.HTML(http.StatusOK, "dashboard_downloads.html", s.getDashboardDownloadsData(ctx, c.Query("completed_window")))
 }
 
 // handleLibrary renders the library page with search/filter support.

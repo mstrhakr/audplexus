@@ -37,7 +37,7 @@
         <div id="pipeline-pools" class="pool-grid pool-grid-stacked"></div>
     </div>
 
-    <div id="dashboard-downloads" hx-get="/api/dashboard/downloads" hx-trigger="load, every 12s queue:last, sync:done from:body" hx-swap="innerHTML">
+    <div id="dashboard-downloads" hx-get="/api/dashboard/downloads" hx-trigger="load, every 12s queue:last, sync:done from:body" hx-include="#dashboard-completion-window" hx-sync="#dashboard-downloads:replace" hx-swap="innerHTML">
         {{template "dashboard_downloads.html" .}}
     </div>
 
