@@ -14,14 +14,45 @@ import (
 
 type dashboardCompletionsDB struct {
 	database.StubDB
-	rows []database.DownloadQueue
+	rows     []database.DownloadQueue
+	failures []database.DownloadQueue
 }
 
 func (db *dashboardCompletionsDB) ListDownloads(_ context.Context, status *database.DownloadStatus) ([]database.DownloadQueue, error) {
+	if status != nil && *status == database.DownloadStatusFailed {
+		return append([]database.DownloadQueue(nil), db.failures...), nil
+	}
 	if status != nil && *status == database.DownloadStatusComplete {
 		return append([]database.DownloadQueue(nil), db.rows...), nil
 	}
 	return nil, nil
+}
+
+func TestDashboardRecentFailures(t *testing.T) {
+	base := time.Date(2026, time.May, 14, 0, 0, 0, 0, time.UTC)
+	rows := make([]database.DownloadQueue, 0, 13)
+	for index := 1; index <= 13; index++ {
+		rows = append(rows, database.DownloadQueue{
+			ID:        int64(index),
+			Priority:  14 - index,
+			CreatedAt: base.Add(time.Duration(14-index) * time.Hour),
+			UpdatedAt: base.Add(time.Duration(index/2) * time.Hour),
+		})
+	}
+	server := &Server{db: &dashboardCompletionsDB{failures: rows}}
+	data := server.getDashboardDownloadsData(context.Background())
+	if got := data["FailedDL"].(int); got != len(rows) {
+		t.Fatalf("got %d total failures, want %d", got, len(rows))
+	}
+	got := data["FailedDownloads"].([]database.DownloadQueue)
+	if len(got) != 10 {
+		t.Fatalf("got %d recent failures, want 10", len(got))
+	}
+	for index, row := range got {
+		if want := int64(13 - index); row.ID != want {
+			t.Errorf("failure %d: got ID %d, want %d", index, row.ID, want)
+		}
+	}
 }
 
 func TestDashboardRecentCompletions(t *testing.T) {

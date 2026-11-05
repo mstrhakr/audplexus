@@ -1146,6 +1146,12 @@ func (s *Server) getCachedDestinationItemCount(ctx context.Context, destID strin
 func (s *Server) getDashboardDownloadsData(ctx context.Context) gin.H {
 	failedStatus := database.DownloadStatusFailed
 	failedDownloads, _ := s.db.ListDownloads(ctx, &failedStatus)
+	sort.SliceStable(failedDownloads, func(first, second int) bool {
+		if failedDownloads[first].UpdatedAt.Equal(failedDownloads[second].UpdatedAt) {
+			return failedDownloads[first].ID > failedDownloads[second].ID
+		}
+		return failedDownloads[first].UpdatedAt.After(failedDownloads[second].UpdatedAt)
+	})
 	failedRecent := failedDownloads
 	if len(failedRecent) > 10 {
 		failedRecent = failedRecent[:10]
