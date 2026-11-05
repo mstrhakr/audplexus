@@ -983,7 +983,12 @@
                         var label = d.title || d.asin;
                         tr.innerHTML = '<td>' + escHTML(label) + '</td><td class="cell-mono">' + escHTML(d.asin) + '</td><td>just now</td>';
                         cb.insertBefore(tr, cb.firstChild);
-                        adj('complete-count', 1);
+                        if (cb.closest('#dashboard-downloads')) {
+                            while (cb.rows.length > 10) cb.deleteRow(-1);
+                            setCountValue('complete-count', cb.rows.length);
+                        } else {
+                            adj('complete-count', 1);
+                        }
                     }
                 } else if (d.type === 'failed') {
                     clearStageRateState(d.asin);
