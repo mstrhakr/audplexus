@@ -35,7 +35,7 @@
                 </div>
 
                 <div class="card" style="padding:0;display:flex;flex-direction:column;flex:1;min-height:0">
-                    <div class="table-toolbar" style="display:flex;align-items:center;gap:.5rem;padding:.65rem .9rem;border-bottom:1px solid var(--border);background:var(--surface)">
+                    <div class="table-toolbar" style="display:flex;align-items:center;flex-wrap:wrap;gap:.5rem;padding:.65rem .9rem;border-bottom:1px solid var(--border);background:var(--surface)">
                         <strong style="font-size:.9rem">Live logs</strong>
                         <span class="muted" style="font-size:.75rem">Streaming tail</span>
                         <span style="margin-left:auto;display:flex;gap:.4rem;align-items:center">
@@ -174,7 +174,7 @@
             <div class="loading">Loading diagnostics...</div>
         </div>
 
-        <div class="actions-bar">
+        <div class="actions-bar" style="flex-wrap:wrap">
             <button class="btn btn-primary" onclick="loadDiagnostics()">Refresh</button>
             <button id="diag-rescan-all" class="btn btn-secondary" onclick="rescanAllIssues()">Rescan All Issues</button>
             <button id="diag-redownload-all" class="btn btn-danger" onclick="redownloadAllListed()">Redownload All Listed</button>
@@ -196,7 +196,7 @@
         </div>
 
         <h2>Issue Inbox</h2>
-        <div id="diag-issues">
+        <div id="diag-issues" class="table-wrap">
             <p class="empty">Loading...</p>
         </div>
     </section>
@@ -1004,8 +1004,13 @@ function escDiag(s) {
     gap: 1rem;
     align-items: start;
 }
+.diag-ops-grid > * { min-width: 0; }
+#diag-env-grid dd {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
 @media (max-width: 980px) {
-    .diag-ops-grid { grid-template-columns: 1fr; }
+    .diag-ops-grid { grid-template-columns: minmax(0, 1fr); }
 }
 </style>
 
