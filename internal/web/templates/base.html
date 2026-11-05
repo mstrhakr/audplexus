@@ -403,6 +403,19 @@
             setCountValue('stat-pending-dl', queuedCount);
         }
 
+        function syncPipelineEmptyState(cardsWrap) {
+            var empty = document.getElementById('pipe-empty');
+            if (cardsWrap.querySelector('.download-card[id^="pipe-"]')) {
+                if (empty) empty.remove();
+            } else if (!empty) {
+                empty = document.createElement('div');
+                empty.className = 'empty-card';
+                empty.id = 'pipe-empty';
+                empty.textContent = 'No active downloads';
+                cardsWrap.appendChild(empty);
+            }
+        }
+
         function renderSnapshotItems(snapshot) {
             if (!snapshot || !snapshot.items) return;
             var keep = {};
@@ -435,13 +448,7 @@
                     }
                 }
 
-                if (!cardsWrap.querySelector('.download-card[id^="pipe-"]') && !document.getElementById('pipe-empty')) {
-                    var empty = document.createElement('p');
-                    empty.className = 'empty';
-                    empty.id = 'pipe-empty';
-                    empty.textContent = 'No active downloads';
-                    cardsWrap.appendChild(empty);
-                }
+                syncPipelineEmptyState(cardsWrap);
             }
         }
 
@@ -880,6 +887,7 @@
                     if (!isActiveStage) {
                         clearStageRateState(d.asin);
                         if (card) card.remove();
+                        syncPipelineEmptyState(activity);
                         return;
                     }
 
@@ -949,6 +957,7 @@
                         return;
                     }
 
+                    card.setAttribute('data-stage', stage);
                     var cancelBtn = cancellable
                         ? '<div class="dl-info-actions"><button class="btn btn-small btn-danger pipe-cancel" data-asin="' + escHTML(d.asin) + '">Cancel</button></div>'
                         : '<div class="dl-info-actions"></div>';
@@ -992,6 +1001,7 @@
                         adj('failed-count', 1);
                     }
                 }
+                syncPipelineEmptyState(activity);
             }
         }
 

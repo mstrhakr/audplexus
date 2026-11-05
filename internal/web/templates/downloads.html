@@ -41,18 +41,14 @@
     <section class="pipe-tab-panel" data-pipe-panel="active" {{if ne $tab "active"}}hidden{{end}}>
         <div id="pipeline-cards" class="dl-list">
             {{range .Active}}
-            <div class="dl-card" id="pipe-{{.ASIN}}">
-                <div class="dl-head">
-                    <div class="dl-body">
-                        <div class="dl-title">{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</div>
-                        <div class="dl-by">{{.ASIN}}</div>
-                        <div class="dl-meta-row">
-                            <span class="badge badge-warning">downloading</span>
-                            <span class="pct">{{printf "%.0f" (mul .Progress 100)}}%</span>
-                        </div>
-                    </div>
+            <div class="download-card" id="pipe-{{.ASIN}}">
+                <div class="dl-info">
+                    <strong>{{$title := index $.DownloadTitles .ASIN}}{{if $title}}{{$title}}{{else}}{{.ASIN}}{{end}}</strong>
+                    <span class="badge badge-warning">downloading {{printf "%.0f" (mul .Progress 100)}}%</span>
+                    <div class="dl-info-actions"></div>
                 </div>
-                <div class="dl-progress"><div class="bar" style="width:{{printf "%.0f" (mul .Progress 100)}}%"></div></div>
+                <div class="dl-details">{{.ASIN}}</div>
+                <div class="progress-bar"><div class="progress-fill" style="width:{{printf "%.0f" (mul .Progress 100)}}%"></div></div>
             </div>
             {{else}}
             <div class="empty-card" id="pipe-empty">No active downloads</div>
