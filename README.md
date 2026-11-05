@@ -15,6 +15,12 @@ Use it when you want a single place to:
 - send finished books to Plex, Emby, Jellyfin, or Audiobookshelf
 - keep the queue, retry, and sync flow in one web UI
 
+## Pipeline Preview
+
+![Active audiobook downloads, decryption, and file transfer stages](docs/user/screenshots/downloads-monitor-pipeline-stages-result.png)
+
+Example using synthetic book data. See [Queue and Download Books](docs/user/downloads-and-queue.md) for pipeline stages and controls.
+
 ## Quick Start
 
 ### Docker Compose

@@ -23,6 +23,12 @@ Each book moves through:
 
 ![Downloads pipeline stage view](./screenshots/downloads-monitor-pipeline-stages-result.png)
 
+Example using synthetic book data. Stage labels and colored card edges distinguish active work; each card shows its own progress and available actions.
+
+Mobile layout:
+
+![Pipeline cards with wrapped titles and controls on mobile](./screenshots/downloads-monitor-pipeline-mobile-result.png)
+
 ## Pause, Resume, Cancel, Retry
 
 Available actions:
@@ -49,4 +55,3 @@ Available actions:
 - A finished raw download is not final completion; decrypt/process still run.
 - If one destination fails, other destinations can still complete.
 - Progress is visible in Downloads and Dashboard panels.
-
