@@ -316,15 +316,17 @@
                     <div class="hint">Minimum severity for log output. Changes take effect immediately.</div>
                 </div>
 
-                <div class="form-row">
-                    <label for="log_file_enabled">Log to rotating file</label>
-                    <input type="hidden" name="log_file_enabled_sent" value="1">
-                    <label class="toggle" style="display:inline-flex;align-items:center;gap:.5rem">
+                <label class="form-row inline">
+                    <span class="row-label">
+                        Log to rotating file
+                        <div class="hint">Writes logs to disk with rotation. Restart required after changes.</div>
+                    </span>
+                    <span class="toggle">
                         <input type="checkbox" id="log_file_enabled" name="log_file_enabled" value="true" {{if .LogFileEnabled}}checked{{end}}>
-                        <span>Enable file logs</span>
-                    </label>
-                    <div class="hint">Writes logs to disk with rotation. Restart required after changes.</div>
-                </div>
+                        <span class="toggle-slider"></span>
+                    </span>
+                    <input type="hidden" name="log_file_enabled_sent" value="1">
+                </label>
 
                 <div class="form-row">
                     <label for="log_file_path">Log file path</label>
